@@ -36,8 +36,27 @@ body {
   text-align: center;
 }
 
+/* History toggle button in header */
+#history-btn {
+  flex: 0 0 auto;
+  background: rgba(255,255,255,0.18);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.35);
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  line-height: 1.4;
+}
+#history-btn:hover {
+  background: rgba(255,255,255,0.32);
+}
+
 /* ── Annotation list ─────────────────────────────────────────────────────── */
-#annotations-list {
+#annotations-list,
+#history-panel {
   max-height: 420px;
   overflow-y: auto;
   padding: 10px 12px;
@@ -81,9 +100,40 @@ body {
   line-height: 1.5;
   word-break: break-word;
 }
+
+/* Selector row: selector code on left, delete button on right */
 .item-sel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   margin-bottom: 4px;
 }
+.item-sel code {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Per-row delete button */
+.item-delete-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid transparent;
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.item-delete-btn:hover {
+  color: #dc2626;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
 .item-note {
   color: #374151;
   font-size: 12px;
@@ -126,6 +176,32 @@ code {
   font-size: 11.5px;
   color: #db2777;
   word-break: break-all;
+}
+
+/* ── History panel entries ───────────────────────────────────────────────── */
+.hist-item {
+  opacity: 0.88;
+}
+.hist-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.hist-ts {
+  font-size: 10px;
+  color: #6b7280;
+}
+.hist-deleted {
+  color: #dc2626;
+}
+.hist-note {
+  font-size: 11.5px;
+  color: #374151;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 4px 7px;
 }
 
 /* ── Footer buttons ─────────────────────────────────────────────────────── */

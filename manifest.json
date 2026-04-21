@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AI Dev Annotator",
+  "name": "Dev Annotator",
   "version": "1.0",
-  "description": "Alt + Right-Click any element to annotate it. Copy all notes as formatted Markdown for your AI coding tool.",
+  "description": "Alt + Right-Click any element to annotate it. Copy all notes as formatted Markdown for any tool or workflow.",
   "permissions": ["storage", "activeTab", "clipboardWrite"],
   "host_permissions": ["<all_urls>"],
   "icons": {

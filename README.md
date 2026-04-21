@@ -1,32 +1,32 @@
-# AI Dev Annotator
+# Dev Annotator
 
-A lightweight Chrome extension (Manifest V3) for annotating web UI elements and exporting your notes as clean Markdown — ready to paste into Cursor, Claude, ChatGPT, or any AI coding tool.
+A lightweight Chrome extension (Manifest V3) for annotating web UI elements and exporting your notes as clean Markdown — paste them into Cursor, Claude, ChatGPT, a bug report, or anywhere else you need them.
 
 ## How it works
 
-1. **Annotate** — Hold `Alt` (or `Option` on Mac) and **Right-Click** any element on a page. A prompt asks what the AI should change.
-2. **Review** — Click the extension icon to see all saved annotations.
-3. **Copy** — Hit **Copy All as Markdown** to get a perfectly formatted payload, then paste it straight into your AI tool.
+1. **Annotate** — Hold `Alt` (or `Option` on Mac) and **Right-Click** any element on a page. A panel opens where you can write a note about the element.
+2. **Review** — Click the extension icon to see all saved annotations grouped by page.
+3. **Copy** — Hit **Copy All as Markdown** to get a clean, formatted payload ready to paste anywhere.
+4. **History** — Click the 🕐 button in the top-right of the popup to browse all past annotations, including ones that were deleted, with full timestamps.
 
 ## Features
 
 - `Alt + Right-Click` gesture captures element tag, ID, classes, XPath, page URL, and your note
-- Popup shows all annotations with full context
-- One-click **Copy All as Markdown** formats everything for LLM consumption
-- **Clear All** button to reset annotations
+- Popup shows all annotations grouped by URL, with inline editable notes
+- Per-row **✕ delete button** on each annotation — moves it to history rather than erasing it permanently
+- **🕐 History view** — see every annotation ever created or deleted, with creation and deletion timestamps
+- One-click **Copy All as Markdown** formats everything compactly for any tool or workflow
+- **Clear All** button to reset the active list (all cleared annotations are saved to history)
 - Annotations persist in `chrome.storage.local` — they survive page reloads and browser restarts
+- Inline annotation panel on the page lets you edit or delete annotations without opening the popup
 
 ## Example output (copied Markdown)
 
 ```
-### Requested UI Changes
+## https://example.com/dashboard
 
-#### Change 1
-**Page:** `https://example.com/dashboard`
-- **Target Element:** `<button>` (ID: `#submit-btn`)
-- **Classes:** `.btn.btn-primary`
-- **XPath:** `id("submit-btn")`
-- **Improvement:** Make this button larger and change color to green
+1. `button#submit-btn` → Make this button larger and change color to green
+2. `div.sidebar` | `body/div[2]/div[1]` → Reduce width to 200px and add a top border
 ```
 
 ## Installation
@@ -44,13 +44,20 @@ ai-dev-annotator/
 ├── manifest.json   — Extension config (Manifest V3)
 ├── content.js      — Injected into pages; handles Alt + Right-Click
 ├── popup.html      — Extension popup UI
-├── popup.js        — Popup logic (load, copy, clear)
+├── popup.js        — Popup logic (load, copy, clear, delete, history)
 ├── styles.css      — Popup styles
 └── icons/
     ├── icon16.png
     ├── icon48.png
     └── icon128.png
 ```
+
+## Storage keys
+
+| Key | Contents |
+|-----|----------|
+| `annotations` | Active (non-deleted) annotations |
+| `annotationHistory` | All past annotations with a `deletedAt` timestamp |
 
 ## Bug fixes vs. Gemini's original
 

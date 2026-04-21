@@ -1,4 +1,4 @@
-// content.js — AI Dev Annotator
+// content.js — Dev Annotator
 // Alt + Right-Click any element to annotate it inline.
 // Notes are saved in real-time as you type and persist across page loads.
 
@@ -136,6 +136,7 @@ function resolveXPath(xpath) {
 
 // ── Storage helpers ────────────────────────────────────────────────────────
 const STORE_KEY = 'annotations';
+const HISTORY_KEY = 'annotationHistory';
 function getAll(cb) { chrome.storage.local.get({ [STORE_KEY]: [] }, r => cb(r[STORE_KEY])); }
 function setAll(anns, cb) { chrome.storage.local.set({ [STORE_KEY]: anns }, cb); }
 function genId() { return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
@@ -152,10 +153,10 @@ function buildPanel() {
   p.id = `${ANN}-panel`;
   p.innerHTML = `
     <div id="${ANN}-panel-header">
-      ✏ AI Annotation
+      ✏ Annotation
       <button id="${ANN}-close-btn" title="Close">✕</button>
     </div>
-    <textarea id="${ANN}-textarea" placeholder="What should the AI change or improve here?"></textarea>
+    <textarea id="${ANN}-textarea" placeholder="Notes and observations about this element…"></textarea>
     <div id="${ANN}-panel-footer">
       <span id="${ANN}-save-status"></span>
       <button id="${ANN}-delete-btn">🗑 Delete</button>
@@ -259,6 +260,12 @@ function deleteAnnotation(annId) {
     if (ann) {
       const el = resolveXPath(ann.xpath);
       if (el) el.classList.remove(`${ANN}-hl`);
+      // Move to annotation history
+      chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
+        const hist = r[HISTORY_KEY];
+        hist.push({ ...ann, deletedAt: new Date().toISOString() });
+        chrome.storage.local.set({ [HISTORY_KEY]: hist });
+      });
     }
     const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${id}"]`);
     if (chip) chip.remove();

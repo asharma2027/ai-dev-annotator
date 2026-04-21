@@ -1,9 +1,15 @@
 // popup.js
 document.addEventListener('DOMContentLoaded', () => {
-  const listEl   = document.getElementById('annotations-list');
-  const badge    = document.getElementById('count-badge');
-  const copyBtn  = document.getElementById('copy-btn');
-  const clearBtn = document.getElementById('clear-btn');
+  const listEl     = document.getElementById('annotations-list');
+  const historyEl  = document.getElementById('history-panel');
+  const badge      = document.getElementById('count-badge');
+  const copyBtn    = document.getElementById('copy-btn');
+  const clearBtn   = document.getElementById('clear-btn');
+  const historyBtn = document.getElementById('history-btn');
+  const footer     = document.querySelector('.footer');
+
+  const HISTORY_KEY = 'annotationHistory';
+  let historyVisible = false;
 
   // Prevent the storage.onChanged listener from triggering a re-render when
   // the popup itself is the one writing (avoids textarea cursor-position resets).
@@ -33,6 +39,11 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${ann.tag}${rawId}${cls}`;
   }
 
+  function formatTimestamp(ts) {
+    if (!ts) return '';
+    try { return new Date(ts).toLocaleString(); } catch { return ts; }
+  }
+
   // ── Save a single annotation's comment from the popup ────────────────────
   const saveTimers = {};
   function saveComment(annId, value) {
@@ -52,6 +63,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     }, 350);
+  }
+
+  // ── Delete a single annotation (moves it to history) ─────────────────────
+  function deleteAnnotation(annId) {
+    isWritingFromPopup = true;
+    chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
+      const anns = r.annotations;
+      const hist = r[HISTORY_KEY];
+      const ann = anns.find(a => a.id === annId);
+      if (ann) {
+        hist.push({ ...ann, deletedAt: new Date().toISOString() });
+      }
+      const remaining = anns.filter(a => a.id !== annId);
+      chrome.storage.local.set({ annotations: remaining, [HISTORY_KEY]: hist }, () => {
+        isWritingFromPopup = false;
+        render(remaining);
+      });
+    });
   }
 
   // ── Render annotation list ────────────────────────────────────────────────
@@ -79,11 +108,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const sel = getSelector(ann);
         html += `
         <div class="item">
-          <div class="item-sel"><code>${escHtml(sel)}</code></div>
+          <div class="item-sel">
+            <code>${escHtml(sel)}</code>
+            <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Delete annotation">✕</button>
+          </div>
           <textarea
             class="item-note-edit"
             data-ann-id="${escHtml(ann.id)}"
-            placeholder="Add a note for the AI…"
+            placeholder="Add a note…"
             rows="2"
           >${escHtml(ann.comment || '')}</textarea>
         </div>`;
@@ -97,25 +129,90 @@ document.addEventListener('DOMContentLoaded', () => {
     listEl.querySelectorAll('.item-note-edit').forEach(ta => {
       ta.addEventListener('input', () => saveComment(ta.dataset.annId, ta.value));
     });
+
+    // Attach delete listeners to every delete button
+    listEl.querySelectorAll('.item-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => deleteAnnotation(btn.dataset.annId));
+    });
   }
 
   function load() {
     chrome.storage.local.get({ annotations: [] }, r => render(r.annotations));
   }
 
-  // Refresh popup in real-time if storage changes (e.g. user is typing on the page),
+  // Refresh popup in real-time if storage changes (e.g. user annotating on the page),
   // but skip re-renders triggered by the popup's own writes to avoid cursor resets.
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.annotations && !isWritingFromPopup) {
+    if (area === 'local' && changes.annotations && !isWritingFromPopup && !historyVisible) {
       render(changes.annotations.newValue || []);
     }
+  });
+
+  // ── History panel ─────────────────────────────────────────────────────────
+  function showHistory() {
+    chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
+      const hist = r[HISTORY_KEY];
+      historyVisible = true;
+      listEl.style.display = 'none';
+      footer.style.display = 'none';
+      historyEl.style.display = 'block';
+      historyBtn.textContent = '✕';
+      historyBtn.title = 'Close history';
+
+      if (hist.length === 0) {
+        historyEl.innerHTML = `<p class="empty-msg">No annotation history yet.<br>Deleted annotations will appear here.</p>`;
+        return;
+      }
+
+      // Most recent deletions first
+      const sorted = [...hist].reverse();
+      const byUrl = {};
+      sorted.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
+
+      let html = '';
+      Object.entries(byUrl).forEach(([url, items]) => {
+        html += `<div class="url-group">
+          <div class="url-label" title="${escHtml(url)}">${escHtml(url)}</div>`;
+        items.forEach(ann => {
+          const sel = getSelector(ann);
+          html += `
+          <div class="item hist-item">
+            <div class="item-sel"><code>${escHtml(sel)}</code></div>
+            <div class="hist-meta">
+              <span class="hist-ts">📅 ${escHtml(formatTimestamp(ann.timestamp))}</span>
+              <span class="hist-ts hist-deleted">🗑 ${escHtml(formatTimestamp(ann.deletedAt))}</span>
+            </div>
+            ${ann.comment
+              ? `<div class="hist-note">${escHtml(ann.comment)}</div>`
+              : `<div class="hist-note empty-note">(no note)</div>`}
+          </div>`;
+        });
+        html += '</div>';
+      });
+
+      historyEl.innerHTML = html;
+    });
+  }
+
+  function hideHistory() {
+    historyVisible = false;
+    historyEl.style.display = 'none';
+    footer.style.display = '';
+    listEl.style.display = '';
+    historyBtn.textContent = '🕐';
+    historyBtn.title = 'View annotation history';
+    load();
+  }
+
+  historyBtn.addEventListener('click', () => {
+    if (historyVisible) hideHistory();
+    else showHistory();
   });
 
   // ── Dense Markdown copy ───────────────────────────────────────────────────
   // Format: one line per annotation, grouped by URL.
   // Excludes: timestamps, verbose labels, redundant fields.
   // Keeps: URL (as section header), CSS selector, XPath (for element targeting), note.
-  // "Annotations" section title omitted — the content is self-explanatory to an LLM.
   copyBtn.addEventListener('click', () => {
     chrome.storage.local.get({ annotations: [] }, r => {
       // Only include annotations that have a non-empty note
@@ -140,7 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
           md += formatLine(i + 1, ann);
         });
       } else {
-        // Multiple pages — group under sub-headers (no outer "Annotations" wrapper)
+        // Multiple pages — group under sub-headers
         urls.forEach((url, ui) => {
           if (ui > 0) md += '\n';
           md += `### ${url}\n`;
@@ -177,10 +274,20 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${n}. \`${sel}\` | \`${ann.xpath}\` → ${ann.comment.trim()}\n`;
   }
 
-  // ── Clear All ─────────────────────────────────────────────────────────────
+  // ── Clear All (moves all annotations to history) ──────────────────────────
   clearBtn.addEventListener('click', () => {
-    if (confirm('Delete all annotations? This cannot be undone.')) {
-      chrome.storage.local.set({ annotations: [] }, load);
+    if (confirm('Clear all annotations? They will be saved to history.')) {
+      chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
+        const anns = r.annotations;
+        const hist = r[HISTORY_KEY];
+        const now = new Date().toISOString();
+        anns.forEach(ann => hist.push({ ...ann, deletedAt: now }));
+        isWritingFromPopup = true;
+        chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist }, () => {
+          isWritingFromPopup = false;
+          load();
+        });
+      });
     }
   });
 
