@@ -5,6 +5,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const copyBtn  = document.getElementById('copy-btn');
   const clearBtn = document.getElementById('clear-btn');
 
+  // Prevent the storage.onChanged listener from triggering a re-render when
+  // the popup itself is the one writing (avoids textarea cursor-position resets).
+  let isWritingFromPopup = false;
+
   // ── Helpers ──────────────────────────────────────────────────────────────
   function escHtml(s) {
     return String(s ?? '')
@@ -27,6 +31,27 @@ document.addEventListener('DOMContentLoaded', () => {
           : '');
     const cls = ann.classes && ann.classes !== 'N/A' ? ann.classes : '';
     return `${ann.tag}${rawId}${cls}`;
+  }
+
+  // ── Save a single annotation's comment from the popup ────────────────────
+  const saveTimers = {};
+  function saveComment(annId, value) {
+    clearTimeout(saveTimers[annId]);
+    saveTimers[annId] = setTimeout(() => {
+      isWritingFromPopup = true;
+      chrome.storage.local.get({ annotations: [] }, r => {
+        const anns = r.annotations;
+        const ann = anns.find(a => a.id === annId);
+        if (ann) {
+          ann.comment = value;
+          chrome.storage.local.set({ annotations: anns }, () => {
+            isWritingFromPopup = false;
+          });
+        } else {
+          isWritingFromPopup = false;
+        }
+      });
+    }, 350);
   }
 
   // ── Render annotation list ────────────────────────────────────────────────
@@ -52,30 +77,36 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="url-label" title="${escHtml(url)}">${escHtml(url)}</div>`;
       items.forEach(ann => {
         const sel = getSelector(ann);
-        const hasNote = ann.comment && ann.comment.trim();
         html += `
         <div class="item">
           <div class="item-sel"><code>${escHtml(sel)}</code></div>
-          <div class="item-note">${
-            hasNote
-              ? escHtml(ann.comment)
-              : '<em class="empty-note">No note yet — click ✏ on the page to edit</em>'
-          }</div>
+          <textarea
+            class="item-note-edit"
+            data-ann-id="${escHtml(ann.id)}"
+            placeholder="Add a note for the AI…"
+            rows="2"
+          >${escHtml(ann.comment || '')}</textarea>
         </div>`;
       });
       html += '</div>';
     });
 
     listEl.innerHTML = html;
+
+    // Attach save-on-type listeners to every textarea
+    listEl.querySelectorAll('.item-note-edit').forEach(ta => {
+      ta.addEventListener('input', () => saveComment(ta.dataset.annId, ta.value));
+    });
   }
 
   function load() {
     chrome.storage.local.get({ annotations: [] }, r => render(r.annotations));
   }
 
-  // Refresh popup in real-time if storage changes (e.g. user is typing on the page)
+  // Refresh popup in real-time if storage changes (e.g. user is typing on the page),
+  // but skip re-renders triggered by the popup's own writes to avoid cursor resets.
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.annotations) {
+    if (area === 'local' && changes.annotations && !isWritingFromPopup) {
       render(changes.annotations.newValue || []);
     }
   });
@@ -83,7 +114,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Dense Markdown copy ───────────────────────────────────────────────────
   // Format: one line per annotation, grouped by URL.
   // Excludes: timestamps, verbose labels, redundant fields.
-  // Keeps: URL, CSS selector, XPath (for element targeting), note.
+  // Keeps: URL (as section header), CSS selector, XPath (for element targeting), note.
+  // "Annotations" section title omitted — the content is self-explanatory to an LLM.
   copyBtn.addEventListener('click', () => {
     chrome.storage.local.get({ annotations: [] }, r => {
       // Only include annotations that have a non-empty note
@@ -102,16 +134,16 @@ document.addEventListener('DOMContentLoaded', () => {
       let md = '';
 
       if (urls.length === 1) {
-        // Single page — URL in header, no repeated prefix per line
-        md += `## Annotations — ${urls[0]}\n`;
+        // Single page — URL as header, no repeated prefix per line
+        md += `## ${urls[0]}\n`;
         byUrl[urls[0]].forEach((ann, i) => {
           md += formatLine(i + 1, ann);
         });
       } else {
-        // Multiple pages — group under sub-headers
-        md += `## Annotations\n`;
-        urls.forEach(url => {
-          md += `\n### ${url}\n`;
+        // Multiple pages — group under sub-headers (no outer "Annotations" wrapper)
+        urls.forEach((url, ui) => {
+          if (ui > 0) md += '\n';
+          md += `### ${url}\n`;
           byUrl[url].forEach((ann, i) => {
             md += formatLine(i + 1, ann);
           });

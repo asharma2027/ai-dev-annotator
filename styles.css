@@ -93,6 +93,31 @@ body {
   font-style: italic;
 }
 
+/* Inline-editable note textarea inside each annotation card */
+.item-note-edit {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #e5e7eb;
+  border-radius: 5px;
+  padding: 5px 7px;
+  font: 12px/1.5 system-ui, -apple-system, sans-serif;
+  color: #374151;
+  background: #f9fafb;
+  resize: vertical;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.item-note-edit:focus {
+  border-color: #f59e0b;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(251,191,36,0.22);
+}
+.item-note-edit::placeholder {
+  color: #9ca3af;
+  font-style: italic;
+}
+
 code {
   background: #f3f4f6;
   padding: 1px 5px;

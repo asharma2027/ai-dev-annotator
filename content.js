@@ -326,6 +326,25 @@ document.addEventListener('contextmenu', e => {
     target === document.documentElement
   ) return;
 
+  // If the element is already annotated, edit the existing annotation instead
+  // of creating a duplicate. Search next siblings for the chip injected after it.
+  if (target.classList.contains(`${ANN}-hl`)) {
+    let chip = null;
+    let node = target.nextSibling;
+    while (node) {
+      if (node.classList && node.classList.contains(`${ANN}-chip`)) {
+        chip = node;
+        break;
+      }
+      node = node.nextSibling;
+    }
+    if (chip) {
+      openPanel(chip, chip.dataset.annId);
+      return;
+    }
+    // Chip missing from DOM (edge case) — fall through to create a fresh one
+  }
+
   // Build CSS class string, filtering out our own injected classes
   const classes = typeof target.className === 'string' && target.className.trim()
     ? target.className.trim().split(/\s+/)
