@@ -382,6 +382,32 @@ document.addEventListener('contextmenu', e => {
   });
 });
 
+// ── Message listener (commands from the popup) ──────────────────────────────
+// The popup cannot touch the DOM directly, so it asks the content script to
+// perform any visual changes (removing highlights / re-injecting chips).
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'removeAnnotation') {
+    const { annId, xpath } = msg;
+    // Close the floating panel if it is open for this annotation
+    if (activeAnnId === annId) closePanel();
+    // Remove the chip badge from the DOM
+    const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
+    if (chip) chip.remove();
+    // Remove the yellow highlight from the annotated element
+    if (xpath) {
+      const el = resolveXPath(xpath);
+      if (el) el.classList.remove(`${ANN}-hl`);
+    }
+  }
+
+  if (msg.type === 'restoreAnnotation') {
+    const ann = msg.ann;
+    if (!ann || !ann.xpath) return;
+    const el = resolveXPath(ann.xpath);
+    if (el) injectChip(el, ann.id, ann.comment || '');
+  }
+});
+
 // ── Init ──────────────────────────────────────────────────────────────────
 injectStyles();
 if (document.readyState === 'loading') {

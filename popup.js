@@ -79,6 +79,56 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.storage.local.set({ annotations: remaining, [HISTORY_KEY]: hist }, () => {
         isWritingFromPopup = false;
         render(remaining);
+        // Tell the content script to remove the visual highlight + chip badge
+        if (ann) {
+          chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+            if (tabs[0]) {
+              chrome.tabs.sendMessage(tabs[0].id, {
+                type: 'removeAnnotation',
+                annId: annId,
+                xpath: ann.xpath
+              }).catch(() => {}); // Ignore errors when content script is unavailable
+            }
+          });
+        }
+      });
+    });
+  }
+
+  // ── Restore a history entry back into current annotations ─────────────────
+  function restoreAnnotation(annId, deletedAt) {
+    chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
+      const anns = r.annotations;
+      const hist = r[HISTORY_KEY];
+
+      // Use annId + deletedAt to uniquely identify the entry (handles repeat deletions)
+      const histIdx = hist.findIndex(a => a.id === annId && a.deletedAt === deletedAt);
+      if (histIdx === -1) return;
+
+      const ann = { ...hist[histIdx] };
+      delete ann.deletedAt;
+
+      // If the same annId is already in current annotations, skip to avoid duplicates
+      if (anns.some(a => a.id === ann.id)) {
+        showHistory();
+        return;
+      }
+
+      const newAnns = [...anns, ann];
+      const newHist = hist.filter((_, i) => i !== histIdx);
+
+      chrome.storage.local.set({ annotations: newAnns, [HISTORY_KEY]: newHist }, () => {
+        // Refresh the history view
+        showHistory();
+        // Tell the content script to re-inject the chip badge on the page
+        chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+          if (tabs[0]) {
+            chrome.tabs.sendMessage(tabs[0].id, {
+              type: 'restoreAnnotation',
+              ann
+            }).catch(() => {});
+          }
+        });
       });
     });
   }
@@ -177,7 +227,13 @@ document.addEventListener('DOMContentLoaded', () => {
           const sel = getSelector(ann);
           html += `
           <div class="item hist-item">
-            <div class="item-sel"><code>${escHtml(sel)}</code></div>
+            <div class="item-sel">
+              <code>${escHtml(sel)}</code>
+              <button class="hist-restore-btn"
+                data-ann-id="${escHtml(ann.id)}"
+                data-deleted-at="${escHtml(ann.deletedAt || '')}"
+                title="Restore annotation">+</button>
+            </div>
             <div class="hist-meta">
               <span class="hist-ts">📅 ${escHtml(formatTimestamp(ann.timestamp))}</span>
               <span class="hist-ts hist-deleted">🗑 ${escHtml(formatTimestamp(ann.deletedAt))}</span>
@@ -191,6 +247,13 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       historyEl.innerHTML = html;
+
+      // Attach restore-click listeners to every '+' button
+      historyEl.querySelectorAll('.hist-restore-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          restoreAnnotation(btn.dataset.annId, btn.dataset.deletedAt);
+        });
+      });
     });
   }
 
