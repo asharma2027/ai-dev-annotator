@@ -1,7 +1,5 @@
-# Dev Annotator — AI Notes & Markdown Export
+# Website Dev Annotator: AI Notes & Markdown Export
 
-> **Chrome Web Store title:** *Dev Annotator — AI Notes & Markdown Export*
->
 > **One-sentence pitch:** Alt + Right-Click any web element to annotate it, then export all your notes as clean Markdown for AI tools like Cursor, Claude, and ChatGPT.
 
 ---
