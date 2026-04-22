@@ -96,20 +96,6 @@ ai-dev-annotator/
 
 ---
 
-## Chrome Web Store listing
-
-**Recommended title (45 chars):**
-```
-Website Dev Annotator: AI Notes & Markdown Export
-```
-
-**Short description (128 chars):**
-```
-Alt+Right-Click any web element to annotate it. Export notes as clean Markdown for Cursor, Claude, ChatGPT, or any AI workflow.
-```
-
----
-
 ## Storage keys
 
 | Key | Contents |
@@ -125,7 +111,7 @@ Alt+Right-Click any web element to annotate it. Export notes as clean Markdown f
 ## Source code
 
 This extension is fully open source. You can review all code at:
-**https://github.com/asharma2027/ai-dev-annotator**
+**https://github.com/asharma2027/ai-dev-annotator/production**
 
 ---
 
