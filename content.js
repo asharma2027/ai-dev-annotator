@@ -1,8 +1,31 @@
-// content.js — Dev Annotator
-// Injected into every page. Alt + Right-Click any element to annotate it.
-// Notes auto-save in real-time and persist across page reloads.
+// content.js — Website Dev Annotator
+// Injected into every page. Hold your configured modifier + Right-Click any
+// element to annotate it. Notes auto-save in real-time and persist across
+// page reloads.
 
 const ANN = 'aiann'; // CSS class/id prefix to avoid collisions
+
+// ── Annotation shortcut — configurable modifier key ────────────────────────
+// Loaded from chrome.storage.local at init and updated in real-time whenever
+// the user changes it in Settings. Default: Alt + Right-Click.
+let cachedShortcut = { modifier: 'alt' };
+
+function loadShortcut() {
+  chrome.storage.local.get({ annotatorSettings: {} }, r => {
+    const s = r.annotatorSettings || {};
+    cachedShortcut = s.shortcut || { modifier: 'alt' };
+  });
+}
+
+// Keep in sync with any Settings changes without requiring a page reload
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.annotatorSettings) {
+    const newSettings = changes.annotatorSettings.newValue || {};
+    cachedShortcut = newSettings.shortcut || { modifier: 'alt' };
+  }
+});
+
+loadShortcut();
 
 // ── Inject stylesheet once ─────────────────────────────────────────────────
 function injectStyles() {
@@ -72,7 +95,6 @@ function injectStyles() {
     #${ANN}-close-btn:hover { color: #374151; }
     #${ANN}-textarea {
       width: 100%;
-      /* 2× the original 80px default height */
       min-height: 160px;
       border: 1px solid #d1d5db;
       border-radius: 6px;
@@ -142,12 +164,10 @@ function getAll(cb) { chrome.storage.local.get({ [STORE_KEY]: [] }, r => cb(r[ST
 function setAll(anns, cb) { chrome.storage.local.set({ [STORE_KEY]: anns }, cb); }
 function genId() { return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
 
-// ── Shared panel (single instance, position:fixed, appended to body) ───────
-// Using a single shared panel rather than one-per-chip avoids z-index fights
-// and overflow:hidden clipping from parent elements.
-let activeChip = null;
+// ── Shared panel ────────────────────────────────────────────────────────────
+let activeChip  = null;
 let activeAnnId = null;
-let saveTimer = null;
+let saveTimer   = null;
 
 function buildPanel() {
   const p = document.createElement('div');
@@ -173,7 +193,6 @@ function buildPanel() {
   p.querySelector(`#${ANN}-delete-btn`).addEventListener('click', () => deleteAnnotation(activeAnnId));
   p.querySelector(`#${ANN}-close-btn`).addEventListener('click', closePanel);
 
-  // Close when clicking outside panel and outside any chip
   document.addEventListener('mousedown', e => {
     const panel = document.getElementById(`${ANN}-panel`);
     if (
@@ -194,7 +213,7 @@ function getPanel() {
 
 function openPanel(chip, annId) {
   getAll(anns => {
-    const ann = anns.find(a => a.id === annId);
+    const ann     = anns.find(a => a.id === annId);
     const comment = ann ? (ann.comment || '') : '';
 
     const panel = getPanel();
@@ -205,27 +224,26 @@ function openPanel(chip, annId) {
     ta.value = comment;
     setSaveStatus(comment ? '' : 'Start typing — auto-saves as you go');
 
-    activeChip = chip;
+    activeChip  = chip;
     activeAnnId = annId;
     ta.focus();
   });
 }
 
 function positionPanel(panel, chip) {
-  const r = chip.getBoundingClientRect();
-  let top = r.bottom + 6;
+  const r    = chip.getBoundingClientRect();
+  let top  = r.bottom + 6;
   let left = r.left;
-  // Clamp so panel stays inside viewport (panel height ~270px with 2× textarea)
-  if (left + 276 > window.innerWidth - 4) left = window.innerWidth - 280;
-  if (top + 270 > window.innerHeight - 4) top = Math.max(4, r.top - 276);
-  panel.style.top = top + 'px';
+  if (left + 276 > window.innerWidth - 4)  left = window.innerWidth - 280;
+  if (top  + 270 > window.innerHeight - 4) top  = Math.max(4, r.top - 276);
+  panel.style.top  = top  + 'px';
   panel.style.left = Math.max(4, left) + 'px';
 }
 
 function closePanel() {
   const p = document.getElementById(`${ANN}-panel`);
   if (p) p.style.display = 'none';
-  activeChip = null;
+  activeChip  = null;
   activeAnnId = null;
 }
 
@@ -242,7 +260,6 @@ function persistNote(annId, text) {
     ann.comment = text;
     setAll(anns, () => {
       setSaveStatus('Saved ✓');
-      // Update chip tooltip to reflect latest note
       const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
       if (chip) {
         chip.title = text.trim() ? text.trim().slice(0, 80) : '(no note)';
@@ -254,14 +271,13 @@ function persistNote(annId, text) {
 
 function deleteAnnotation(annId) {
   if (!annId) return;
-  const id = annId; // capture before closePanel clears activeAnnId
+  const id = annId;
   closePanel();
   getAll(anns => {
     const ann = anns.find(a => a.id === id);
     if (ann) {
       const el = resolveXPath(ann.xpath);
       if (el) el.classList.remove(`${ANN}-hl`);
-      // Move to annotation history
       chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
         const hist = r[HISTORY_KEY];
         hist.push({ ...ann, deletedAt: new Date().toISOString() });
@@ -276,21 +292,20 @@ function deleteAnnotation(annId) {
 
 // ── Inject chip sibling after annotated element ────────────────────────────
 function injectChip(el, annId, comment) {
-  if (document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`)) return; // already present
+  if (document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`)) return;
 
   el.classList.add(`${ANN}-hl`);
 
   const chip = document.createElement('span');
-  chip.className = `${ANN}-chip${comment && comment.trim() ? ' has-note' : ''}`;
+  chip.className  = `${ANN}-chip${comment && comment.trim() ? ' has-note' : ''}`;
   chip.dataset.annId = annId;
-  chip.textContent = '✏';
+  chip.textContent   = '✏';
   chip.title = comment && comment.trim() ? comment.trim().slice(0, 80) : '(no note)';
 
   chip.addEventListener('click', e => {
     e.stopPropagation();
     e.preventDefault();
     const panel = document.getElementById(`${ANN}-panel`);
-    // Toggle: clicking the active chip's chip closes it
     if (activeAnnId === annId && panel && panel.style.display === 'block') {
       closePanel();
     } else {
@@ -301,12 +316,11 @@ function injectChip(el, annId, comment) {
   try {
     el.insertAdjacentElement('afterend', chip);
   } catch {
-    // Fallback for elements that don't support afterend (e.g. <html>)
     document.body.appendChild(chip);
   }
 }
 
-// ── Restore annotations for the current page on load ──────────────────────
+// ── Restore annotations on page load ──────────────────────────────────────
 function restoreAnnotations() {
   const url = window.location.href;
   getAll(anns => {
@@ -319,9 +333,18 @@ function restoreAnnotations() {
   });
 }
 
-// ── Alt + Right-Click handler ──────────────────────────────────────────────
+// ── Configurable modifier + Right-Click handler ────────────────────────────
 document.addEventListener('contextmenu', e => {
-  if (!e.altKey) return;
+  // Read the cached modifier key (updated from Settings in real-time)
+  const mod = (cachedShortcut.modifier || 'alt').toLowerCase();
+  const modifierHeld = {
+    alt:   e.altKey,
+    ctrl:  e.ctrlKey,
+    shift: e.shiftKey,
+    meta:  e.metaKey,
+  }[mod];
+
+  if (!modifierHeld) return; // wrong modifier — let normal context menu proceed
   e.preventDefault();
 
   const target = e.target;
@@ -334,26 +357,17 @@ document.addEventListener('contextmenu', e => {
     target === document.documentElement
   ) return;
 
-  // If the element is already annotated, edit the existing annotation instead
-  // of creating a duplicate. Search next siblings for the chip injected after it.
+  // If already annotated, open existing annotation instead of creating a duplicate
   if (target.classList.contains(`${ANN}-hl`)) {
     let chip = null;
     let node = target.nextSibling;
     while (node) {
-      if (node.classList && node.classList.contains(`${ANN}-chip`)) {
-        chip = node;
-        break;
-      }
+      if (node.classList && node.classList.contains(`${ANN}-chip`)) { chip = node; break; }
       node = node.nextSibling;
     }
-    if (chip) {
-      openPanel(chip, chip.dataset.annId);
-      return;
-    }
-    // Chip missing from DOM (edge case) — fall through to create a fresh one
+    if (chip) { openPanel(chip, chip.dataset.annId); return; }
   }
 
-  // Build CSS class string, filtering out our own injected classes
   const classes = typeof target.className === 'string' && target.className.trim()
     ? target.className.trim().split(/\s+/)
         .filter(c => !c.startsWith(ANN))
@@ -362,13 +376,13 @@ document.addEventListener('contextmenu', e => {
     : '';
 
   const ann = {
-    id: genId(),
-    url: window.location.href,
-    tag: target.tagName.toLowerCase(),
-    elId: target.id || '',
+    id:        genId(),
+    url:       window.location.href,
+    tag:       target.tagName.toLowerCase(),
+    elId:      target.id || '',
     classes,
-    xpath: getXPath(target),
-    comment: '',
+    xpath:     getXPath(target),
+    comment:   '',
     timestamp: new Date().toISOString(),
   };
 
@@ -376,25 +390,19 @@ document.addEventListener('contextmenu', e => {
     anns.push(ann);
     setAll(anns, () => {
       injectChip(target, ann.id, '');
-      // Auto-open the panel so user can immediately start typing
       const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${ann.id}"]`);
       if (chip) openPanel(chip, ann.id);
     });
   });
 });
 
-// ── Message listener (commands from the popup) ──────────────────────────────
-// The popup cannot touch the DOM directly, so it asks the content script to
-// perform any visual changes (removing highlights / re-injecting chips).
+// ── Message listener (commands from the popup) ─────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'removeAnnotation') {
     const { annId, xpath } = msg;
-    // Close the floating panel if it is open for this annotation
     if (activeAnnId === annId) closePanel();
-    // Remove the chip badge from the DOM
     const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
     if (chip) chip.remove();
-    // Remove the yellow highlight from the annotated element
     if (xpath) {
       const el = resolveXPath(xpath);
       if (el) el.classList.remove(`${ANN}-hl`);

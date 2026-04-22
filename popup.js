@@ -1,4 +1,4 @@
-// popup.js — Dev Annotator
+// popup.js — Website Dev Annotator
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DEV MODE
@@ -13,18 +13,19 @@ const DEV_MODE = false;
 //
 // SETUP — one-time steps before publishing:
 //   1. Create a free Gumroad account → https://gumroad.com
-//   2. Create a product ("Dev Annotator Premium"), enable "Generate a unique
-//      license key" in product settings, and set your price.
+//   2. Create a product ("Website Dev Annotator Premium"), enable "Generate a
+//      unique license key" in product settings, and set your price.
 //   3. Replace GUMROAD_PRODUCT_PERMALINK with the slug at the end of your
-//      product URL (e.g. for gumroad.com/l/devann → use "devann").
+//      product URL (e.g. for gumroad.com/l/websiteDevAnnotator → use
+//      "websiteDevAnnotator").
 //   4. Replace PREMIUM_PURCHASE_URL with your full product URL.
 //
 // Flow: user purchases → Gumroad emails them a license key → they paste it
 // in Settings → Premium → extension validates via Gumroad's public API →
 // result cached in chrome.storage.local.
 // ─────────────────────────────────────────────────────────────────────────────
-const GUMROAD_PRODUCT_PERMALINK = ''; // TODO: your Gumroad product permalink
-const PREMIUM_PURCHASE_URL      = ''; // TODO: your Gumroad product URL
+const GUMROAD_PRODUCT_PERMALINK = 'websiteDevAnnotator';
+const PREMIUM_PURCHASE_URL      = 'https://arjunsharma10.gumroad.com/l/websiteDevAnnotator';
 
 const LICENSE_STORAGE_KEY = 'license';
 
@@ -32,9 +33,15 @@ const LICENSE_STORAGE_KEY = 'license';
 const FREE_ANNOTATION_HISTORY_LIMIT = 30;
 const FREE_COPY_HISTORY_LIMIT       = 10;
 
+// Human-readable labels for each modifier key
+const MODIFIER_LABELS = {
+  alt:   'Alt',
+  ctrl:  'Ctrl',
+  shift: 'Shift',
+  meta:  'Meta / ⌘ Cmd',
+};
+
 // ─── Cached premium status ────────────────────────────────────────────────────
-// Loaded once at startup from chrome.storage.local; refreshed whenever
-// Settings is opened or a license is activated/deactivated.
 let _premium = DEV_MODE;
 
 function isPremium() {
@@ -62,8 +69,8 @@ async function validateLicenseWithGumroad(key) {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        product_permalink:   GUMROAD_PRODUCT_PERMALINK,
-        license_key:         key.trim(),
+        product_permalink:    GUMROAD_PRODUCT_PERMALINK,
+        license_key:          key.trim(),
         increment_uses_count: 'false',
       }),
     });
@@ -121,16 +128,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let historyVisible  = false;
   let settingsVisible = false;
   let historyTab      = 'annotations'; // 'annotations' | 'copies'
-
-  // Prevent storage.onChanged from triggering a re-render when the popup itself
-  // is the one writing (avoids textarea cursor-position resets).
   let isWritingFromPopup = false;
 
   // ── Settings defaults ────────────────────────────────────────────────────
   const DEFAULT_SETTINGS = {
-    prependText: '', // [PREMIUM] prepended to "copy all as markdown" output
-    appendText:  '', // [PREMIUM] appended  to "copy all as markdown" output
-    darkMode:    false, // [PREMIUM] dark / light theme toggle
+    shortcut:    { modifier: 'alt' }, // free: customizable annotation trigger
+    prependText: '',                  // [PREMIUM] prepended to markdown output
+    appendText:  '',                  // [PREMIUM] appended  to markdown output
+    darkMode:    false,               // [PREMIUM] dark / light theme toggle
   };
 
   function loadSettings(cb) {
@@ -149,12 +154,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Dark mode ─────────────────────────────────────────────────────────────
-  // [PREMIUM] Applies the chosen theme to the popup body.
   function applyDarkMode(enabled) {
     document.body.dataset.theme = enabled ? 'dark' : 'light';
   }
 
-  // Apply dark mode as early as possible (avoid a flash of unstyled theme)
   loadSettings(s => applyDarkMode(s.darkMode));
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -179,7 +182,11 @@ document.addEventListener('DOMContentLoaded', () => {
     try { return new Date(ts).toLocaleString(); } catch { return ts; }
   }
 
-  // ── Save a single annotation's comment from the popup ─────────────────────
+  function modLabel(mod) {
+    return MODIFIER_LABELS[mod] || 'Alt';
+  }
+
+  // ── Save a single annotation's comment ────────────────────────────────────
   const saveTimers = {};
   function saveComment(annId, value) {
     clearTimeout(saveTimers[annId]);
@@ -190,9 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const ann  = anns.find(a => a.id === annId);
         if (ann) {
           ann.comment = value;
-          chrome.storage.local.set({ annotations: anns }, () => {
-            isWritingFromPopup = false;
-          });
+          chrome.storage.local.set({ annotations: anns }, () => { isWritingFromPopup = false; });
         } else {
           isWritingFromPopup = false;
         }
@@ -200,7 +205,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 350);
   }
 
-  // ── Delete a single annotation (moves it to history) ──────────────────────
+  // ── Delete a single annotation ────────────────────────────────────────────
   function deleteAnnotation(annId) {
     isWritingFromPopup = true;
     chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
@@ -214,20 +219,14 @@ document.addEventListener('DOMContentLoaded', () => {
         render(remaining);
         if (ann) {
           chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-            if (tabs[0]) {
-              chrome.tabs.sendMessage(tabs[0].id, {
-                type: 'removeAnnotation',
-                annId,
-                xpath: ann.xpath,
-              }).catch(() => {});
-            }
+            if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId, xpath: ann.xpath }).catch(() => {});
           });
         }
       });
     });
   }
 
-  // ── Restore a history entry back into current annotations ──────────────────
+  // ── Restore a history entry ────────────────────────────────────────────────
   function restoreAnnotation(annId, deletedAt) {
     chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
       const anns    = r.annotations;
@@ -246,9 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.storage.local.set({ annotations: newAnns, [HISTORY_KEY]: newHist }, () => {
         showHistory();
         chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-          if (tabs[0]) {
-            chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
-          }
+          if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
         });
       });
     });
@@ -259,11 +256,15 @@ document.addEventListener('DOMContentLoaded', () => {
     badge.textContent = anns.length > 0 ? String(anns.length) : '';
 
     if (anns.length === 0) {
-      listEl.innerHTML = `
-        <p class="empty-msg">
-          No annotations yet.<br>
-          Hold <strong>Alt + Right-Click</strong> any element on a page.
-        </p>`;
+      // Read current shortcut to show the right gesture in the empty-state hint
+      loadSettings(s => {
+        const mod = modLabel(s.shortcut?.modifier || 'alt');
+        listEl.innerHTML = `
+          <p class="empty-msg">
+            No annotations yet.<br>
+            Hold <strong>${escHtml(mod)} + Right-Click</strong> any element on a page.
+          </p>`;
+      });
       return;
     }
 
@@ -307,8 +308,6 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.get({ annotations: [] }, r => render(r.annotations));
   }
 
-  // Refresh popup when storage changes (e.g. user annotating on the page),
-  // but skip re-renders triggered by the popup's own writes.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.annotations && !isWritingFromPopup && !historyVisible && !settingsVisible) {
       render(changes.annotations.newValue || []);
@@ -357,7 +356,6 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
       let hist = r[HISTORY_KEY];
 
-      // Free tier: cap visible history; premium: unlimited
       const cappedMsg = !isPremium() && hist.length > FREE_ANNOTATION_HISTORY_LIMIT
         ? `<p class="history-cap-notice">Showing the ${FREE_ANNOTATION_HISTORY_LIMIT} most recent deleted annotations.
             <a href="#" class="meta-link upgrade-link" data-url="${escHtml(PREMIUM_PURCHASE_URL)}">Upgrade to Premium</a> for unlimited history.</p>`
@@ -474,7 +472,6 @@ document.addEventListener('DOMContentLoaded', () => {
     settingsBtn.textContent   = '✕';
     settingsBtn.title         = 'Close settings';
     settingsBtn.classList.add('active');
-    // Refresh premium status each time settings is opened, then render
     refreshPremiumStatus().then(() => renderSettings());
   }
 
@@ -496,7 +493,6 @@ document.addEventListener('DOMContentLoaded', () => {
       let licenseSection = '';
 
       if (premium && !DEV_MODE) {
-        // Show active license info + remove button
         chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
           const lic   = r[LICENSE_STORAGE_KEY];
           const email = lic?.email ? escHtml(lic.email) : '—';
@@ -518,7 +514,6 @@ document.addEventListener('DOMContentLoaded', () => {
           buildAndInjectSettings(s, licenseSection, premium);
         });
       } else if (!premium) {
-        // Show upgrade CTA + license key input
         const purchaseUrl = PREMIUM_PURCHASE_URL || '#';
         licenseSection = `
           <div class="settings-section">
@@ -539,13 +534,16 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>`;
         buildAndInjectSettings(s, licenseSection, premium);
       } else {
-        // DEV_MODE active — show dev indicator only
+        // DEV_MODE — no license section shown
         buildAndInjectSettings(s, licenseSection, premium);
       }
     });
   }
 
   function buildAndInjectSettings(s, licenseSection, premium) {
+    const currentMod    = s.shortcut?.modifier || 'alt';
+    const currentLabel  = escHtml(MODIFIER_LABELS[currentMod] || 'Alt');
+
     settingsEl.innerHTML = `
       ${DEV_MODE ? `
       <div class="settings-section settings-section--dev">
@@ -556,9 +554,26 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       </div>` : ''}
 
+      <!-- ── Annotation Shortcut (FREE — all users) ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">⌨ Annotation Shortcut</div>
+        <div class="settings-row">
+          <label class="settings-label" for="shortcut-modifier">Modifier key</label>
+          <select id="shortcut-modifier" class="shortcut-select">
+            <option value="alt"  ${currentMod === 'alt'   ? 'selected' : ''}>Alt (default)</option>
+            <option value="ctrl" ${currentMod === 'ctrl'  ? 'selected' : ''}>Ctrl</option>
+            <option value="shift"${currentMod === 'shift' ? 'selected' : ''}>Shift</option>
+            <option value="meta" ${currentMod === 'meta'  ? 'selected' : ''}>Meta / ⌘ Cmd</option>
+          </select>
+        </div>
+        <p class="settings-hint">
+          Hold <strong id="shortcut-preview">${currentLabel}</strong> + Right-Click any element to annotate it.
+        </p>
+      </div>
+
       ${licenseSection}
 
-      <!-- Appearance — [PREMIUM] -->
+      <!-- ── Appearance (PREMIUM) ── -->
       <div class="settings-section">
         <div class="settings-section-title">
           Appearance
@@ -578,7 +593,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       </div>
 
-      <!-- Markdown Copy — [PREMIUM] -->
+      <!-- ── Markdown Copy (PREMIUM) ── -->
       <div class="settings-section">
         <div class="settings-section-title">
           Markdown Copy
@@ -617,7 +632,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     attachExternalLinks(settingsEl);
 
+    // ── Shortcut selector (free, always wired) ────────────────────────────
+    const modSelect = settingsEl.querySelector('#shortcut-modifier');
+    const preview   = settingsEl.querySelector('#shortcut-preview');
+    if (modSelect) {
+      modSelect.addEventListener('change', () => {
+        const mod = modSelect.value;
+        saveSettings({ shortcut: { modifier: mod } });
+        if (preview) preview.textContent = MODIFIER_LABELS[mod] || 'Alt';
+      });
+    }
+
     if (premium) {
+      // ── Dark mode toggle ────────────────────────────────────────────────
       const darkToggle = settingsEl.querySelector('#dark-mode-toggle');
       if (darkToggle) {
         darkToggle.addEventListener('change', () => {
@@ -625,10 +652,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
 
+      // ── Prepend / append text ────────────────────────────────────────────
       let prependTimer, appendTimer;
       const prependTa = settingsEl.querySelector('#prepend-text');
       const appendTa  = settingsEl.querySelector('#append-text');
-
       if (prependTa) {
         prependTa.addEventListener('input', () => {
           clearTimeout(prependTimer);
@@ -642,28 +669,31 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       }
 
-      // "Remove License" button
+      // ── Remove License button ────────────────────────────────────────────
       const deactivateBtn = settingsEl.querySelector('#deactivate-btn');
       if (deactivateBtn) {
         deactivateBtn.addEventListener('click', async () => {
           if (confirm('Remove your license key? You can re-enter it any time.')) {
             await deactivateLicense();
-            applyDarkMode(false); // reset dark mode if premium is removed
+            applyDarkMode(false);
             renderSettings();
           }
         });
       }
     } else {
-      // "Activate" button handler
-      const activateBtn     = settingsEl.querySelector('#activate-btn');
-      const licenseInput    = settingsEl.querySelector('#license-key-input');
-      const licenseStatus   = settingsEl.querySelector('#license-status');
+      // ── Activate button ──────────────────────────────────────────────────
+      const activateBtn   = settingsEl.querySelector('#activate-btn');
+      const licenseInput  = settingsEl.querySelector('#license-key-input');
+      const licenseStatus = settingsEl.querySelector('#license-status');
 
       if (activateBtn && licenseInput) {
         activateBtn.addEventListener('click', async () => {
           const key = licenseInput.value.trim();
-          if (!key) { licenseStatus.textContent = 'Please enter a license key.'; licenseStatus.className = 'license-status error'; return; }
-
+          if (!key) {
+            licenseStatus.textContent = 'Please enter a license key.';
+            licenseStatus.className   = 'license-status error';
+            return;
+          }
           activateBtn.disabled    = true;
           activateBtn.textContent = '…';
           licenseStatus.textContent = '';
@@ -684,7 +714,6 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         });
 
-        // Allow Enter key to trigger activation
         licenseInput.addEventListener('keydown', e => {
           if (e.key === 'Enter') activateBtn.click();
         });
@@ -733,11 +762,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         navigator.clipboard.writeText(finalMd).then(() => {
           const copyHist = r[COPY_HISTORY_KEY];
-          copyHist.push({
-            timestamp: new Date().toISOString(),
-            output:    finalMd,
-            count:     anns.length,
-          });
+          copyHist.push({ timestamp: new Date().toISOString(), output: finalMd, count: anns.length });
           chrome.storage.local.set({ [COPY_HISTORY_KEY]: copyHist });
 
           const orig = copyBtn.textContent;
@@ -775,7 +800,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // ── External link handler ──────────────────────────────────────────────────
-  // Opens [data-url] links and star-rating in new tabs via chrome.tabs.create.
   function attachExternalLinks(root) {
     root.querySelectorAll('[data-url]').forEach(el => {
       el.addEventListener('click', e => {
@@ -786,14 +810,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Attach to always-visible elements (footer links, stars)
   attachExternalLinks(document.body);
 
   // ── Star rating widget ─────────────────────────────────────────────────────
   const starContainer = document.getElementById('star-rating');
   const stars         = document.querySelectorAll('.star');
 
-  // Hover: fill stars up to hovered index
   stars.forEach((star, idx) => {
     star.addEventListener('mouseover', () => {
       stars.forEach((s, i) => s.classList.toggle('star-hover', i <= idx));
@@ -803,8 +825,6 @@ document.addEventListener('DOMContentLoaded', () => {
     starContainer.addEventListener('mouseleave', () => {
       stars.forEach(s => s.classList.remove('star-hover'));
     });
-
-    // Click any star → open Chrome Web Store review page
     starContainer.addEventListener('click', () => {
       const reviewUrl = `https://chromewebstore.google.com/detail/${chrome.runtime.id}/reviews`;
       chrome.tabs.create({ url: reviewUrl });
@@ -812,6 +832,5 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Init ───────────────────────────────────────────────────────────────────
-  // Refresh premium status on load, then render annotations
   refreshPremiumStatus().then(() => load());
 });

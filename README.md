@@ -6,7 +6,7 @@
 
 ## What it does
 
-Dev Annotator lets you attach sticky-note annotations directly to HTML elements on any web page. When you're done, one click copies everything as structured Markdown — ready to paste into any AI coding assistant, bug tracker, or documentation tool.
+Website Dev Annotator lets you attach sticky-note annotations directly to HTML elements on any web page. When you're done, one click copies everything as structured Markdown — ready to paste into any AI coding assistant, bug tracker, or documentation tool.
 
 **Use cases:**
 - Briefing AI tools (Cursor, Claude, ChatGPT) about which elements need changes and why
@@ -35,7 +35,7 @@ Dev Annotator lets you attach sticky-note annotations directly to HTML elements 
 - 📋 **Unlimited history** — full copy log and annotation history, no cap
 - 🚀 **All future premium features**
 
-[**→ Get Premium on Gumroad**](https://gumroad.com) *(link updated after launch)*
+[**→ Get Premium on Gumroad**](https://arjunsharma10.gumroad.com/l/websiteDevAnnotator)
 
 ---
 
@@ -65,7 +65,7 @@ Paste directly into Cursor's chat, Claude, or any AI tool — it already knows w
 ## Installation
 
 ### From the Chrome Web Store *(coming soon)*
-Search **"Dev Annotator"** in the [Chrome Web Store](https://chromewebstore.google.com) and click **Add to Chrome**.
+Search **"Website Dev Annotator"** in the [Chrome Web Store](https://chromewebstore.google.com) and click **Add to Chrome**.
 
 ### Manual (Developer / Sideloaded)
 1. Clone or download this repository:
@@ -81,7 +81,7 @@ Search **"Dev Annotator"** in the [Chrome Web Store](https://chromewebstore.goog
 
 ## Activating Premium
 
-1. Purchase a license key on Gumroad *(link coming soon)*
+1. [Purchase a license key on Gumroad](https://arjunsharma10.gumroad.com/l/websiteDevAnnotator)
 2. Gumroad will email you a license key
 3. Open the extension popup → click ⚙ (Settings) → paste your key in the **Premium** section → click **Activate**
 4. Your license is stored locally and validated against Gumroad's API
@@ -92,7 +92,7 @@ Search **"Dev Annotator"** in the [Chrome Web Store](https://chromewebstore.goog
 
 ## Privacy
 
-Dev Annotator stores all annotation data **locally** in your browser via `chrome.storage.local`. No data is sent to any server unless you activate a license key, at which point only the key is sent to Gumroad's API to verify validity. No browsing history, page content, or personal data is ever collected or transmitted.
+Website Dev Annotator stores all annotation data **locally** in your browser via `chrome.storage.local`. No data is sent to any server unless you activate a license key, at which point only the key is sent to Gumroad's API to verify validity. No browsing history, page content, or personal data is ever collected or transmitted.
 
 ---
 
@@ -117,7 +117,7 @@ ai-dev-annotator/
 
 **Recommended title (45 chars):**
 ```
-Dev Annotator — AI Notes & Markdown Export
+Website Dev Annotator: AI Notes & Markdown Export
 ```
 
 **Short description (128 chars):**
