@@ -1,14 +1,6 @@
 // popup.js : Website Dev Annotator
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DEV MODE
-// Set DEV_MODE = true in your *local* copy to unlock all premium features
-// during development. Never commit with DEV_MODE = true : it bypasses all
-// license checks and exposes the dev-only UI.
-// ─────────────────────────────────────────────────────────────────────────────
-const DEV_MODE = false;
-
-// ─────────────────────────────────────────────────────────────────────────────
 // PREMIUM / LICENSE SYSTEM (Gumroad)
 //
 // SETUP : one-time steps before publishing:
@@ -42,14 +34,13 @@ const MODIFIER_LABELS = {
 };
 
 // ─── Cached premium status ────────────────────────────────────────────────────
-let _premium = DEV_MODE;
+let _premium = false;
 
 function isPremium() {
   return _premium;
 }
 
 async function refreshPremiumStatus() {
-  if (DEV_MODE) { _premium = true; return; }
   return new Promise(resolve => {
     chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
       const lic = r[LICENSE_STORAGE_KEY];
@@ -492,7 +483,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadSettings(s => {
       let licenseSection = '';
 
-      if (premium && !DEV_MODE) {
+      if (premium) {
         chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
           const lic   = r[LICENSE_STORAGE_KEY];
           const email = lic?.email ? escHtml(lic.email) : ':';
@@ -533,9 +524,6 @@ document.addEventListener('DOMContentLoaded', () => {
             <div id="license-status" class="license-status"></div>
           </div>`;
         buildAndInjectSettings(s, licenseSection, premium);
-      } else {
-        // DEV_MODE : no license section shown
-        buildAndInjectSettings(s, licenseSection, premium);
       }
     });
   }
@@ -545,15 +533,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const currentLabel  = escHtml(MODIFIER_LABELS[currentMod] || 'Alt');
 
     settingsEl.innerHTML = `
-      ${DEV_MODE ? `
-      <div class="settings-section settings-section--dev">
-        <div class="settings-section-title">🛠 Developer</div>
-        <div class="settings-row">
-          <span class="settings-label">Dev Mode</span>
-          <span class="settings-value dev-mode-badge dev-mode-on">ON : all premium features unlocked</span>
-        </div>
-      </div>` : ''}
-
       <!-- ── Annotation Shortcut (FREE : all users) ── -->
       <div class="settings-section">
         <div class="settings-section-title">⌨ Annotation Shortcut</div>

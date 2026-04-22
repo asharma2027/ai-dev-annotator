@@ -133,15 +133,3 @@ This extension is fully open source. You can review all code at:
 
 - ☕ **Ko-fi:** [ko-fi.com/asharma2027](https://ko-fi.com/asharma2027) : buy me a coffee if this saves you time
 - 💼 **Hire me:** [linkedin.com/in/asharma2027](https://www.linkedin.com/in/asharma2027/) : available for freelance and full-time opportunities
-
----
-
-## For developers: local development
-
-To develop and test new premium features locally:
-
-1. Open `popup.js` and set `DEV_MODE = true` at the top of the file
-2. All premium features will be unlocked and a dev indicator appears in Settings
-3. **Never commit with `DEV_MODE = true`** : this bypasses all license checks
-
-The `DEV_MODE` constant is intentionally left in the source so you can continue building new gated features without needing a valid license in your local environment. Set it back to `false` before committing and publishing.
