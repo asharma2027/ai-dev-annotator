@@ -1,11 +1,11 @@
-// content.js — Website Dev Annotator
+// content.js : Website Dev Annotator
 // Injected into every page. Hold your configured modifier + Right-Click any
 // element to annotate it. Notes auto-save in real-time and persist across
 // page reloads.
 
 const ANN = 'aiann'; // CSS class/id prefix to avoid collisions
 
-// ── Annotation shortcut — configurable modifier key ────────────────────────
+// ── Annotation shortcut : configurable modifier key ────────────────────────
 // Loaded from chrome.storage.local at init and updated in real-time whenever
 // the user changes it in Settings. Default: Alt + Right-Click.
 let cachedShortcut = { modifier: 'alt' };
@@ -60,7 +60,7 @@ function injectStyles() {
     }
     .${ANN}-chip:hover { background: #d97706; color: #fff; }
     .${ANN}-chip.has-note { background: #f59e0b; }
-    /* Shared editing panel — fixed, appended to body */
+    /* Shared editing panel : fixed, appended to body */
     #${ANN}-panel {
       position: fixed;
       width: 272px;
@@ -222,7 +222,7 @@ function openPanel(chip, annId) {
 
     const ta = panel.querySelector(`#${ANN}-textarea`);
     ta.value = comment;
-    setSaveStatus(comment ? '' : 'Start typing — auto-saves as you go');
+    setSaveStatus(comment ? '' : 'Start typing : auto-saves as you go');
 
     activeChip  = chip;
     activeAnnId = annId;
@@ -344,7 +344,7 @@ document.addEventListener('contextmenu', e => {
     meta:  e.metaKey,
   }[mod];
 
-  if (!modifierHeld) return; // wrong modifier — let normal context menu proceed
+  if (!modifierHeld) return; // wrong modifier : let normal context menu proceed
   e.preventDefault();
 
   const target = e.target;

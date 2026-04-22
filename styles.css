@@ -1,4 +1,4 @@
-/* styles.css — Dev Annotator popup UI */
+/* styles.css : Dev Annotator popup UI */
 
 /* ── CSS custom properties (light theme defaults) ────────────────────────── */
 :root {
@@ -26,7 +26,7 @@
 }
 
 /* ── Dark theme overrides ────────────────────────────────────────────────── */
-/* [PREMIUM] dark mode — activated by data-theme="dark" on <body>            */
+/* [PREMIUM] dark mode : activated by data-theme="dark" on <body>            */
 [data-theme="dark"] {
   --bg:               #1a1b1e;
   --surface:          #25262b;

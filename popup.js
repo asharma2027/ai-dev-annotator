@@ -1,9 +1,9 @@
-// popup.js — Website Dev Annotator
+// popup.js : Website Dev Annotator
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DEV MODE
 // Set DEV_MODE = true in your *local* copy to unlock all premium features
-// during development. Never commit with DEV_MODE = true — it bypasses all
+// during development. Never commit with DEV_MODE = true : it bypasses all
 // license checks and exposes the dev-only UI.
 // ─────────────────────────────────────────────────────────────────────────────
 const DEV_MODE = false;
@@ -11,7 +11,7 @@ const DEV_MODE = false;
 // ─────────────────────────────────────────────────────────────────────────────
 // PREMIUM / LICENSE SYSTEM (Gumroad)
 //
-// SETUP — one-time steps before publishing:
+// SETUP : one-time steps before publishing:
 //   1. Create a free Gumroad account → https://gumroad.com
 //   2. Create a product ("Website Dev Annotator Premium"), enable "Generate a
 //      unique license key" in product settings, and set your price.
@@ -495,7 +495,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (premium && !DEV_MODE) {
         chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
           const lic   = r[LICENSE_STORAGE_KEY];
-          const email = lic?.email ? escHtml(lic.email) : '—';
+          const email = lic?.email ? escHtml(lic.email) : ':';
           licenseSection = `
             <div class="settings-section">
               <div class="settings-section-title">⭐ Premium</div>
@@ -517,14 +517,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const purchaseUrl = PREMIUM_PURCHASE_URL || '#';
         licenseSection = `
           <div class="settings-section">
-            <div class="settings-section-title">⭐ Premium — $9.99 one-time</div>
+            <div class="settings-section-title">⭐ Premium : $9.99 one-time</div>
             <ul class="premium-features-list">
               <li>🌙 Dark mode</li>
               <li>📝 Custom Markdown prepend &amp; append</li>
               <li>📋 Unlimited copy &amp; annotation history</li>
               <li>🚀 All future premium features</li>
             </ul>
-            <a href="#" class="btn-premium-upgrade" data-url="${escHtml(purchaseUrl)}">⭐ Get Premium — $9.99</a>
+            <a href="#" class="btn-premium-upgrade" data-url="${escHtml(purchaseUrl)}">⭐ Get Premium : $9.99</a>
             <div class="license-divider">Already purchased?</div>
             <div class="license-input-row">
               <input type="text" id="license-key-input" class="license-input" placeholder="Paste your license key…" spellcheck="false" autocomplete="off" />
@@ -534,7 +534,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>`;
         buildAndInjectSettings(s, licenseSection, premium);
       } else {
-        // DEV_MODE — no license section shown
+        // DEV_MODE : no license section shown
         buildAndInjectSettings(s, licenseSection, premium);
       }
     });
@@ -550,11 +550,11 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="settings-section-title">🛠 Developer</div>
         <div class="settings-row">
           <span class="settings-label">Dev Mode</span>
-          <span class="settings-value dev-mode-badge dev-mode-on">ON — all premium features unlocked</span>
+          <span class="settings-value dev-mode-badge dev-mode-on">ON : all premium features unlocked</span>
         </div>
       </div>` : ''}
 
-      <!-- ── Annotation Shortcut (FREE — all users) ── -->
+      <!-- ── Annotation Shortcut (FREE : all users) ── -->
       <div class="settings-section">
         <div class="settings-section-title">⌨ Annotation Shortcut</div>
         <div class="settings-row">
