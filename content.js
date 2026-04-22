@@ -72,7 +72,8 @@ function injectStyles() {
     #${ANN}-close-btn:hover { color: #374151; }
     #${ANN}-textarea {
       width: 100%;
-      min-height: 80px;
+      /* 2× the original 80px default height */
+      min-height: 160px;
       border: 1px solid #d1d5db;
       border-radius: 6px;
       padding: 7px 9px;
@@ -214,9 +215,9 @@ function positionPanel(panel, chip) {
   const r = chip.getBoundingClientRect();
   let top = r.bottom + 6;
   let left = r.left;
-  // Clamp so panel stays inside viewport
+  // Clamp so panel stays inside viewport (panel height ~270px with 2× textarea)
   if (left + 276 > window.innerWidth - 4) left = window.innerWidth - 280;
-  if (top + 186 > window.innerHeight - 4) top = Math.max(4, r.top - 192);
+  if (top + 270 > window.innerHeight - 4) top = Math.max(4, r.top - 276);
   panel.style.top = top + 'px';
   panel.style.left = Math.max(4, left) + 'px';
 }

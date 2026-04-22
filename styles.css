@@ -1,5 +1,48 @@
 /* styles.css — popup UI */
 
+/* ── CSS custom properties (light theme defaults) ────────────────────────── */
+:root {
+  --bg:               #f9fafb;
+  --surface:          #ffffff;
+  --border:           #e5e7eb;
+  --text:             #111827;
+  --text-secondary:   #374151;
+  --text-muted:       #6b7280;
+  --header-bg:        #2563eb;
+  --url-color:        #2563eb;
+  --code-bg:          #f3f4f6;
+  --code-color:       #db2777;
+  --textarea-bg:      #f9fafb;
+  --textarea-focus:   #ffffff;
+  --footer-bg:        #ffffff;
+  --section-bg:       #f3f4f6;
+  --hist-del-color:   #dc2626;
+  --toggle-off:       #d1d5db;
+  --toggle-on:        #2563eb;
+}
+
+/* ── Dark theme overrides ────────────────────────────────────────────────── */
+/* [PREMIUM FEATURE] dark mode — activated by data-theme="dark" on <body>    */
+[data-theme="dark"] {
+  --bg:               #1a1b1e;
+  --surface:          #25262b;
+  --border:           #373a40;
+  --text:             #e9ecef;
+  --text-secondary:   #ced4da;
+  --text-muted:       #868e96;
+  --header-bg:        #1c4ed8;
+  --url-color:        #60a5fa;
+  --code-bg:          #2c2e33;
+  --code-color:       #f472b6;
+  --textarea-bg:      #2c2e33;
+  --textarea-focus:   #373a40;
+  --footer-bg:        #25262b;
+  --section-bg:       #2c2e33;
+  --hist-del-color:   #f87171;
+  --toggle-off:       #4b5563;
+  --toggle-on:        #3b82f6;
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -7,18 +50,19 @@ body {
   width: 360px;
   margin: 0;
   padding: 0;
-  background: #f9fafb;
-  color: #111827;
+  background: var(--bg);
+  color: var(--text);
+  transition: background 0.2s, color 0.2s;
 }
 
-/* ── Header ─────────────────────────────────────────────────────────────── */
+/* ── Header ──────────────────────────────────────────────────────────────── */
 .header {
-  background: #2563eb;
-  color: white;
+  background: var(--header-bg);
+  color: #fff;
   padding: 12px 16px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .header h2 {
   margin: 0;
@@ -27,7 +71,7 @@ body {
 }
 .count-badge {
   background: rgba(255,255,255,0.25);
-  color: white;
+  color: #fff;
   font-size: 11px;
   font-weight: 700;
   padding: 2px 7px;
@@ -36,11 +80,11 @@ body {
   text-align: center;
 }
 
-/* History toggle button in header */
-#history-btn {
+/* Shared header icon buttons (settings ⚙ and history 🕐) */
+.header-icon-btn {
   flex: 0 0 auto;
   background: rgba(255,255,255,0.18);
-  color: white;
+  color: #fff;
   border: 1px solid rgba(255,255,255,0.35);
   border-radius: 5px;
   padding: 3px 8px;
@@ -50,13 +94,15 @@ body {
   transition: background 0.15s;
   line-height: 1.4;
 }
-#history-btn:hover {
+.header-icon-btn:hover,
+.header-icon-btn.active {
   background: rgba(255,255,255,0.32);
 }
 
-/* ── Annotation list ─────────────────────────────────────────────────────── */
+/* ── Main panels ─────────────────────────────────────────────────────────── */
 #annotations-list,
-#history-panel {
+#history-panel,
+#settings-panel {
   max-height: 420px;
   overflow-y: auto;
   padding: 10px 12px;
@@ -64,7 +110,7 @@ body {
 
 .empty-msg {
   text-align: center;
-  color: #6b7280;
+  color: var(--text-muted);
   line-height: 1.7;
   padding: 20px 10px;
   margin: 0;
@@ -72,27 +118,25 @@ body {
 }
 
 /* ── URL group ───────────────────────────────────────────────────────────── */
-.url-group {
-  margin-bottom: 10px;
-}
+.url-group { margin-bottom: 10px; }
 .url-label {
   font-size: 10px;
   font-weight: 700;
-  color: #2563eb;
+  color: var(--url-color);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 4px 0 5px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border);
   margin-bottom: 6px;
 }
 
 /* ── Annotation card ─────────────────────────────────────────────────────── */
 .item {
-  background: white;
-  border: 1px solid #e5e7eb;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 7px;
   padding: 8px 10px;
   margin-bottom: 6px;
@@ -100,8 +144,6 @@ body {
   line-height: 1.5;
   word-break: break-word;
 }
-
-/* Selector row: selector code on left, delete button on right */
 .item-sel {
   display: flex;
   align-items: center;
@@ -109,10 +151,7 @@ body {
   gap: 6px;
   margin-bottom: 4px;
 }
-.item-sel code {
-  flex: 1;
-  min-width: 0;
-}
+.item-sel code { flex: 1; min-width: 0; }
 
 /* Per-row delete button */
 .item-delete-btn {
@@ -134,69 +173,76 @@ body {
   border-color: #fca5a5;
 }
 
-.item-note {
-  color: #374151;
-  font-size: 12px;
-}
-.empty-note {
-  color: #9ca3af;
-  font-style: italic;
-}
+.item-note { color: var(--text-secondary); font-size: 12px; }
+.empty-note { color: var(--text-muted); font-style: italic; }
 
 /* Inline-editable note textarea inside each annotation card */
 .item-note-edit {
   width: 100%;
   min-height: 46px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 5px;
   padding: 5px 7px;
   font: 12px/1.5 system-ui, -apple-system, sans-serif;
-  color: #374151;
-  background: #f9fafb;
+  color: var(--text-secondary);
+  background: var(--textarea-bg);
   resize: vertical;
   box-sizing: border-box;
   outline: none;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition: border-color 0.12s, box-shadow 0.12s, background 0.2s;
 }
 .item-note-edit:focus {
   border-color: #f59e0b;
-  background: #fff;
+  background: var(--textarea-focus);
   box-shadow: 0 0 0 2px rgba(251,191,36,0.22);
 }
-.item-note-edit::placeholder {
-  color: #9ca3af;
-  font-style: italic;
-}
+.item-note-edit::placeholder { color: var(--text-muted); font-style: italic; }
 
 code {
-  background: #f3f4f6;
+  background: var(--code-bg);
   padding: 1px 5px;
   border-radius: 3px;
   font-family: 'Menlo', 'Consolas', monospace;
   font-size: 11.5px;
-  color: #db2777;
+  color: var(--code-color);
   word-break: break-all;
+  transition: background 0.2s, color 0.2s;
 }
 
-/* ── History panel entries ───────────────────────────────────────────────── */
-.hist-item {
-  opacity: 0.88;
-}
-.hist-meta {
+/* ── History: tab bar ────────────────────────────────────────────────────── */
+.hist-tabs {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  margin: -10px -12px 10px;   /* bleed to panel edges, compensate for padding */
+  padding: 0 12px;
+  background: var(--bg);
+  position: sticky;
+  top: -10px;
+  z-index: 1;
 }
-.hist-ts {
-  font-size: 10px;
-  color: #6b7280;
+.hist-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 0;
+  cursor: pointer;
+  border-radius: 0;
+  transition: color 0.12s, border-color 0.12s;
+  margin-bottom: -1px;
 }
-.hist-deleted {
-  color: #dc2626;
-}
+.hist-tab:hover { color: var(--text); }
+.hist-tab.active { color: #2563eb; border-bottom-color: #2563eb; }
 
-/* Per-row restore button in history (in place of the delete button) */
+/* ── History: annotation records ─────────────────────────────────────────── */
+.hist-item { opacity: 0.88; }
+.hist-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.hist-ts   { font-size: 10px; color: var(--text-muted); }
+.hist-deleted { color: var(--hist-del-color); }
+
 .hist-restore-btn {
   flex: 0 0 auto;
   background: none;
@@ -217,20 +263,193 @@ code {
 }
 .hist-note {
   font-size: 11.5px;
-  color: #374151;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  color: var(--text-secondary);
+  background: var(--textarea-bg);
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 4px 7px;
+  transition: background 0.2s;
 }
 
-/* ── Footer buttons ─────────────────────────────────────────────────────── */
+/* ── History: copy log records ───────────────────────────────────────────── */
+.copy-hist-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.copy-hist-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.copy-hist-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--section-bg);
+  border-radius: 10px;
+  padding: 1px 7px;
+}
+.copy-hist-preview {
+  font-family: 'Menlo', 'Consolas', monospace;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  max-height: 100px;
+  overflow-y: auto;
+  line-height: 1.5;
+  transition: background 0.2s;
+}
+
+/* ── Settings panel ──────────────────────────────────────────────────────── */
+.settings-section { margin-bottom: 14px; }
+.settings-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 0;
+  font-size: 12.5px;
+}
+.settings-row--toggle { gap: 8px; }
+.settings-label {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.settings-value {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.settings-field { margin-bottom: 10px; }
+.settings-field .settings-label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.settings-textarea {
+  width: 100%;
+  min-height: 60px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font: 12px/1.5 system-ui, -apple-system, sans-serif;
+  color: var(--text-secondary);
+  background: var(--textarea-bg);
+  resize: vertical;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.12s, background 0.2s;
+}
+.settings-textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+}
+.settings-textarea.premium-locked,
+.settings-textarea:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Dev-mode badge ──────────────────────────────────────────────────────── */
+.dev-mode-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: var(--section-bg);
+  letter-spacing: 0.04em;
+}
+.dev-mode-badge.dev-mode-on {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+/* ── Premium badge & lock icon ───────────────────────────────────────────── */
+.premium-badge {
+  font-size: 9px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.lock-icon { font-size: 11px; opacity: 0.7; }
+
+/* ── Toggle switch ───────────────────────────────────────────────────────── */
+.toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.toggle-wrap.premium-locked {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--toggle-off);
+  border-radius: 20px;
+  transition: background 0.2s;
+}
+.toggle-slider::before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--toggle-on); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); }
+.toggle-switch input:disabled + .toggle-slider { cursor: not-allowed; }
+
+/* ── Footer buttons ──────────────────────────────────────────────────────── */
 .footer {
   display: flex;
   gap: 8px;
   padding: 10px 12px;
-  background: white;
-  border-top: 1px solid #e5e7eb;
+  background: var(--footer-bg);
+  border-top: 1px solid var(--border);
+  transition: background 0.2s;
 }
 button {
   flex: 1;
@@ -242,7 +461,10 @@ button {
   font-size: 12.5px;
   transition: background 0.15s;
 }
-#copy-btn { background: #2563eb; color: white; }
-#copy-btn:hover { background: #1d4ed8; }
+#copy-btn  { background: #2563eb; color: #fff; }
+#copy-btn:hover  { background: #1d4ed8; }
 #clear-btn { background: #fee2e2; color: #dc2626; }
 #clear-btn:hover { background: #fecaca; }
+
+[data-theme="dark"] #clear-btn       { background: #3b1a1a; color: #f87171; }
+[data-theme="dark"] #clear-btn:hover { background: #4a1f1f; }
