@@ -111,7 +111,7 @@ ai-dev-annotator/
 ## Source code
 
 This extension is fully open source. You can review all code at:
-**https://github.com/asharma2027/ai-dev-annotator/production**
+**[[https://github.com/asharma2027/ai-dev-annotator/tree/production](https://github.com/asharma2027/ai-dev-annotator/tree/production)]**
 
 ---
 
