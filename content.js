@@ -1,6 +1,6 @@
 // content.js — Dev Annotator
-// Alt + Right-Click any element to annotate it inline.
-// Notes are saved in real-time as you type and persist across page loads.
+// Injected into every page. Alt + Right-Click any element to annotate it.
+// Notes auto-save in real-time and persist across page reloads.
 
 const ANN = 'aiann'; // CSS class/id prefix to avoid collisions
 

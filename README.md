@@ -1,41 +1,102 @@
-# Dev Annotator
+# Dev Annotator — AI Notes & Markdown Export
 
-A lightweight Chrome extension (Manifest V3) for annotating web UI elements and exporting your notes as clean Markdown — paste them into Cursor, Claude, ChatGPT, a bug report, or anywhere else you need them.
+> **Chrome Web Store title:** *Dev Annotator — AI Notes & Markdown Export*
+>
+> **One-sentence pitch:** Alt + Right-Click any web element to annotate it, then export all your notes as clean Markdown for AI tools like Cursor, Claude, and ChatGPT.
 
-## How it works
+---
 
-1. **Annotate** — Hold `Alt` (or `Option` on Mac) and **Right-Click** any element on a page. A panel opens where you can write a note about the element.
-2. **Review** — Click the extension icon to see all saved annotations grouped by page.
-3. **Copy** — Hit **Copy All as Markdown** to get a clean, formatted payload ready to paste anywhere.
-4. **History** — Click the 🕐 button in the top-right of the popup to browse all past annotations, including ones that were deleted, with full timestamps.
+## What it does
+
+Dev Annotator lets you attach sticky-note annotations directly to HTML elements on any web page. When you're done, one click copies everything as structured Markdown — ready to paste into any AI coding assistant, bug tracker, or documentation tool.
+
+**Use cases:**
+- Briefing AI tools (Cursor, Claude, ChatGPT) about which elements need changes and why
+- Writing QA bug reports with exact element selectors
+- Taking design-review notes directly on a live site
+- Annotating UI for handoff or code review
+
+---
 
 ## Features
 
-- `Alt + Right-Click` gesture captures element tag, ID, classes, XPath, page URL, and your note
-- Popup shows all annotations grouped by URL, with inline editable notes
-- Per-row **✕ delete button** on each annotation — moves it to history rather than erasing it permanently
-- **🕐 History view** — see every annotation ever created or deleted, with creation and deletion timestamps
-- One-click **Copy All as Markdown** formats everything compactly for any tool or workflow
-- **Clear All** button to reset the active list (all cleared annotations are saved to history)
-- Annotations persist in `chrome.storage.local` — they survive page reloads and browser restarts
-- Inline annotation panel on the page lets you edit or delete annotations without opening the popup
+### Free
+- **Alt + Right-Click** gesture annotates any element — captures tag, ID, classes, XPath, URL, and your note
+- Unlimited annotations, grouped by page URL in the popup
+- Per-row inline note editing (auto-saves as you type)
+- Per-row delete button — moves annotation to history rather than erasing it
+- **Copy All as Markdown** — one-click export of all notes in a clean, AI-ready format
+- **🕐 History view** — last 30 deleted annotations with timestamps, including restore
+- **Copy Log** — last 10 "Copy All as Markdown" events with full output preview
+- Annotations persist in `chrome.storage.local` across page reloads and browser restarts
+- Inline panel on the page — edit or delete annotations without opening the popup
 
-## Example output (copied Markdown)
+### Premium — $9.99 one-time
+- 🌙 **Dark mode** — a polished dark theme for the popup
+- 📝 **Custom prepend & append text** — automatically wrap every Markdown export with your own headers, footers, or AI system prompts
+- 📋 **Unlimited history** — full copy log and annotation history, no cap
+- 🚀 **All future premium features**
 
-```
+[**→ Get Premium on Gumroad**](https://gumroad.com) *(link updated after launch)*
+
+---
+
+## How it works
+
+1. **Annotate** — On any page, hold `Alt` (or `Option` on Mac) and **Right-Click** any element. A panel opens where you type a note. It auto-saves as you type.
+2. **Review** — Click the extension icon in the toolbar to see all saved annotations grouped by page URL. Notes are editable inline.
+3. **Copy** — Click **Copy All as Markdown** to copy a clean, structured payload to the clipboard.
+4. **History** — Click 🕐 to browse past annotations, including deleted ones, with timestamps. Click `+` to restore any entry.
+5. **Settings** — Click ⚙ to toggle dark mode (Premium), configure prepend/append text (Premium), or enter a license key.
+
+---
+
+## Example output
+
+```markdown
 ## https://example.com/dashboard
 
 1. `button#submit-btn` → Make this button larger and change color to green
 2. `div.sidebar` | `body/div[2]/div[1]` → Reduce width to 200px and add a top border
 ```
 
+Paste directly into Cursor's chat, Claude, or any AI tool — it already knows which element, where it lives, and what you want changed.
+
+---
+
 ## Installation
 
-1. Clone or download this repository
-2. Open Chrome and go to `chrome://extensions/`
-3. Enable **Developer mode** (top-right toggle)
-4. Click **Load unpacked** and select this folder
-5. Refresh any tab you want to annotate (Chrome needs to inject the content script)
+### From the Chrome Web Store *(coming soon)*
+Search **"Dev Annotator"** in the [Chrome Web Store](https://chromewebstore.google.com) and click **Add to Chrome**.
+
+### Manual (Developer / Sideloaded)
+1. Clone or download this repository:
+   ```
+   git clone https://github.com/asharma2027/ai-dev-annotator.git
+   ```
+2. Open Chrome and navigate to `chrome://extensions/`
+3. Enable **Developer mode** (toggle in the top-right)
+4. Click **Load unpacked** and select the cloned folder
+5. Refresh any tab you want to annotate — Chrome injects the content script on reload
+
+---
+
+## Activating Premium
+
+1. Purchase a license key on Gumroad *(link coming soon)*
+2. Gumroad will email you a license key
+3. Open the extension popup → click ⚙ (Settings) → paste your key in the **Premium** section → click **Activate**
+4. Your license is stored locally and validated against Gumroad's API
+
+> **Keep your license key safe** — it's stored in `chrome.storage.local`. If you clear extension data, you'll need to re-enter it (the key itself remains valid indefinitely).
+
+---
+
+## Privacy
+
+Dev Annotator stores all annotation data **locally** in your browser via `chrome.storage.local`. No data is sent to any server unless you activate a license key, at which point only the key is sent to Gumroad's API to verify validity. No browsing history, page content, or personal data is ever collected or transmitted.
+
+---
 
 ## File structure
 
@@ -44,30 +105,62 @@ ai-dev-annotator/
 ├── manifest.json   — Extension config (Manifest V3)
 ├── content.js      — Injected into pages; handles Alt + Right-Click
 ├── popup.html      — Extension popup UI
-├── popup.js        — Popup logic (load, copy, clear, delete, history)
-├── styles.css      — Popup styles
+├── popup.js        — Popup logic (annotations, copy, history, settings, premium)
+├── styles.css      — Popup styles (light + dark theme)
 └── icons/
     ├── icon16.png
     ├── icon48.png
     └── icon128.png
 ```
 
+---
+
+## Chrome Web Store listing
+
+**Recommended title (45 chars):**
+```
+Dev Annotator — AI Notes & Markdown Export
+```
+
+**Short description (128 chars):**
+```
+Alt+Right-Click any web element to annotate it. Export notes as clean Markdown for Cursor, Claude, ChatGPT, or any AI workflow.
+```
+
+---
+
 ## Storage keys
 
 | Key | Contents |
 |-----|----------|
 | `annotations` | Active (non-deleted) annotations |
-| `annotationHistory` | All past annotations with a `deletedAt` timestamp |
+| `annotationHistory` | Past annotations with `deletedAt` timestamp |
+| `copyHistory` | Log of every "Copy All as Markdown" event |
+| `annotatorSettings` | User preferences (dark mode, prepend/append text) |
+| `license` | Validated license key info (premium) |
 
-## Bug fixes vs. Gemini's original
+---
 
-| # | File | Bug | Fix |
-|---|------|-----|-----|
-| 1 | `content.js` | `getXPath()` return was incomplete — missing `(ix + 1) + ']'` — XPath broken for all non-id elements | Completed the return expression |
-| 2 | `popup.js` | Template literals used `{item.tag}` / `{item.id}` (missing `$`) — rendered as literal text | Fixed to `${item.tag}` / `${item.id}` |
-| 3 | `popup.js` | Display only showed URL, tag, comment — never showed ID, classes, XPath, or timestamp | All fields now displayed |
-| 4 | `popup.js` | No error handling on `navigator.clipboard.writeText()` | Added `.catch()` with user-facing alert |
-| 5 | `content.js` | `classes` used `split(' ')` which fails on multi-space class names | Changed to `split(/\s+/)` |
-| 6 | `manifest.json` | No icons defined | Added 16/48/128px icons |
-| 7 | `manifest.json` | Missing `clipboardWrite` permission | Added to permissions array |
-| 8 | `popup.js` | No XSS protection when rendering page data into innerHTML | Added `escapeHtml()` sanitiser |
+## Source code
+
+This extension is fully open source. You can review all code at:
+**https://github.com/asharma2027/ai-dev-annotator**
+
+---
+
+## Support & contact
+
+- ☕ **Ko-fi:** [ko-fi.com/asharma2027](https://ko-fi.com/asharma2027) — buy me a coffee if this saves you time
+- 💼 **Hire me:** [linkedin.com/in/asharma2027](https://www.linkedin.com/in/asharma2027/) — available for freelance and full-time opportunities
+
+---
+
+## For developers: local development
+
+To develop and test new premium features locally:
+
+1. Open `popup.js` and set `DEV_MODE = true` at the top of the file
+2. All premium features will be unlocked and a dev indicator appears in Settings
+3. **Never commit with `DEV_MODE = true`** — this bypasses all license checks
+
+The `DEV_MODE` constant is intentionally left in the source so you can continue building new gated features without needing a valid license in your local environment. Set it back to `false` before committing and publishing.

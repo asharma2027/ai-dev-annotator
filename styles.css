@@ -1,4 +1,4 @@
-/* styles.css — popup UI */
+/* styles.css — Dev Annotator popup UI */
 
 /* ── CSS custom properties (light theme defaults) ────────────────────────── */
 :root {
@@ -19,10 +19,14 @@
   --hist-del-color:   #dc2626;
   --toggle-off:       #d1d5db;
   --toggle-on:        #2563eb;
+  --meta-footer-bg:   #f3f4f6;
+  --meta-footer-border: #e5e7eb;
+  --star-color:       #d1d5db;
+  --star-hover-color: #f59e0b;
 }
 
 /* ── Dark theme overrides ────────────────────────────────────────────────── */
-/* [PREMIUM FEATURE] dark mode — activated by data-theme="dark" on <body>    */
+/* [PREMIUM] dark mode — activated by data-theme="dark" on <body>            */
 [data-theme="dark"] {
   --bg:               #1a1b1e;
   --surface:          #25262b;
@@ -41,6 +45,10 @@
   --hist-del-color:   #f87171;
   --toggle-off:       #4b5563;
   --toggle-on:        #3b82f6;
+  --meta-footer-bg:   #1e1f22;
+  --meta-footer-border: #373a40;
+  --star-color:       #4b5563;
+  --star-hover-color: #f59e0b;
 }
 
 * { box-sizing: border-box; }
@@ -80,7 +88,6 @@ body {
   text-align: center;
 }
 
-/* Shared header icon buttons (settings ⚙ and history 🕐) */
 .header-icon-btn {
   flex: 0 0 auto;
   background: rgba(255,255,255,0.18);
@@ -153,7 +160,6 @@ body {
 }
 .item-sel code { flex: 1; min-width: 0; }
 
-/* Per-row delete button */
 .item-delete-btn {
   flex: 0 0 auto;
   background: none;
@@ -176,7 +182,6 @@ body {
 .item-note { color: var(--text-secondary); font-size: 12px; }
 .empty-note { color: var(--text-muted); font-style: italic; }
 
-/* Inline-editable note textarea inside each annotation card */
 .item-note-edit {
   width: 100%;
   min-height: 46px;
@@ -213,7 +218,7 @@ code {
 .hist-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
-  margin: -10px -12px 10px;   /* bleed to panel edges, compensate for padding */
+  margin: -10px -12px 10px;
   padding: 0 12px;
   background: var(--bg);
   position: sticky;
@@ -271,6 +276,18 @@ code {
   transition: background 0.2s;
 }
 
+/* ── History: cap notice ─────────────────────────────────────────────────── */
+.history-cap-notice {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--section-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
 /* ── History: copy log records ───────────────────────────────────────────── */
 .copy-hist-item {
   background: var(--surface);
@@ -311,6 +328,16 @@ code {
 
 /* ── Settings panel ──────────────────────────────────────────────────────── */
 .settings-section { margin-bottom: 14px; }
+.settings-section--dev {
+  border: 1px dashed #86efac;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #f0fdf4;
+}
+[data-theme="dark"] .settings-section--dev {
+  border-color: #166534;
+  background: #052e16;
+}
 .settings-section-title {
   font-size: 10px;
   font-weight: 700;
@@ -349,9 +376,11 @@ code {
   margin-bottom: 4px;
   font-weight: 600;
 }
+
+/* 2× height textarea for prepend/append (was 60px) */
 .settings-textarea {
   width: 100%;
-  min-height: 60px;
+  min-height: 120px;
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 6px 8px;
@@ -372,6 +401,120 @@ code {
   opacity: 0.45;
   cursor: not-allowed;
   pointer-events: none;
+}
+
+/* ── Settings: premium upsell block ─────────────────────────────────────── */
+.premium-features-list {
+  margin: 0 0 10px 0;
+  padding: 0 0 0 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.9;
+}
+.btn-premium-upgrade {
+  display: block;
+  width: 100%;
+  text-align: center;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 9px 0;
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  margin-bottom: 10px;
+}
+.btn-premium-upgrade:hover { opacity: 0.9; }
+
+.license-divider {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 8px 0 6px;
+  position: relative;
+}
+.license-divider::before,
+.license-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 36%;
+  height: 1px;
+  background: var(--border);
+}
+.license-divider::before { left: 0; }
+.license-divider::after  { right: 0; }
+
+.license-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.license-input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font: 12px/1.4 'Menlo', 'Consolas', monospace;
+  color: var(--text);
+  background: var(--textarea-bg);
+  outline: none;
+  transition: border-color 0.12s;
+}
+.license-input:focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+.btn-activate {
+  flex: 0 0 auto;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-activate:hover { background: #1d4ed8; }
+.btn-activate:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.license-status {
+  font-size: 11px;
+  margin-top: 5px;
+  min-height: 16px;
+}
+.license-status.success { color: #16a34a; }
+.license-status.error   { color: #dc2626; }
+
+.premium-active-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #16a34a;
+}
+
+.btn-deactivate {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.btn-deactivate:hover {
+  color: #dc2626;
+  border-color: #fca5a5;
+  background: #fee2e2;
+}
+
+/* ── Settings: GitHub link row ───────────────────────────────────────────── */
+.settings-github-row {
+  text-align: center;
+  padding: 4px 0 2px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
 }
 
 /* ── Dev-mode badge ──────────────────────────────────────────────────────── */
@@ -468,3 +611,61 @@ button {
 
 [data-theme="dark"] #clear-btn       { background: #3b1a1a; color: #f87171; }
 [data-theme="dark"] #clear-btn:hover { background: #4a1f1f; }
+
+/* ── Meta-footer (stars + Ko-fi + Hire Me) ───────────────────────────────── */
+.meta-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 14px;
+  background: var(--meta-footer-bg);
+  border-top: 1px solid var(--meta-footer-border);
+  transition: background 0.2s;
+}
+
+/* Star rating */
+.star-rating {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  cursor: pointer;
+}
+.star {
+  font-size: 16px;
+  color: var(--star-color);
+  transition: color 0.12s, transform 0.1s;
+  user-select: none;
+  line-height: 1;
+}
+.star.star-hover,
+.star-rating:hover .star {
+  color: var(--star-hover-color);
+}
+.star-rating:hover .star { transform: scale(1.1); }
+.star-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: 4px;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* Meta links (Ko-fi, Hire Me, GitHub, etc.) */
+.meta-links {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.meta-link {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.12s;
+}
+.meta-link:hover { color: var(--url-color); }
+.meta-sep {
+  font-size: 11px;
+  color: var(--border);
+  user-select: none;
+}
