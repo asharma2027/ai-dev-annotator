@@ -93,21 +93,6 @@ ai-dev-annotator/
     ├── icon48.png
     └── icon128.png
 ```
-
----
-
-## Chrome Web Store listing
-
-**Recommended title (45 chars):**
-```
-Website Dev Annotator: AI Notes & Markdown Export
-```
-
-**Short description (128 chars):**
-```
-Alt+Right-Click any web element to annotate it. Export notes as clean Markdown for Cursor, Claude, ChatGPT, or any AI workflow.
-```
-
 ---
 
 ## Storage keys
