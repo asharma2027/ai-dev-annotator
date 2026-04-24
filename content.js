@@ -60,6 +60,28 @@ function injectStyles() {
     }
     .${ANN}-chip:hover { background: #d97706; color: #fff; }
     .${ANN}-chip.has-note { background: #f59e0b; }
+
+    /* Page-level annotation chip: fixed position, blue tint */
+    #${ANN}-page-chips {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      z-index: 2147483647;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 6px;
+      align-items: flex-end;
+      pointer-events: none;
+    }
+    .${ANN}-page-chip {
+      pointer-events: all;
+      background: #3b82f6 !important;
+      color: #fff !important;
+      font-size: 13px !important;
+    }
+    .${ANN}-page-chip:hover { background: #1d4ed8 !important; color: #fff !important; }
+    .${ANN}-page-chip.has-note { background: #2563eb !important; }
+
     /* Shared editing panel : fixed, appended to body */
     #${ANN}-panel {
       position: fixed;
@@ -114,13 +136,17 @@ function injectStyles() {
       justify-content: space-between;
       align-items: center;
       margin-top: 7px;
+      gap: 6px;
     }
     #${ANN}-save-status {
+      flex: 1;
       font-size: 10px;
       color: #9ca3af;
       font-family: system-ui, sans-serif;
+      text-align: center;
     }
     #${ANN}-delete-btn {
+      flex: 0 0 auto;
       background: none;
       border: none;
       color: #ef4444;
@@ -130,6 +156,30 @@ function injectStyles() {
       border-radius: 4px;
     }
     #${ANN}-delete-btn:hover { background: #fee2e2; }
+
+    /* Page-level toggle button */
+    #${ANN}-page-btn {
+      flex: 0 0 auto;
+      background: none;
+      border: 1px solid #d1d5db;
+      color: #6b7280;
+      font: 600 11px system-ui, sans-serif;
+      cursor: pointer;
+      padding: 3px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    #${ANN}-page-btn:hover {
+      border-color: #f59e0b;
+      color: #92400e;
+      background: #fef3c7;
+    }
+    #${ANN}-page-btn.${ANN}-page-btn--active {
+      background: #dbeafe !important;
+      border-color: #3b82f6 !important;
+      color: #1d4ed8 !important;
+    }
   `;
   document.head.appendChild(s);
 }
@@ -164,10 +214,25 @@ function getAll(cb) { chrome.storage.local.get({ [STORE_KEY]: [] }, r => cb(r[ST
 function setAll(anns, cb) { chrome.storage.local.set({ [STORE_KEY]: anns }, cb); }
 function genId() { return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
 
+// ── History limit enforcement ──────────────────────────────────────────────
+function enforceHistoryLimit() {
+  chrome.storage.local.get({ annotatorSettings: {}, [HISTORY_KEY]: [] }, r => {
+    const settings = r.annotatorSettings || {};
+    const maxLen   = (settings.maxHistoryLength !== undefined && settings.maxHistoryLength !== null)
+      ? settings.maxHistoryLength : 100;
+    if (maxLen <= 0) return; // 0 = indefinite
+    const hist = r[HISTORY_KEY];
+    if (hist.length <= maxLen) return;
+    chrome.storage.local.set({ [HISTORY_KEY]: hist.slice(-maxLen) });
+  });
+}
+
 // ── Shared panel ────────────────────────────────────────────────────────────
-let activeChip  = null;
-let activeAnnId = null;
-let saveTimer   = null;
+let activeChip    = null;
+let activeAnnId   = null;
+let saveTimer     = null;
+// Stores original element data so we can revert a page-level toggle
+let originalAnnData = null;
 
 function buildPanel() {
   const p = document.createElement('div');
@@ -179,6 +244,7 @@ function buildPanel() {
     </div>
     <textarea id="${ANN}-textarea" placeholder="Notes and observations about this element…"></textarea>
     <div id="${ANN}-panel-footer">
+      <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Whole page</button>
       <span id="${ANN}-save-status"></span>
       <button id="${ANN}-delete-btn">🗑 Delete</button>
     </div>`;
@@ -192,6 +258,73 @@ function buildPanel() {
 
   p.querySelector(`#${ANN}-delete-btn`).addEventListener('click', () => deleteAnnotation(activeAnnId));
   p.querySelector(`#${ANN}-close-btn`).addEventListener('click', closePanel);
+
+  // ── Page-level toggle ─────────────────────────────────────────────────
+  p.querySelector(`#${ANN}-page-btn`).addEventListener('click', () => {
+    if (!activeAnnId) return;
+    getAll(anns => {
+      const ann = anns.find(a => a.id === activeAnnId);
+      if (!ann) return;
+
+      const isCurrentlyPage = !!(ann.pageLevel);
+
+      if (!isCurrentlyPage) {
+        // Store original element data before converting
+        originalAnnData = { tag: ann.tag, elId: ann.elId, classes: ann.classes, xpath: ann.xpath };
+
+        // Remove highlight from original element
+        const origEl = resolveXPath(ann.xpath);
+        if (origEl) origEl.classList.remove(`${ANN}-hl`);
+
+        // Also remove the chip from its current position and move to page chip container
+        const existingChip = document.querySelector(`.${ANN}-chip[data-ann-id="${ann.id}"]`);
+        if (existingChip && !existingChip.closest(`#${ANN}-page-chips`)) {
+          existingChip.remove();
+          injectPageChip(ann.id, ann.comment || '');
+          // Update activeChip reference
+          activeChip = document.querySelector(`#${ANN}-page-chips .${ANN}-chip[data-ann-id="${ann.id}"]`);
+        }
+
+        ann.tag      = 'page';
+        ann.elId     = '';
+        ann.classes  = '';
+        ann.xpath    = 'body';
+        ann.pageLevel = true;
+      } else {
+        // Revert to element-level using stored original data
+        if (originalAnnData) {
+          ann.tag     = originalAnnData.tag;
+          ann.elId    = originalAnnData.elId;
+          ann.classes = originalAnnData.classes;
+          ann.xpath   = originalAnnData.xpath;
+
+          // Re-add highlight
+          const el = resolveXPath(ann.xpath);
+          if (el) {
+            el.classList.add(`${ANN}-hl`);
+            // Remove page chip and inject regular chip
+            const pageChip = document.querySelector(`#${ANN}-page-chips .${ANN}-chip[data-ann-id="${ann.id}"]`);
+            if (pageChip) pageChip.remove();
+            injectChip(el, ann.id, ann.comment || '');
+            activeChip = document.querySelector(`.${ANN}-chip[data-ann-id="${ann.id}"]`);
+          }
+        }
+        delete ann.pageLevel;
+      }
+
+      setAll(anns, () => {
+        const pageBtn = document.getElementById(`${ANN}-page-btn`);
+        if (pageBtn) {
+          const nowPage = !!(ann.pageLevel);
+          pageBtn.classList.toggle(`${ANN}-page-btn--active`, nowPage);
+          pageBtn.title = nowPage
+            ? 'Currently: whole-page — click to revert to element-specific'
+            : 'Mark as whole-page annotation (not element-specific)';
+        }
+        setSaveStatus('Saved ✓');
+      });
+    });
+  });
 
   document.addEventListener('mousedown', e => {
     const panel = document.getElementById(`${ANN}-panel`);
@@ -216,6 +349,11 @@ function openPanel(chip, annId) {
     const ann     = anns.find(a => a.id === annId);
     const comment = ann ? (ann.comment || '') : '';
 
+    // Store original element data (only if not already page-level)
+    if (ann && !ann.pageLevel) {
+      originalAnnData = { tag: ann.tag, elId: ann.elId, classes: ann.classes, xpath: ann.xpath };
+    }
+
     const panel = getPanel();
     positionPanel(panel, chip);
     panel.style.display = 'block';
@@ -223,6 +361,16 @@ function openPanel(chip, annId) {
     const ta = panel.querySelector(`#${ANN}-textarea`);
     ta.value = comment;
     setSaveStatus(comment ? '' : 'Start typing : auto-saves as you go');
+
+    // Reflect current page-level state on the button
+    const pageBtn = panel.querySelector(`#${ANN}-page-btn`);
+    if (pageBtn && ann) {
+      const isPage = !!(ann.pageLevel);
+      pageBtn.classList.toggle(`${ANN}-page-btn--active`, isPage);
+      pageBtn.title = isPage
+        ? 'Currently: whole-page — click to revert to element-specific'
+        : 'Mark as whole-page annotation (not element-specific)';
+    }
 
     activeChip  = chip;
     activeAnnId = annId;
@@ -235,7 +383,7 @@ function positionPanel(panel, chip) {
   let top  = r.bottom + 6;
   let left = r.left;
   if (left + 276 > window.innerWidth - 4)  left = window.innerWidth - 280;
-  if (top  + 270 > window.innerHeight - 4) top  = Math.max(4, r.top - 276);
+  if (top  + 290 > window.innerHeight - 4) top  = Math.max(4, r.top - 296);
   panel.style.top  = top  + 'px';
   panel.style.left = Math.max(4, left) + 'px';
 }
@@ -243,8 +391,8 @@ function positionPanel(panel, chip) {
 function closePanel() {
   const p = document.getElementById(`${ANN}-panel`);
   if (p) p.style.display = 'none';
-  activeChip  = null;
-  activeAnnId = null;
+  activeChip    = null;
+  activeAnnId   = null;
 }
 
 function setSaveStatus(msg) {
@@ -276,18 +424,31 @@ function deleteAnnotation(annId) {
   getAll(anns => {
     const ann = anns.find(a => a.id === id);
     if (ann) {
-      const el = resolveXPath(ann.xpath);
-      if (el) el.classList.remove(`${ANN}-hl`);
+      if (!ann.pageLevel) {
+        const el = resolveXPath(ann.xpath);
+        if (el) el.classList.remove(`${ANN}-hl`);
+      }
       chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
         const hist = r[HISTORY_KEY];
         hist.push({ ...ann, deletedAt: new Date().toISOString() });
-        chrome.storage.local.set({ [HISTORY_KEY]: hist });
+        chrome.storage.local.set({ [HISTORY_KEY]: hist }, enforceHistoryLimit);
       });
     }
     const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${id}"]`);
     if (chip) chip.remove();
     setAll(anns.filter(a => a.id !== id));
   });
+}
+
+// ── Page-level chip container ──────────────────────────────────────────────
+function getPageChipContainer() {
+  let container = document.getElementById(`${ANN}-page-chips`);
+  if (!container) {
+    container = document.createElement('div');
+    container.id = `${ANN}-page-chips`;
+    document.body.appendChild(container);
+  }
+  return container;
 }
 
 // ── Inject chip sibling after annotated element ────────────────────────────
@@ -320,6 +481,30 @@ function injectChip(el, annId, comment) {
   }
 }
 
+// ── Inject a fixed-position page-level chip ────────────────────────────────
+function injectPageChip(annId, comment) {
+  if (document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`)) return;
+
+  const chip = document.createElement('span');
+  chip.className     = `${ANN}-chip ${ANN}-page-chip${comment && comment.trim() ? ' has-note' : ''}`;
+  chip.dataset.annId = annId;
+  chip.textContent   = '📄';
+  chip.title = comment && comment.trim() ? comment.trim().slice(0, 80) : '(page annotation)';
+
+  chip.addEventListener('click', e => {
+    e.stopPropagation();
+    e.preventDefault();
+    const panel = document.getElementById(`${ANN}-panel`);
+    if (activeAnnId === annId && panel && panel.style.display === 'block') {
+      closePanel();
+    } else {
+      openPanel(chip, annId);
+    }
+  });
+
+  getPageChipContainer().appendChild(chip);
+}
+
 // ── Restore annotations on page load ──────────────────────────────────────
 function restoreAnnotations() {
   const url = window.location.href;
@@ -327,8 +512,12 @@ function restoreAnnotations() {
     anns
       .filter(a => a.url === url)
       .forEach(ann => {
-        const el = resolveXPath(ann.xpath);
-        if (el) injectChip(el, ann.id, ann.comment);
+        if (ann.pageLevel || ann.tag === 'page') {
+          injectPageChip(ann.id, ann.comment || '');
+        } else {
+          const el = resolveXPath(ann.xpath);
+          if (el) injectChip(el, ann.id, ann.comment);
+        }
       });
   });
 }
@@ -403,7 +592,8 @@ chrome.runtime.onMessage.addListener((msg) => {
     if (activeAnnId === annId) closePanel();
     const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
     if (chip) chip.remove();
-    if (xpath) {
+    // Only remove element highlight for non-page-level annotations
+    if (xpath && xpath !== 'body') {
       const el = resolveXPath(xpath);
       if (el) el.classList.remove(`${ANN}-hl`);
     }
@@ -411,9 +601,13 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === 'restoreAnnotation') {
     const ann = msg.ann;
-    if (!ann || !ann.xpath) return;
-    const el = resolveXPath(ann.xpath);
-    if (el) injectChip(el, ann.id, ann.comment || '');
+    if (!ann) return;
+    if (ann.pageLevel || ann.tag === 'page') {
+      injectPageChip(ann.id, ann.comment || '');
+    } else if (ann.xpath) {
+      const el = resolveXPath(ann.xpath);
+      if (el) injectChip(el, ann.id, ann.comment || '');
+    }
   }
 });
 

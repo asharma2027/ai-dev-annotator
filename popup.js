@@ -119,6 +119,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearBtn    = document.getElementById('clear-btn');
   const historyBtn  = document.getElementById('history-btn');
   const settingsBtn = document.getElementById('settings-btn');
+  const searchBtn   = document.getElementById('search-btn');
+  const searchBar   = document.getElementById('search-bar');
+  const searchInput = document.getElementById('search-input');
+  const searchCount = document.getElementById('search-count');
   const footer      = document.querySelector('.footer');
 
   const HISTORY_KEY      = 'annotationHistory';
@@ -130,12 +134,18 @@ document.addEventListener('DOMContentLoaded', () => {
   let historyTab      = 'annotations'; // 'annotations' | 'copies'
   let isWritingFromPopup = false;
 
+  // ── Search state ──────────────────────────────────────────────────────────
+  let searchActive     = false;
+  let searchMatches    = [];
+  let searchCurrentIdx = 0;
+
   // ── Settings defaults ────────────────────────────────────────────────────
   const DEFAULT_SETTINGS = {
-    shortcut:    { modifier: 'alt' }, // free: customizable annotation trigger
-    prependText: '',                  // [PREMIUM] prepended to markdown output
-    appendText:  '',                  // [PREMIUM] appended  to markdown output
-    darkMode:    false,               // [PREMIUM] dark / light theme toggle
+    shortcut:         { modifier: 'alt' }, // free: customizable annotation trigger
+    prependText:      '',                  // [PREMIUM] prepended to markdown output
+    appendText:       '',                  // [PREMIUM] appended  to markdown output
+    darkMode:         false,               // [PREMIUM] dark / light theme toggle
+    maxHistoryLength: 100,                 // 0 = indefinite
   };
 
   function loadSettings(cb) {
@@ -170,6 +180,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function getSelector(ann) {
+    // Page-level annotation
+    if (ann.pageLevel || ann.tag === 'page') return '(whole page)';
     const rawId = ann.elId !== undefined
       ? (ann.elId ? `#${ann.elId}` : '')
       : (ann.id && ann.id !== 'N/A' && !ann.id.startsWith('ann_') ? ann.id : '');
@@ -184,6 +196,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function modLabel(mod) {
     return MODIFIER_LABELS[mod] || 'Alt';
+  }
+
+  // ── Enforce history length limit ──────────────────────────────────────────
+  function enforceHistoryLimitInStorage(cb) {
+    loadSettings(s => {
+      const maxLen = (s.maxHistoryLength !== undefined && s.maxHistoryLength !== null)
+        ? s.maxHistoryLength : 100;
+      if (maxLen <= 0) { if (cb) cb(); return; } // 0 = indefinite
+      chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
+        const hist = r[HISTORY_KEY];
+        if (hist.length <= maxLen) { if (cb) cb(); return; }
+        const trimmed = hist.slice(-maxLen); // keep newest
+        chrome.storage.local.set({ [HISTORY_KEY]: trimmed }, cb);
+      });
+    });
   }
 
   // ── Save a single annotation's comment ────────────────────────────────────
@@ -215,14 +242,56 @@ document.addEventListener('DOMContentLoaded', () => {
       if (ann) hist.push({ ...ann, deletedAt: new Date().toISOString() });
       const remaining = anns.filter(a => a.id !== annId);
       chrome.storage.local.set({ annotations: remaining, [HISTORY_KEY]: hist }, () => {
-        isWritingFromPopup = false;
-        render(remaining);
-        if (ann) {
-          chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-            if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId, xpath: ann.xpath }).catch(() => {});
-          });
-        }
+        enforceHistoryLimitInStorage(() => {
+          isWritingFromPopup = false;
+          render(remaining);
+          if (ann) {
+            chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+              if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId, xpath: ann.xpath }).catch(() => {});
+            });
+          }
+        });
       });
+    });
+  }
+
+  // ── Copy a single group's annotations as Markdown ─────────────────────────
+  function copyGroup(url) {
+    chrome.storage.local.get({ annotations: [] }, r => {
+      const anns = r.annotations.filter(a => a.url === url && a.comment && a.comment.trim());
+      if (anns.length === 0) {
+        alert('No annotations with notes in this group.');
+        return;
+      }
+      let md = `## ${url}\n`;
+      anns.forEach((ann, i) => { md += formatLine(i + 1, ann); });
+      navigator.clipboard.writeText(md.trim()).then(() => {
+        // Escape URL for use in querySelector attribute selector
+        const safeUrl = url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const btn = listEl.querySelector(`.url-copy-btn[data-url="${safeUrl}"]`);
+        if (btn) {
+          const orig = btn.textContent;
+          btn.textContent = '✅';
+          setTimeout(() => (btn.textContent = orig), 1500);
+        }
+      }).catch(() => alert('Clipboard write failed. Try again.'));
+    });
+  }
+
+  // ── Copy a single annotation as Markdown ──────────────────────────────────
+  function copyAnnotation(annId) {
+    chrome.storage.local.get({ annotations: [] }, r => {
+      const ann = r.annotations.find(a => a.id === annId);
+      if (!ann) return;
+      const line = formatLine(1, ann).trim();
+      navigator.clipboard.writeText(line).then(() => {
+        const btn = listEl.querySelector(`.item-copy-btn[data-ann-id="${annId}"]`);
+        if (btn) {
+          const orig = btn.textContent;
+          btn.textContent = '✅';
+          setTimeout(() => (btn.textContent = orig), 1500);
+        }
+      }).catch(() => alert('Clipboard write failed. Try again.'));
     });
   }
 
@@ -274,13 +343,18 @@ document.addEventListener('DOMContentLoaded', () => {
     let html = '';
     Object.entries(byUrl).forEach(([url, items]) => {
       html += `<div class="url-group">
-        <div class="url-label" title="${escHtml(url)}">${escHtml(url)}</div>`;
+        <div class="url-header">
+          <div class="url-label" title="${escHtml(url)}">${escHtml(url)}</div>
+          <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋</button>
+        </div>`;
       items.forEach(ann => {
         const sel = getSelector(ann);
+        const isPageLevel = !!(ann.pageLevel || ann.tag === 'page');
         html += `
-        <div class="item">
+        <div class="item${isPageLevel ? ' item--page-level' : ''}">
           <div class="item-sel">
             <code>${escHtml(sel)}</code>
+            <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋</button>
             <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Delete annotation">✕</button>
           </div>
           <textarea
@@ -302,6 +376,17 @@ document.addEventListener('DOMContentLoaded', () => {
     listEl.querySelectorAll('.item-delete-btn').forEach(btn => {
       btn.addEventListener('click', () => deleteAnnotation(btn.dataset.annId));
     });
+    listEl.querySelectorAll('.url-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => copyGroup(btn.dataset.url));
+    });
+    listEl.querySelectorAll('.item-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => copyAnnotation(btn.dataset.annId));
+    });
+
+    // Re-apply search highlights if search is active
+    if (searchActive && searchInput && searchInput.value.trim()) {
+      applySearch(searchInput.value.trim());
+    }
   }
 
   function load() {
@@ -314,10 +399,159 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ── Search ────────────────────────────────────────────────────────────────
+
+  function openSearch() {
+    if (settingsVisible || historyVisible) return;
+    searchActive = true;
+    searchBar.style.display = 'flex';
+    searchBtn.classList.add('active');
+    searchInput.focus();
+    searchInput.select();
+  }
+
+  function closeSearch() {
+    searchActive = false;
+    searchBar.style.display = 'none';
+    searchBtn.classList.remove('active');
+    searchInput.value = '';
+    clearSearchHighlights();
+  }
+
+  function clearSearchHighlights() {
+    listEl.querySelectorAll('.item').forEach(el => {
+      el.classList.remove('search-match', 'search-no-match', 'search-current');
+    });
+    // Restore code elements that were highlighted
+    listEl.querySelectorAll('code').forEach(codeEl => {
+      if (codeEl.querySelector('mark.search-hl')) {
+        codeEl.textContent = codeEl.textContent; // strips all child elements
+      }
+    });
+    listEl.querySelectorAll('.item-note-edit.search-note-match').forEach(ta => {
+      ta.classList.remove('search-note-match');
+    });
+    searchMatches = [];
+    if (searchCount) searchCount.textContent = '';
+    if (searchCount) delete searchCount.dataset.empty;
+  }
+
+  function highlightCodeEl(codeEl, term) {
+    const rawText = codeEl.textContent;
+    const escapedText = escHtml(rawText);
+    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(${escapedTerm})`, 'gi');
+    codeEl.innerHTML = escapedText.replace(re, '<mark class="search-hl">$1</mark>');
+  }
+
+  function applySearch(term) {
+    clearSearchHighlights();
+    if (!term) return;
+
+    const termLower = term.toLowerCase();
+    searchMatches = [];
+
+    listEl.querySelectorAll('.item').forEach(item => {
+      const codeEl   = item.querySelector('code');
+      const ta       = item.querySelector('.item-note-edit');
+      const codeText = codeEl ? codeEl.textContent : '';
+      const noteText = ta ? ta.value : '';
+      const codeMatch = codeText.toLowerCase().includes(termLower);
+      const noteMatch = noteText.toLowerCase().includes(termLower);
+
+      if (codeMatch || noteMatch) {
+        item.classList.add('search-match');
+        searchMatches.push(item);
+        if (codeMatch && codeEl) highlightCodeEl(codeEl, term);
+        if (noteMatch && ta) ta.classList.add('search-note-match');
+      } else {
+        item.classList.add('search-no-match');
+      }
+    });
+
+    searchCurrentIdx = 0;
+    scrollToCurrentMatch();
+    updateSearchCount();
+  }
+
+  function scrollToCurrentMatch() {
+    if (searchMatches.length === 0) return;
+    searchMatches.forEach((el, i) => {
+      el.classList.toggle('search-current', i === searchCurrentIdx);
+    });
+    searchMatches[searchCurrentIdx]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function updateSearchCount() {
+    if (!searchCount) return;
+    if (!searchInput.value.trim()) {
+      searchCount.textContent = '';
+      delete searchCount.dataset.empty;
+      return;
+    }
+    if (searchMatches.length === 0) {
+      searchCount.textContent = 'No results';
+      searchCount.dataset.empty = 'true';
+    } else {
+      searchCount.textContent = `${searchCurrentIdx + 1}/${searchMatches.length}`;
+      delete searchCount.dataset.empty;
+    }
+  }
+
+  function nextMatch() {
+    if (searchMatches.length === 0) return;
+    searchCurrentIdx = (searchCurrentIdx + 1) % searchMatches.length;
+    scrollToCurrentMatch();
+    updateSearchCount();
+  }
+
+  function prevMatch() {
+    if (searchMatches.length === 0) return;
+    searchCurrentIdx = (searchCurrentIdx - 1 + searchMatches.length) % searchMatches.length;
+    scrollToCurrentMatch();
+    updateSearchCount();
+  }
+
+  // Keyboard: Ctrl+F / ⌘F open search; Escape closes it
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      if (searchActive) closeSearch();
+      else openSearch();
+      return;
+    }
+    if (e.key === 'Escape' && searchActive) {
+      closeSearch();
+    }
+  });
+
+  searchBtn.addEventListener('click', () => {
+    if (searchActive) closeSearch();
+    else openSearch();
+  });
+
+  searchInput.addEventListener('input', () => {
+    applySearch(searchInput.value.trim());
+  });
+
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) prevMatch();
+      else nextMatch();
+    }
+    if (e.key === 'Escape') closeSearch();
+  });
+
+  document.getElementById('search-prev').addEventListener('click', prevMatch);
+  document.getElementById('search-next').addEventListener('click', nextMatch);
+  document.getElementById('search-close').addEventListener('click', closeSearch);
+
   // ── History panel ──────────────────────────────────────────────────────────
   function showHistory() {
     historyVisible  = true;
     settingsVisible = false;
+    if (searchActive) closeSearch();
     listEl.style.display      = 'none';
     footer.style.display      = 'none';
     settingsEl.style.display  = 'none';
@@ -376,7 +610,9 @@ document.addEventListener('DOMContentLoaded', () => {
       let html = historyTabsHTML('annotations') + cappedMsg;
       Object.entries(byUrl).forEach(([url, items]) => {
         html += `<div class="url-group">
-          <div class="url-label" title="${escHtml(url)}">${escHtml(url)}</div>`;
+          <div class="url-header">
+            <div class="url-label" title="${escHtml(url)}">${escHtml(url)}</div>
+          </div>`;
         items.forEach(ann => {
           const sel = getSelector(ann);
           html += `
@@ -463,6 +699,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function showSettings() {
     settingsVisible = true;
     historyVisible  = false;
+    if (searchActive) closeSearch();
     listEl.style.display      = 'none';
     footer.style.display      = 'none';
     historyEl.style.display   = 'none';
@@ -541,8 +778,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildAndInjectSettings(s, licenseSection, premium) {
-    const currentMod    = s.shortcut?.modifier || 'alt';
-    const currentLabel  = escHtml(MODIFIER_LABELS[currentMod] || 'Alt');
+    const currentMod      = s.shortcut?.modifier || 'alt';
+    const currentLabel    = escHtml(MODIFIER_LABELS[currentMod] || 'Alt');
+    const currentMaxHist  = (s.maxHistoryLength !== undefined && s.maxHistoryLength !== null)
+      ? s.maxHistoryLength : 100;
+    const isIndefiniteHist = currentMaxHist === 0;
 
     settingsEl.innerHTML = `
       ${DEV_MODE ? `
@@ -569,6 +809,35 @@ document.addEventListener('DOMContentLoaded', () => {
         <p class="settings-hint">
           Hold <strong id="shortcut-preview">${currentLabel}</strong> + Right-Click any element to annotate it.
         </p>
+      </div>
+
+      <!-- ── History (FREE : all users) ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">📜 History</div>
+        <div class="settings-row">
+          <label class="settings-label" for="max-history-input">Max length</label>
+          <div class="history-limit-row">
+            <input
+              type="number"
+              id="max-history-input"
+              class="history-limit-input"
+              min="1"
+              max="10000"
+              value="${isIndefiniteHist ? 100 : currentMaxHist}"
+              ${isIndefiniteHist ? 'disabled' : ''}
+            />
+            <label class="history-indefinite-label">
+              <input type="checkbox" id="indefinite-history" ${isIndefiniteHist ? 'checked' : ''} />
+              Indefinite
+            </label>
+          </div>
+        </div>
+        <div class="settings-row settings-row--btns">
+          <button id="export-history-btn" class="btn-history-action">📤 Export</button>
+          <button id="import-history-btn" class="btn-history-action">📥 Import</button>
+          <button id="clear-history-settings-btn" class="btn-history-action btn-history-danger">🗑 Clear</button>
+        </div>
+        <input type="file" id="import-history-file" accept=".json" style="display:none;" />
       </div>
 
       ${licenseSection}
@@ -642,6 +911,100 @@ document.addEventListener('DOMContentLoaded', () => {
         if (preview) preview.textContent = MODIFIER_LABELS[mod] || 'Alt';
       });
     }
+
+    // ── History settings (free, always wired) ─────────────────────────────
+    const maxHistInput  = settingsEl.querySelector('#max-history-input');
+    const indefiniteChk = settingsEl.querySelector('#indefinite-history');
+
+    if (indefiniteChk && maxHistInput) {
+      indefiniteChk.addEventListener('change', () => {
+        if (indefiniteChk.checked) {
+          maxHistInput.disabled = true;
+          saveSettings({ maxHistoryLength: 0 });
+        } else {
+          maxHistInput.disabled = false;
+          const val = Math.max(1, parseInt(maxHistInput.value, 10) || 100);
+          maxHistInput.value = val;
+          saveSettings({ maxHistoryLength: val });
+        }
+      });
+    }
+
+    if (maxHistInput) {
+      maxHistInput.addEventListener('change', () => {
+        const val = Math.max(1, parseInt(maxHistInput.value, 10) || 100);
+        maxHistInput.value = val;
+        saveSettings({ maxHistoryLength: val });
+      });
+    }
+
+    // ── Export history ────────────────────────────────────────────────────
+    settingsEl.querySelector('#export-history-btn')?.addEventListener('click', () => {
+      chrome.storage.local.get({ [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [], annotations: [] }, r => {
+        const data = {
+          exported:          new Date().toISOString(),
+          version:           '1.3.0',
+          annotations:       r.annotations,
+          annotationHistory: r[HISTORY_KEY],
+          copyHistory:       r[COPY_HISTORY_KEY],
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `annotator-history-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+    });
+
+    // ── Import history ────────────────────────────────────────────────────
+    const importBtn  = settingsEl.querySelector('#import-history-btn');
+    const importFile = settingsEl.querySelector('#import-history-file');
+    if (importBtn && importFile) {
+      importBtn.addEventListener('click', () => importFile.click());
+      importFile.addEventListener('change', () => {
+        const file = importFile.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+          try {
+            const data    = JSON.parse(e.target.result);
+            const annHist  = Array.isArray(data.annotationHistory) ? data.annotationHistory : [];
+            const copyHist = Array.isArray(data.copyHistory)       ? data.copyHistory       : [];
+
+            chrome.storage.local.get({ [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [] }, r => {
+              const existingAnnIds  = new Set(r[HISTORY_KEY].map(a => a.id + (a.deletedAt || '')));
+              const newAnn          = annHist.filter(a => !existingAnnIds.has(a.id + (a.deletedAt || '')));
+              const existingCopyTs  = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
+              const newCopy         = copyHist.filter(c => !existingCopyTs.has(c.timestamp));
+
+              chrome.storage.local.set({
+                [HISTORY_KEY]:      [...r[HISTORY_KEY], ...newAnn],
+                [COPY_HISTORY_KEY]: [...r[COPY_HISTORY_KEY], ...newCopy],
+              }, () => {
+                alert(`Imported ${newAnn.length} annotation record(s) and ${newCopy.length} copy log(s).`);
+              });
+            });
+          } catch {
+            alert('Invalid file. Please select a valid annotator history JSON file.');
+          }
+        };
+        reader.readAsText(file);
+        importFile.value = '';
+      });
+    }
+
+    // ── Clear history ─────────────────────────────────────────────────────
+    settingsEl.querySelector('#clear-history-settings-btn')?.addEventListener('click', () => {
+      if (confirm('Clear all annotation and copy history? This cannot be undone.')) {
+        chrome.storage.local.set({ [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [] }, () => {
+          alert('History cleared.');
+        });
+      }
+    });
 
     if (premium) {
       // ── Dark mode toggle ────────────────────────────────────────────────
@@ -774,6 +1137,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function formatLine(n, ann) {
+    // Page-level annotation
+    if (ann.pageLevel || ann.tag === 'page') {
+      return `${n}. \`(whole page)\` → ${ann.comment.trim()}\n`;
+    }
     const sel   = getSelector(ann);
     const hasId = ann.elId
       ? !!ann.elId
@@ -792,8 +1159,10 @@ document.addEventListener('DOMContentLoaded', () => {
         anns.forEach(ann => hist.push({ ...ann, deletedAt: now }));
         isWritingFromPopup = true;
         chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist }, () => {
-          isWritingFromPopup = false;
-          load();
+          enforceHistoryLimitInStorage(() => {
+            isWritingFromPopup = false;
+            load();
+          });
         });
       });
     }

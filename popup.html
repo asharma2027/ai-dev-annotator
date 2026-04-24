@@ -10,7 +10,17 @@
     <h2>Website Dev Annotator</h2>
     <button id="settings-btn" class="header-icon-btn" title="Settings">⚙</button>
     <span id="count-badge" class="count-badge"></span>
+    <button id="search-btn" class="header-icon-btn" title="Search annotations (Ctrl+F / ⌘F)">🔍</button>
     <button id="history-btn" class="header-icon-btn" title="View annotation history">🕐</button>
+  </div>
+
+  <!-- Google-Docs-style search bar (hidden by default) -->
+  <div id="search-bar" class="search-bar" style="display:none;">
+    <input type="text" id="search-input" class="search-input" placeholder="Search annotations…" autocomplete="off" spellcheck="false" />
+    <span id="search-count" class="search-count"></span>
+    <button id="search-prev" class="search-nav-btn" title="Previous (Shift+Enter)">↑</button>
+    <button id="search-next" class="search-nav-btn" title="Next (Enter)">↓</button>
+    <button id="search-close" class="search-close-btn" title="Close (Esc)">✕</button>
   </div>
 
   <div id="annotations-list"></div>
