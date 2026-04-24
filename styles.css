@@ -920,3 +920,113 @@ button {
   color: var(--border);
   user-select: none;
 }
+
+/* ── Restore-from-sync banner ────────────────────────────────────────────── */
+.restore-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: #eff6ff;
+  border-bottom: 1px solid #bfdbfe;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+[data-theme="dark"] .restore-banner {
+  background: #1e3a5f;
+  border-bottom-color: #1d4ed8;
+}
+
+.restore-banner-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+.restore-banner-text strong {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.restore-banner-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.restore-btn {
+  flex: 0 0 auto;
+  border-radius: 5px;
+  font: 600 11px/1.4 system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  padding: 5px 11px;
+  transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
+  white-space: nowrap;
+}
+.restore-btn--confirm {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+}
+.restore-btn--confirm:hover { background: #1d4ed8; }
+
+.restore-btn--dismiss {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.restore-btn--dismiss:hover {
+  background: var(--section-bg);
+  border-color: #9ca3af;
+  color: var(--text);
+}
+
+/* ── Auto-backup status rows (in Settings panel) ─────────────────────────── */
+.backup-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 11.5px;
+  gap: 8px;
+}
+.backup-status-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.backup-status-value {
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: right;
+  min-width: 0;
+  word-break: break-word;
+}
+.backup-status-value.backup-ok   { color: #16a34a; }
+.backup-status-value.backup-err  { color: #dc2626; }
+
+.btn-backup-now {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--section-bg);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 5px;
+  padding: 5px 11px;
+  font: 600 11.5px/1.4 system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  margin-top: 6px;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.btn-backup-now:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+.btn-backup-now:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

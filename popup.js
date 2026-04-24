@@ -119,15 +119,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearBtn    = document.getElementById('clear-btn');
   const historyBtn  = document.getElementById('history-btn');
   const settingsBtn = document.getElementById('settings-btn');
-  const searchBtn   = document.getElementById('search-btn');
-  const searchBar   = document.getElementById('search-bar');
-  const searchInput = document.getElementById('search-input');
-  const searchCount = document.getElementById('search-count');
-  const footer      = document.querySelector('.footer');
+  const searchBtn     = document.getElementById('search-btn');
+  const searchBar     = document.getElementById('search-bar');
+  const searchInput   = document.getElementById('search-input');
+  const searchCount   = document.getElementById('search-count');
+  const restoreBanner = document.getElementById('restore-banner');
+  const footer        = document.querySelector('.footer');
 
   const HISTORY_KEY      = 'annotationHistory';
   const COPY_HISTORY_KEY = 'copyHistory';
   const SETTINGS_KEY     = 'annotatorSettings';
+  const SYNC_PREFIX      = 'ann_sync_';
+  const SYNC_CHUNK_SIZE  = 7000;
 
   let historyVisible  = false;
   let settingsVisible = false;
@@ -138,6 +141,61 @@ document.addEventListener('DOMContentLoaded', () => {
   let searchActive     = false;
   let searchMatches    = [];
   let searchCurrentIdx = 0;
+
+  // ── Sync backup state ─────────────────────────────────────────────────────
+  let syncBackupTimer = null;
+
+  // ── Sync backup helpers ──────────────────────────────────────────────────
+  // Mirrors the current annotations array into chrome.storage.sync so data
+  // survives an extension uninstall as long as Chrome is signed in.
+  function backupToSync(annotations) {
+    clearTimeout(syncBackupTimer);
+    syncBackupTimer = setTimeout(() => {
+      try {
+        const json   = JSON.stringify(annotations || []);
+        const chunks = [];
+        for (let i = 0; i < json.length; i += SYNC_CHUNK_SIZE)
+          chunks.push(json.slice(i, i + SYNC_CHUNK_SIZE));
+
+        chrome.storage.sync.get(null, existing => {
+          const staleKeys = Object.keys(existing).filter(k => k.startsWith(SYNC_PREFIX));
+          const clear = staleKeys.length
+            ? new Promise(res => chrome.storage.sync.remove(staleKeys, res))
+            : Promise.resolve();
+
+          clear.then(() => {
+            const data = {
+              [`${SYNC_PREFIX}count`]: chunks.length,
+              [`${SYNC_PREFIX}ts`]:    new Date().toISOString(),
+            };
+            chunks.forEach((c, i) => { data[`${SYNC_PREFIX}${i}`] = c; });
+            chrome.storage.sync.set(data).then(() => {
+              chrome.storage.local.set({ _lastSyncBackup: new Date().toISOString(), _syncBackupError: null });
+            }).catch(err => {
+              chrome.storage.local.set({ _syncBackupError: 'Quota exceeded — data may be too large for free sync storage.' });
+              console.warn('[Annotator] Sync backup quota:', err.message);
+            });
+          });
+        });
+      } catch (e) {
+        console.warn('[Annotator] Sync backup error:', e);
+      }
+    }, 2000); // 2-second debounce
+  }
+
+  function readFromSync(cb) {
+    chrome.storage.sync.get(null, sync => {
+      const count = sync[`${SYNC_PREFIX}count`];
+      const ts    = sync[`${SYNC_PREFIX}ts`];
+      if (!count || count === 0) { cb(null, null); return; }
+      let json = '';
+      for (let i = 0; i < count; i++) json += sync[`${SYNC_PREFIX}${i}`] || '';
+      try {
+        const anns = JSON.parse(json);
+        cb(Array.isArray(anns) ? anns : null, ts);
+      } catch { cb(null, null); }
+    });
+  }
 
   // ── Settings defaults ────────────────────────────────────────────────────
   const DEFAULT_SETTINGS = {
@@ -394,10 +452,61 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.annotations && !isWritingFromPopup && !historyVisible && !settingsVisible) {
-      render(changes.annotations.newValue || []);
+    if (area === 'local' && changes.annotations) {
+      const newAnns = changes.annotations.newValue || [];
+      // Always keep sync in step with local — this is the real-time backup
+      backupToSync(newAnns);
+      if (!isWritingFromPopup && !historyVisible && !settingsVisible) {
+        render(newAnns);
+      }
     }
   });
+
+  // ── Sync restore banner ───────────────────────────────────────────────────
+  function checkSyncRestore() {
+    chrome.storage.local.get({ annotations: [] }, local => {
+      if (local.annotations.length > 0) return; // local has data — no restore needed
+      readFromSync((anns, ts) => {
+        if (!anns || anns.length === 0) return;
+        showRestoreBanner(anns, ts);
+      });
+    });
+  }
+
+  function showRestoreBanner(annotations, ts) {
+    if (!restoreBanner) return;
+    const when = ts ? new Date(ts).toLocaleString() : 'unknown time';
+    restoreBanner.innerHTML = `
+      <div class="restore-banner-text">
+        ☁ Sync backup found — <strong>${annotations.length}</strong> annotation${annotations.length !== 1 ? 's' : ''} from ${escHtml(when)}
+      </div>
+      <div class="restore-banner-actions">
+        <button id="restore-confirm-btn" class="restore-btn restore-btn--confirm">Restore</button>
+        <button id="restore-dismiss-btn" class="restore-btn restore-btn--dismiss">Dismiss</button>
+      </div>`;
+    restoreBanner.style.display = 'flex';
+
+    restoreBanner.querySelector('#restore-confirm-btn').addEventListener('click', () => {
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations }, () => {
+        isWritingFromPopup = false;
+        restoreBanner.style.display = 'none';
+        render(annotations);
+        // Notify active tab so chips get re-injected
+        chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+          if (tabs[0]) {
+            annotations.forEach(ann => {
+              chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
+            });
+          }
+        });
+      });
+    });
+
+    restoreBanner.querySelector('#restore-dismiss-btn').addEventListener('click', () => {
+      restoreBanner.style.display = 'none';
+    });
+  }
 
   // ── Search ────────────────────────────────────────────────────────────────
 
@@ -551,6 +660,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function showHistory() {
     historyVisible  = true;
     settingsVisible = false;
+    if (restoreBanner) restoreBanner.style.display = 'none';
     if (searchActive) closeSearch();
     listEl.style.display      = 'none';
     footer.style.display      = 'none';
@@ -699,6 +809,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function showSettings() {
     settingsVisible = true;
     historyVisible  = false;
+    if (restoreBanner) restoreBanner.style.display = 'none';
     if (searchActive) closeSearch();
     listEl.style.display      = 'none';
     footer.style.display      = 'none';
@@ -811,6 +922,25 @@ document.addEventListener('DOMContentLoaded', () => {
         </p>
       </div>
 
+      <!-- ── Auto-Backup (FREE : all users) ── -->
+      <div class="settings-section" id="backup-status-section">
+        <div class="settings-section-title">💾 Auto-Backup</div>
+        <div class="settings-row">
+          <span class="settings-label">Sync backup</span>
+          <span class="settings-value" id="sync-backup-status">Checking…</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">File backup</span>
+          <span class="settings-value" id="file-backup-status">Checking…</span>
+        </div>
+        <p class="settings-hint" style="margin-top:4px;">
+          ☁ Sync updates every time you annotate · 💾 File (<code style="font-size:10px;">annotator-backup.json</code>) overwrites in Downloads every 15 min
+        </p>
+        <div class="settings-row" style="justify-content:flex-end;margin-top:4px;">
+          <button id="backup-now-btn" class="btn-history-action">⚡ Backup Now</button>
+        </div>
+      </div>
+
       <!-- ── History (FREE : all users) ── -->
       <div class="settings-section">
         <div class="settings-section-title">📜 History</div>
@@ -900,6 +1030,52 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
 
     attachExternalLinks(settingsEl);
+
+    // ── Backup status section ─────────────────────────────────────────────
+    chrome.storage.local.get({ _lastSyncBackup: null, _lastFileBackup: null, _syncBackupError: null, _fileBackupError: null }, bd => {
+      const syncEl = settingsEl.querySelector('#sync-backup-status');
+      const fileEl = settingsEl.querySelector('#file-backup-status');
+      if (syncEl) {
+        if (bd._syncBackupError) {
+          syncEl.textContent = '⚠ ' + bd._syncBackupError;
+          syncEl.style.color = '#dc2626';
+        } else if (bd._lastSyncBackup) {
+          syncEl.textContent = '✅ ' + new Date(bd._lastSyncBackup).toLocaleTimeString();
+        } else {
+          syncEl.textContent = 'Not yet';
+        }
+      }
+      if (fileEl) {
+        if (bd._fileBackupError) {
+          fileEl.textContent = '⚠ Failed';
+          fileEl.style.color = '#dc2626';
+          fileEl.title = bd._fileBackupError;
+        } else if (bd._lastFileBackup) {
+          fileEl.textContent = '✅ ' + new Date(bd._lastFileBackup).toLocaleTimeString();
+        } else {
+          fileEl.textContent = 'Pending (first backup in ~1 min)';
+        }
+      }
+    });
+
+    settingsEl.querySelector('#backup-now-btn')?.addEventListener('click', e => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = '…';
+      chrome.runtime.sendMessage({ type: 'triggerBackup' }, () => {
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.textContent = '⚡ Backup Now';
+          // Refresh status
+          chrome.storage.local.get({ _lastSyncBackup: null, _lastFileBackup: null }, bd => {
+            const syncEl = settingsEl.querySelector('#sync-backup-status');
+            const fileEl = settingsEl.querySelector('#file-backup-status');
+            if (syncEl && bd._lastSyncBackup) syncEl.textContent = '✅ ' + new Date(bd._lastSyncBackup).toLocaleTimeString();
+            if (fileEl && bd._lastFileBackup) fileEl.textContent = '✅ ' + new Date(bd._lastFileBackup).toLocaleTimeString();
+          });
+        }, 3000);
+      });
+    });
 
     // ── Shortcut selector (free, always wired) ────────────────────────────
     const modSelect = settingsEl.querySelector('#shortcut-modifier');
@@ -1201,5 +1377,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Init ───────────────────────────────────────────────────────────────────
-  refreshPremiumStatus().then(() => load());
+  refreshPremiumStatus().then(() => {
+    load();
+    checkSyncRestore();
+  });
 });

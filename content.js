@@ -208,11 +208,54 @@ function resolveXPath(xpath) {
 }
 
 // ── Storage helpers ────────────────────────────────────────────────────────
-const STORE_KEY = 'annotations';
+const STORE_KEY   = 'annotations';
 const HISTORY_KEY = 'annotationHistory';
 function getAll(cb) { chrome.storage.local.get({ [STORE_KEY]: [] }, r => cb(r[STORE_KEY])); }
-function setAll(anns, cb) { chrome.storage.local.set({ [STORE_KEY]: anns }, cb); }
+function setAll(anns, cb) {
+  chrome.storage.local.set({ [STORE_KEY]: anns }, cb);
+  backupAnnotationsToSync(anns); // keep sync mirror up-to-date
+}
 function genId() { return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
+
+// ── Sync backup (mirrors annotations into chrome.storage.sync) ─────────────
+// Survives extension uninstall/reinstall as long as Chrome is signed in.
+const _SYNC_PREFIX     = 'ann_sync_';
+const _SYNC_CHUNK_SIZE = 7000;
+let   _syncTimer       = null;
+
+function backupAnnotationsToSync(annotations) {
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(() => {
+    try {
+      const json   = JSON.stringify(annotations || []);
+      const chunks = [];
+      for (let i = 0; i < json.length; i += _SYNC_CHUNK_SIZE)
+        chunks.push(json.slice(i, i + _SYNC_CHUNK_SIZE));
+
+      chrome.storage.sync.get(null, existing => {
+        const stale = Object.keys(existing).filter(k => k.startsWith(_SYNC_PREFIX));
+        const clear = stale.length
+          ? new Promise(res => chrome.storage.sync.remove(stale, res))
+          : Promise.resolve();
+        clear.then(() => {
+          const data = {
+            [`${_SYNC_PREFIX}count`]: chunks.length,
+            [`${_SYNC_PREFIX}ts`]:    new Date().toISOString(),
+          };
+          chunks.forEach((c, i) => { data[`${_SYNC_PREFIX}${i}`] = c; });
+          chrome.storage.sync.set(data).then(() => {
+            chrome.storage.local.set({ _lastSyncBackup: new Date().toISOString(), _syncBackupError: null });
+          }).catch(err => {
+            chrome.storage.local.set({ _syncBackupError: 'Quota exceeded.' });
+            console.warn('[Annotator content] Sync backup quota:', err.message);
+          });
+        });
+      });
+    } catch (e) {
+      console.warn('[Annotator content] Sync backup error:', e);
+    }
+  }, 2000); // 2-second debounce so rapid edits don't hammer the sync API
+}
 
 // ── History limit enforcement ──────────────────────────────────────────────
 function enforceHistoryLimit() {
