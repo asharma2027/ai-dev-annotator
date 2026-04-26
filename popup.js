@@ -130,12 +130,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const HISTORY_KEY      = 'annotationHistory';
   const COPY_HISTORY_KEY = 'copyHistory';
   const SETTINGS_KEY     = 'annotatorSettings';
+  const SAVED_LATER_KEY  = 'savedForLater';
+  // v2 sync: single compressed bundle, chunked. Old keys (ann_sync_*) are still read for back-compat.
   const SYNC_PREFIX      = 'ann_sync_';
+  const SYNC_V2_PREFIX   = 'annv2_';
   const SYNC_CHUNK_SIZE  = 7000;
+  // chrome.storage.sync limits: 102_400 bytes total, 8_192 bytes per item.
+  // Reserve overhead for metadata keys and base64 expansion (~4/3).
+  const SYNC_MAX_BYTES   = 95000;
 
   let historyVisible  = false;
   let settingsVisible = false;
-  let historyTab      = 'annotations'; // 'annotations' | 'copies'
+  let historyTab      = 'annotations'; // 'annotations' | 'copies' | 'saved'
   let isWritingFromPopup = false;
 
   // ── Search state ──────────────────────────────────────────────────────────
@@ -150,56 +156,269 @@ document.addEventListener('DOMContentLoaded', () => {
   let undoClearData   = null; // { annotations: [], deletedAt: string }
   let undoBannerTimer = null;
 
-  // ── Sync backup helpers ──────────────────────────────────────────────────
-  // Mirrors the current annotations array into chrome.storage.sync so data
-  // survives an extension uninstall as long as Chrome is signed in.
-  function backupToSync(annotations) {
-    clearTimeout(syncBackupTimer);
-    syncBackupTimer = setTimeout(() => {
-      try {
-        const json   = JSON.stringify(annotations || []);
-        const chunks = [];
-        for (let i = 0; i < json.length; i += SYNC_CHUNK_SIZE)
-          chunks.push(json.slice(i, i + SYNC_CHUNK_SIZE));
+  // ─── Compression / serialization helpers ─────────────────────────────────
+  // Pre-process a payload to make it as small as possible BEFORE compression:
+  //   - drop null/undefined/empty fields
+  //   - rename annotation keys to single-letter equivalents
+  //   - group annotations by URL so the URL string isn't repeated per item
+  // Then gzip with maximum compression via the CompressionStream API and
+  // base64-encode so it can be stored as a string in chrome.storage.sync.
+  //
+  // File format: a single object {v, a, h, c, sl, s} → gzip → base64.
+  const ANN_SHORT_KEYS = {
+    id: 'i', url: 'u', tag: 'g', elId: 'e', classes: 'c',
+    xpath: 'x', comment: 't', timestamp: 's', pageLevel: 'p', deletedAt: 'd',
+  };
+  const ANN_LONG_KEYS = Object.fromEntries(
+    Object.entries(ANN_SHORT_KEYS).map(([l, s]) => [s, l])
+  );
 
-        chrome.storage.sync.get(null, existing => {
-          const staleKeys = Object.keys(existing).filter(k => k.startsWith(SYNC_PREFIX));
-          const clear = staleKeys.length
-            ? new Promise(res => chrome.storage.sync.remove(staleKeys, res))
-            : Promise.resolve();
-
-          clear.then(() => {
-            const data = {
-              [`${SYNC_PREFIX}count`]: chunks.length,
-              [`${SYNC_PREFIX}ts`]:    new Date().toISOString(),
-            };
-            chunks.forEach((c, i) => { data[`${SYNC_PREFIX}${i}`] = c; });
-            chrome.storage.sync.set(data).then(() => {
-              chrome.storage.local.set({ _lastSyncBackup: new Date().toISOString(), _syncBackupError: null });
-            }).catch(err => {
-              chrome.storage.local.set({ _syncBackupError: 'Quota exceeded — data may be too large for free sync storage.' });
-              console.warn('[Annotator] Sync backup quota:', err.message);
-            });
-          });
-        });
-      } catch (e) {
-        console.warn('[Annotator] Sync backup error:', e);
-      }
-    }, 2000); // 2-second debounce
+  function shortenAnn(ann) {
+    const out = {};
+    for (const [k, v] of Object.entries(ann)) {
+      if (v === null || v === undefined || v === '') continue;
+      const sk = ANN_SHORT_KEYS[k] || k;
+      out[sk] = v;
+    }
+    return out;
   }
 
-  function readFromSync(cb) {
-    chrome.storage.sync.get(null, sync => {
-      const count = sync[`${SYNC_PREFIX}count`];
-      const ts    = sync[`${SYNC_PREFIX}ts`];
-      if (!count || count === 0) { cb(null, null); return; }
-      let json = '';
-      for (let i = 0; i < count; i++) json += sync[`${SYNC_PREFIX}${i}`] || '';
-      try {
-        const anns = JSON.parse(json);
-        cb(Array.isArray(anns) ? anns : null, ts);
-      } catch { cb(null, null); }
+  function expandAnn(short) {
+    const out = {};
+    for (const [k, v] of Object.entries(short)) {
+      const lk = ANN_LONG_KEYS[k] || k;
+      out[lk] = v;
+    }
+    return out;
+  }
+
+  // Group annotations by URL into [[url, [shortAnnWithoutUrl, ...]], ...]
+  function groupByUrl(anns) {
+    const map = new Map();
+    anns.forEach(ann => {
+      const url = ann.url || '';
+      const short = shortenAnn(ann);
+      delete short.u; // url moved to group key
+      if (!map.has(url)) map.set(url, []);
+      map.get(url).push(short);
     });
+    return Array.from(map.entries());
+  }
+
+  function ungroupByUrl(grouped) {
+    const out = [];
+    grouped.forEach(([url, items]) => {
+      items.forEach(s => {
+        const ann = expandAnn(s);
+        ann.url = url;
+        out.push(ann);
+      });
+    });
+    return out;
+  }
+
+  function buildBundle({ annotations = [], history = [], copyHistory = [], savedForLater = [], settings = {} } = {}) {
+    const bundle = { v: 2 };
+    if (annotations.length) bundle.a = groupByUrl(annotations);
+    if (history.length)     bundle.h = groupByUrl(history);
+    if (copyHistory.length) bundle.c = copyHistory.map(c => {
+      const o = {};
+      if (c.timestamp) o.s = c.timestamp;
+      if (c.output)    o.o = c.output;
+      if (c.count)     o.n = c.count;
+      return o;
+    });
+    if (savedForLater.length) bundle.sl = savedForLater.map(set => ({
+      i: set.id,
+      s: set.savedAt,
+      n: set.count,
+      a: groupByUrl(set.annotations || []),
+    }));
+    if (settings && Object.keys(settings).length) bundle.s = settings;
+    return bundle;
+  }
+
+  function unpackBundle(bundle) {
+    if (!bundle || typeof bundle !== 'object') return {};
+    return {
+      annotations:   bundle.a  ? ungroupByUrl(bundle.a)  : [],
+      history:       bundle.h  ? ungroupByUrl(bundle.h)  : [],
+      copyHistory:   Array.isArray(bundle.c) ? bundle.c.map(o => ({
+        timestamp: o.s || o.timestamp,
+        output:    o.o || o.output,
+        count:     o.n || o.count || 0,
+      })) : [],
+      savedForLater: Array.isArray(bundle.sl) ? bundle.sl.map(s => ({
+        id:          s.i || s.id,
+        savedAt:     s.s || s.savedAt,
+        count:       s.n || s.count || 0,
+        annotations: s.a ? ungroupByUrl(s.a) : (s.annotations || []),
+      })) : [],
+      settings:      bundle.s || {},
+    };
+  }
+
+  async function gzipString(str) {
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    writer.write(new TextEncoder().encode(str));
+    writer.close();
+    const buf = await new Response(cs.readable).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  async function gunzipToString(bytes) {
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const buf = await new Response(ds.readable).arrayBuffer();
+    return new TextDecoder().decode(buf);
+  }
+
+  function bytesToBase64(bytes) {
+    let s = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(s);
+  }
+
+  function base64ToBytes(b64) {
+    const s = atob(b64);
+    const bytes = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+    return bytes;
+  }
+
+  async function compressBundle(bundle) {
+    const json = JSON.stringify(bundle);
+    const gz   = await gzipString(json);
+    return bytesToBase64(gz);
+  }
+
+  async function decompressBundle(b64) {
+    const gz   = base64ToBytes(b64);
+    const json = await gunzipToString(gz);
+    return JSON.parse(json);
+  }
+
+  // ── Sync backup ─────────────────────────────────────────────────────────
+  // Compresses the FULL dataset (annotations + history + saved-for-later +
+  // copy log + settings) and writes it to chrome.storage.sync in chunks. If
+  // the compressed payload doesn't fit, history is truncated oldest-first
+  // until it does. Truncation is signaled via _syncTruncated for the UI.
+  function backupToSync() {
+    clearTimeout(syncBackupTimer);
+    syncBackupTimer = setTimeout(() => { performSyncBackup(); }, 1500);
+  }
+
+  async function performSyncBackup() {
+    try {
+      const local = await new Promise(res => chrome.storage.local.get({
+        annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
+        [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {},
+      }, res));
+
+      const annotations   = local.annotations || [];
+      let   history       = local[HISTORY_KEY] || [];
+      const copyHistory   = local[COPY_HISTORY_KEY] || [];
+      const savedForLater = local[SAVED_LATER_KEY] || [];
+      const settings      = local[SETTINGS_KEY] || {};
+
+      let truncated = false;
+      let payload   = '';
+
+      // Try compressing; if too large, drop oldest history entries until it fits.
+      while (true) {
+        const bundle = buildBundle({ annotations, history, copyHistory, savedForLater, settings });
+        payload = await compressBundle(bundle);
+        if (payload.length <= SYNC_MAX_BYTES) break;
+        if (history.length === 0) break; // nothing more we can shed
+        // Drop oldest 10% (at least 1) — newer entries are at the end
+        const drop = Math.max(1, Math.floor(history.length * 0.1));
+        history = history.slice(drop);
+        truncated = true;
+      }
+
+      if (payload.length > SYNC_MAX_BYTES) {
+        chrome.storage.local.set({
+          _syncBackupError: 'Data still exceeds sync storage limit even after truncation.',
+          _syncTruncated:   truncated,
+        });
+        return;
+      }
+
+      // Chunk and write
+      const chunks = [];
+      for (let i = 0; i < payload.length; i += SYNC_CHUNK_SIZE) {
+        chunks.push(payload.slice(i, i + SYNC_CHUNK_SIZE));
+      }
+
+      const existing  = await new Promise(res => chrome.storage.sync.get(null, res));
+      const staleKeys = Object.keys(existing).filter(k => k.startsWith(SYNC_PREFIX) || k.startsWith(SYNC_V2_PREFIX));
+      if (staleKeys.length) {
+        await new Promise(res => chrome.storage.sync.remove(staleKeys, res));
+      }
+
+      const data = {
+        [`${SYNC_V2_PREFIX}count`]: chunks.length,
+        [`${SYNC_V2_PREFIX}ts`]:    new Date().toISOString(),
+        [`${SYNC_V2_PREFIX}ver`]:   2,
+      };
+      chunks.forEach((c, i) => { data[`${SYNC_V2_PREFIX}${i}`] = c; });
+
+      try {
+        await chrome.storage.sync.set(data);
+        chrome.storage.local.set({
+          _lastSyncBackup:  new Date().toISOString(),
+          _syncBackupError: null,
+          _syncTruncated:   truncated,
+        });
+      } catch (err) {
+        chrome.storage.local.set({
+          _syncBackupError: 'Sync write failed: ' + (err?.message || err),
+          _syncTruncated:   truncated,
+        });
+        console.warn('[Annotator] Sync write failed:', err);
+      }
+    } catch (e) {
+      console.warn('[Annotator] Sync backup error:', e);
+    }
+  }
+
+  // Read sync. Returns the unpacked bundle (annotations, history, copyHistory,
+  // savedForLater, settings) plus the timestamp. Falls back to the legacy
+  // (annotations-only) sync format if v2 isn't present.
+  async function readFromSync() {
+    const sync = await new Promise(res => chrome.storage.sync.get(null, res));
+    const v2Count = sync[`${SYNC_V2_PREFIX}count`];
+    const v2Ts    = sync[`${SYNC_V2_PREFIX}ts`];
+    if (v2Count && v2Count > 0) {
+      let payload = '';
+      for (let i = 0; i < v2Count; i++) payload += sync[`${SYNC_V2_PREFIX}${i}`] || '';
+      try {
+        const bundle = await decompressBundle(payload);
+        return { ...unpackBundle(bundle), ts: v2Ts, format: 'v2' };
+      } catch (e) {
+        console.warn('[Annotator] v2 sync parse error:', e);
+      }
+    }
+    // Legacy fallback (annotations only, plain chunks)
+    const count = sync[`${SYNC_PREFIX}count`];
+    const ts    = sync[`${SYNC_PREFIX}ts`];
+    if (!count || count === 0) return null;
+    let json = '';
+    for (let i = 0; i < count; i++) json += sync[`${SYNC_PREFIX}${i}`] || '';
+    try {
+      const anns = JSON.parse(json);
+      return {
+        annotations:   Array.isArray(anns) ? anns : [],
+        history:       [], copyHistory: [], savedForLater: [], settings: {},
+        ts, format: 'v1',
+      };
+    } catch { return null; }
   }
 
   // ── Settings defaults ────────────────────────────────────────────────────
@@ -393,61 +612,102 @@ document.addEventListener('DOMContentLoaded', () => {
     container.querySelectorAll('.item-note-edit').forEach(ta => autoResizeTextarea(ta));
   }
 
-  // ── Navigate to an annotation on the page ─────────────────────────────────
-  function navigateToAnnotation(annId, itemEl) {
-    // Brief flash in popup
+  // ── Navigation intent helpers ─────────────────────────────────────────────
+  // Stash the desired post-navigation action into chrome.storage.local so the
+  // content script can pick it up after the page loads. Each intent expires
+  // after 30 s so stale intents don't trigger on unrelated future loads.
+  function setNavIntent(intent) {
+    const payload = { ...intent, expiresAt: Date.now() + 30_000 };
+    return new Promise(res => chrome.storage.local.set({ _navIntent: payload }, res));
+  }
+
+  // ── Navigate to a specific annotation: redirect current tab to its URL,
+  //    then have the content script open the panel + focus the textarea.
+  async function navigateToAnnotation(annId, itemEl) {
     if (itemEl) {
       itemEl.classList.add('item-nav-flash');
       setTimeout(() => itemEl.classList.remove('item-nav-flash'), 700);
     }
 
-    chrome.storage.local.get({ annotations: [] }, r => {
+    chrome.storage.local.get({ annotations: [] }, async r => {
       const ann = r.annotations.find(a => a.id === annId);
       if (!ann) return;
 
-      chrome.tabs.query({}, tabs => {
-        const matchingTab = tabs.find(t => t.url === ann.url);
-        if (matchingTab) {
-          chrome.tabs.update(matchingTab.id, { active: true });
-          if (matchingTab.windowId) chrome.windows.update(matchingTab.windowId, { focused: true });
-          setTimeout(() => {
-            chrome.tabs.sendMessage(matchingTab.id, { type: 'focusAnnotation', annId }).catch(() => {});
-          }, 250);
-        } else {
-          chrome.tabs.create({ url: ann.url });
-        }
-      });
+      await setNavIntent({ type: 'focusAnnotation', annId, url: ann.url });
+
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab  = tabs[0];
+      if (!tab) return;
+
+      if (tab.url === ann.url) {
+        // Already on the page — just send the focus message
+        try { await chrome.tabs.sendMessage(tab.id, { type: 'focusAnnotation', annId }); } catch {}
+      } else {
+        await chrome.tabs.update(tab.id, { url: ann.url });
+      }
+      window.close(); // popup closes so the user sees the page
     });
   }
 
-  function navigateToUrl(url) {
-    chrome.tabs.query({}, tabs => {
-      const matchingTab = tabs.find(t => t.url === url);
-      if (matchingTab) {
-        chrome.tabs.update(matchingTab.id, { active: true });
-        if (matchingTab.windowId) chrome.windows.update(matchingTab.windowId, { focused: true });
-      } else {
-        chrome.tabs.create({ url });
-      }
-    });
+  // ── Navigate to a URL group: redirect current tab, then open ALL chips on
+  //    that page (equivalent to clicking every amber chip).
+  async function navigateToUrl(url) {
+    await setNavIntent({ type: 'openAllForUrl', url });
+
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab  = tabs[0];
+    if (!tab) return;
+
+    if (tab.url === url) {
+      try { await chrome.tabs.sendMessage(tab.id, { type: 'openAllAnnotations', url }); } catch {}
+    } else {
+      await chrome.tabs.update(tab.id, { url });
+    }
+    window.close();
   }
 
   // ── Undo-clear banner ─────────────────────────────────────────────────────
-  function showClearUndoBanner(previousAnnotations, deletedAt) {
-    undoClearData = { annotations: previousAnnotations, deletedAt };
+  // action: 'cleared' (default — moved to history) | 'saved' (saved-for-later set)
+  function showClearUndoBanner(previousAnnotations, deletedAt, action = 'cleared', savedSetId = null) {
+    undoClearData = { annotations: previousAnnotations, deletedAt, action, savedSetId };
     clearTimeout(undoBannerTimer);
 
+    const count = previousAnnotations.length;
+    const text = action === 'saved'
+      ? `Saved ${count} annotation${count !== 1 ? 's' : ''} for later`
+      : 'Annotations saved to history';
+
     clearUndoBanner.innerHTML = `
-      <span class="undo-banner-text">Annotations saved to history</span>
+      <span class="undo-banner-text">${escHtml(text)}</span>
       <button id="undo-clear-btn" class="undo-clear-btn">Undo</button>
     `;
     clearUndoBanner.style.display = 'flex';
 
     document.getElementById('undo-clear-btn').addEventListener('click', () => {
       if (!undoClearData) return;
-      const { annotations: prevAnns, deletedAt: ts } = undoClearData;
+      const { annotations: prevAnns, deletedAt: ts, action: act, savedSetId: setId } = undoClearData;
       undoClearData = null;
       hideClearUndoBanner();
+
+      if (act === 'saved') {
+        // Remove the saved-for-later set and restore annotations
+        chrome.storage.local.get({ annotations: [], [SAVED_LATER_KEY]: [] }, r => {
+          const newSaved = r[SAVED_LATER_KEY].filter(s => s.id !== setId);
+          isWritingFromPopup = true;
+          chrome.storage.local.set({ annotations: prevAnns, [SAVED_LATER_KEY]: newSaved }, () => {
+            isWritingFromPopup = false;
+            render(prevAnns);
+            chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+              if (tabs[0]) {
+                prevAnns.forEach(ann => {
+                  chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
+                });
+              }
+            });
+          });
+        });
+        return;
+      }
 
       chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
         // Remove the cleared annotations from history by matching id + deletedAt
@@ -578,10 +838,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes.annotations) {
+    if (area !== 'local') return;
+    // Trigger a debounced sync backup any time tracked data changes
+    if (changes.annotations || changes[HISTORY_KEY] || changes[COPY_HISTORY_KEY]
+        || changes[SAVED_LATER_KEY] || changes[SETTINGS_KEY]) {
+      backupToSync();
+    }
+    if (changes.annotations) {
       const newAnns = changes.annotations.newValue || [];
-      // Always keep sync in step with local — this is the real-time backup
-      backupToSync(newAnns);
       if (!isWritingFromPopup && !historyVisible && !settingsVisible) {
         render(newAnns);
       }
@@ -590,12 +854,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Sync restore banner ───────────────────────────────────────────────────
   function checkSyncRestore() {
-    chrome.storage.local.get({ annotations: [] }, local => {
+    chrome.storage.local.get({ annotations: [] }, async local => {
       if (local.annotations.length > 0) return; // local has data — no restore needed
-      readFromSync((anns, ts) => {
-        if (!anns || anns.length === 0) return;
-        showRestoreBanner(anns, ts);
-      });
+      const result = await readFromSync();
+      if (!result || !result.annotations || result.annotations.length === 0) return;
+      showRestoreBanner(result.annotations, result.ts);
     });
   }
 
@@ -826,6 +1089,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderHistoryTab() {
     if (historyTab === 'annotations') renderAnnotationHistory();
+    else if (historyTab === 'saved')  renderSavedForLater();
     else renderCopyHistory();
   }
 
@@ -833,6 +1097,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return `
       <div class="hist-tabs">
         <button class="hist-tab${active === 'annotations' ? ' active' : ''}" data-tab="annotations">Annotations</button>
+        <button class="hist-tab${active === 'saved'       ? ' active' : ''}" data-tab="saved">Saved for Later</button>
         <button class="hist-tab${active === 'copies'      ? ' active' : ''}" data-tab="copies">Copy Log</button>
       </div>`;
   }
@@ -907,6 +1172,89 @@ document.addEventListener('DOMContentLoaded', () => {
       if (searchActive && searchInput && searchInput.value.trim()) {
         applySearch(searchInput.value.trim());
       }
+    });
+  }
+
+  function renderSavedForLater() {
+    chrome.storage.local.get({ [SAVED_LATER_KEY]: [] }, r => {
+      const sets = r[SAVED_LATER_KEY] || [];
+      if (sets.length === 0) {
+        historyEl.innerHTML = historyTabsHTML('saved') +
+          `<p class="empty-msg">No saved-for-later sets yet.<br>Right-click <strong>🗑 Clear All</strong> to save the current annotations here.</p>`;
+        attachTabListeners();
+        return;
+      }
+
+      let html = historyTabsHTML('saved');
+      [...sets].reverse().forEach(set => {
+        const when  = formatTimestamp(set.savedAt);
+        const items = (set.annotations || []).slice(0, 50);
+        html += `
+        <div class="sfl-set" data-set-id="${escHtml(set.id)}">
+          <div class="sfl-set-header">
+            <span class="sfl-set-meta">📅 ${escHtml(when)} · ${set.count || items.length} annotation${(set.count || items.length) !== 1 ? 's' : ''}</span>
+            <div class="sfl-set-actions">
+              <button class="sfl-set-btn sfl-restore" data-set-id="${escHtml(set.id)}" title="Restore these annotations">↺ Restore</button>
+              <button class="sfl-set-btn sfl-set-btn--danger sfl-delete" data-set-id="${escHtml(set.id)}" title="Delete this set">🗑</button>
+            </div>
+          </div>
+          <ul class="sfl-set-list">
+            ${items.map(ann => {
+              const sel = getSelector(ann);
+              const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
+              return `<li><code>${escHtml(sel)}</code>${escHtml(note.slice(0, 120))}${note.length > 120 ? '…' : ''}</li>`;
+            }).join('')}
+            ${(set.annotations || []).length > items.length
+              ? `<li><em>+${(set.annotations || []).length - items.length} more…</em></li>`
+              : ''}
+          </ul>
+        </div>`;
+      });
+
+      historyEl.innerHTML = html;
+      attachTabListeners();
+
+      historyEl.querySelectorAll('.sfl-restore').forEach(btn => {
+        btn.addEventListener('click', () => restoreSavedForLaterSet(btn.dataset.setId));
+      });
+      historyEl.querySelectorAll('.sfl-delete').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (!confirm('Delete this saved-for-later set? This cannot be undone.')) return;
+          deleteSavedForLaterSet(btn.dataset.setId);
+        });
+      });
+    });
+  }
+
+  function restoreSavedForLaterSet(setId) {
+    chrome.storage.local.get({ annotations: [], [SAVED_LATER_KEY]: [] }, r => {
+      const set = r[SAVED_LATER_KEY].find(s => s.id === setId);
+      if (!set) return;
+
+      const existing = new Set(r.annotations.map(a => a.id));
+      const toAdd    = (set.annotations || []).filter(a => !existing.has(a.id));
+      const merged   = [...r.annotations, ...toAdd];
+      const newSaved = r[SAVED_LATER_KEY].filter(s => s.id !== setId);
+
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations: merged, [SAVED_LATER_KEY]: newSaved }, () => {
+        isWritingFromPopup = false;
+        chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+          if (tabs[0]) {
+            toAdd.forEach(ann => {
+              chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
+            });
+          }
+        });
+        renderSavedForLater();
+      });
+    });
+  }
+
+  function deleteSavedForLaterSet(setId) {
+    chrome.storage.local.get({ [SAVED_LATER_KEY]: [] }, r => {
+      const newSaved = r[SAVED_LATER_KEY].filter(s => s.id !== setId);
+      chrome.storage.local.set({ [SAVED_LATER_KEY]: newSaved }, () => renderSavedForLater());
     });
   }
 
@@ -1123,11 +1471,24 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
         <div class="settings-row settings-row--btns">
-          <button id="export-history-btn" class="btn-history-action">📤 Export</button>
-          <button id="import-history-btn" class="btn-history-action">📥 Import</button>
-          <button id="clear-history-settings-btn" class="btn-history-action btn-history-danger">🗑 Clear</button>
+          <button id="clear-history-settings-btn" class="btn-history-action btn-history-danger">🗑 Clear History</button>
         </div>
-        <input type="file" id="import-history-file" accept=".json" style="display:none;" />
+      </div>
+
+      <!-- ── All Data Export/Import ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">📦 All Data</div>
+        <div class="settings-row settings-row--btns">
+          <button id="export-all-btn" class="btn-history-action">📤 Export All Data</button>
+          <button id="import-all-btn" class="btn-history-action">📥 Import All Data</button>
+        </div>
+        <p class="settings-hint" style="margin-top:4px;">
+          Compressed bundle of every annotation, history entry, saved-for-later set, copy log, and setting. Nothing is truncated.
+        </p>
+        <input type="file" id="import-all-file" accept=".annotator,.gz,.json" style="display:none;" />
+        <div id="sync-truncation-warning" class="sync-truncation-warning" style="display:none;">
+          ⚠ History is being truncated to fit sync storage limits. Your full history is preserved locally and in the latest export.
+        </div>
       </div>
 
       ${licenseSection}
@@ -1192,7 +1553,11 @@ document.addEventListener('DOMContentLoaded', () => {
     attachExternalLinks(settingsEl);
 
     // ── Backup status section ─────────────────────────────────────────────
-    chrome.storage.local.get({ _lastSyncBackup: null, _lastFileBackup: null, _syncBackupError: null, _fileBackupError: null }, bd => {
+    chrome.storage.local.get({
+      _lastSyncBackup: null, _lastFileBackup: null,
+      _syncBackupError: null, _fileBackupError: null,
+      _syncTruncated: false,
+    }, bd => {
       const syncEl = settingsEl.querySelector('#sync-backup-status');
       const fileEl = settingsEl.querySelector('#file-backup-status');
       if (syncEl) {
@@ -1216,6 +1581,8 @@ document.addEventListener('DOMContentLoaded', () => {
           fileEl.textContent = 'Pending (first backup in ~1 min)';
         }
       }
+      const truncWarn = settingsEl.querySelector('#sync-truncation-warning');
+      if (truncWarn) truncWarn.style.display = bd._syncTruncated ? 'block' : 'none';
     });
 
     settingsEl.querySelector('#backup-now-btn')?.addEventListener('click', e => {
@@ -1274,62 +1641,143 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // ── Export history ────────────────────────────────────────────────────
-    settingsEl.querySelector('#export-history-btn')?.addEventListener('click', () => {
-      chrome.storage.local.get({ [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [], annotations: [] }, r => {
-        const data = {
-          exported:          new Date().toISOString(),
-          version:           '1.5.0',
-          annotations:       r.annotations,
-          annotationHistory: r[HISTORY_KEY],
-          copyHistory:       r[COPY_HISTORY_KEY],
-        };
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    // ── Export ALL data ───────────────────────────────────────────────────
+    // File format: gzipped JSON of the v2 bundle (same compact format used
+    // for sync, but never truncated). File extension: `.annotator`.
+    settingsEl.querySelector('#export-all-btn')?.addEventListener('click', async () => {
+      const btn = settingsEl.querySelector('#export-all-btn');
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        const r = await new Promise(res => chrome.storage.local.get({
+          annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
+          [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {},
+        }, res));
+        const bundle = buildBundle({
+          annotations:   r.annotations,
+          history:       r[HISTORY_KEY],
+          copyHistory:   r[COPY_HISTORY_KEY],
+          savedForLater: r[SAVED_LATER_KEY],
+          settings:      r[SETTINGS_KEY],
+        });
+        bundle._exported = new Date().toISOString();
+        bundle._version  = '1.6.0';
+        const json = JSON.stringify(bundle);
+        const gz   = await gzipString(json);
+        const blob = new Blob([gz], { type: 'application/gzip' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
-        a.download = `annotator-history-${new Date().toISOString().slice(0, 10)}.json`;
+        a.download = `annotator-all-${new Date().toISOString().slice(0, 10)}.annotator`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-      });
+      } catch (e) {
+        alert('Export failed: ' + (e?.message || e));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
     });
 
-    // ── Import history ────────────────────────────────────────────────────
-    const importBtn  = settingsEl.querySelector('#import-history-btn');
-    const importFile = settingsEl.querySelector('#import-history-file');
-    if (importBtn && importFile) {
-      importBtn.addEventListener('click', () => importFile.click());
-      importFile.addEventListener('change', () => {
-        const file = importFile.files[0];
+    // ── Import ALL data ───────────────────────────────────────────────────
+    // Accepts either the new gzipped `.annotator` format or a legacy plain
+    // JSON history file (for backward compatibility with old exports).
+    const importAllBtn  = settingsEl.querySelector('#import-all-btn');
+    const importAllFile = settingsEl.querySelector('#import-all-file');
+    if (importAllBtn && importAllFile) {
+      importAllBtn.addEventListener('click', () => importAllFile.click());
+      importAllFile.addEventListener('change', () => {
+        const file = importAllFile.files[0];
         if (!file) return;
         const reader = new FileReader();
-        reader.onload = e => {
+        reader.onload = async e => {
+          const buf = e.target.result;
+          let bundle = null;
+          let unpacked = null;
+
+          // First try gzipped binary
           try {
-            const data    = JSON.parse(e.target.result);
-            const annHist  = Array.isArray(data.annotationHistory) ? data.annotationHistory : [];
-            const copyHist = Array.isArray(data.copyHistory)       ? data.copyHistory       : [];
-
-            chrome.storage.local.get({ [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [] }, r => {
-              const existingAnnIds  = new Set(r[HISTORY_KEY].map(a => a.id + (a.deletedAt || '')));
-              const newAnn          = annHist.filter(a => !existingAnnIds.has(a.id + (a.deletedAt || '')));
-              const existingCopyTs  = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
-              const newCopy         = copyHist.filter(c => !existingCopyTs.has(c.timestamp));
-
-              chrome.storage.local.set({
-                [HISTORY_KEY]:      [...r[HISTORY_KEY], ...newAnn],
-                [COPY_HISTORY_KEY]: [...r[COPY_HISTORY_KEY], ...newCopy],
-              }, () => {
-                alert(`Imported ${newAnn.length} annotation record(s) and ${newCopy.length} copy log(s).`);
-              });
-            });
+            const json = await gunzipToString(new Uint8Array(buf));
+            bundle = JSON.parse(json);
           } catch {
-            alert('Invalid file. Please select a valid annotator history JSON file.');
+            // Fall back to plain JSON
+            try {
+              const txt = new TextDecoder().decode(new Uint8Array(buf));
+              bundle = JSON.parse(txt);
+            } catch {
+              alert('Invalid file. Please select a valid .annotator export.');
+              importAllFile.value = '';
+              return;
+            }
           }
+
+          // Two shapes: new compact bundle (has v=2) or legacy export
+          if (bundle && bundle.v === 2) {
+            unpacked = unpackBundle(bundle);
+          } else {
+            unpacked = {
+              annotations:   Array.isArray(bundle.annotations)       ? bundle.annotations       : [],
+              history:       Array.isArray(bundle.annotationHistory) ? bundle.annotationHistory : [],
+              copyHistory:   Array.isArray(bundle.copyHistory)       ? bundle.copyHistory       : [],
+              savedForLater: Array.isArray(bundle.savedForLater)     ? bundle.savedForLater     : [],
+              settings:      bundle.annotatorSettings && typeof bundle.annotatorSettings === 'object'
+                               ? bundle.annotatorSettings : {},
+            };
+          }
+
+          if (!confirm(
+            `Import this data?\n\n` +
+            `• ${unpacked.annotations.length} active annotation(s)\n` +
+            `• ${unpacked.history.length} history record(s)\n` +
+            `• ${unpacked.savedForLater.length} saved-for-later set(s)\n` +
+            `• ${unpacked.copyHistory.length} copy log(s)\n\n` +
+            `Existing items will be merged (not overwritten).`
+          )) {
+            importAllFile.value = '';
+            return;
+          }
+
+          chrome.storage.local.get({
+            annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
+            [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {},
+          }, r => {
+            const annIds = new Set(r.annotations.map(a => a.id));
+            const newAnns = unpacked.annotations.filter(a => !annIds.has(a.id));
+
+            const histKeys = new Set(r[HISTORY_KEY].map(a => a.id + '|' + (a.deletedAt || '')));
+            const newHist  = unpacked.history.filter(a => !histKeys.has(a.id + '|' + (a.deletedAt || '')));
+
+            const copyTs = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
+            const newCopy = unpacked.copyHistory.filter(c => !copyTs.has(c.timestamp));
+
+            const slIds = new Set(r[SAVED_LATER_KEY].map(s => s.id));
+            const newSL = unpacked.savedForLater.filter(s => !slIds.has(s.id));
+
+            chrome.storage.local.set({
+              annotations:        [...r.annotations,       ...newAnns],
+              [HISTORY_KEY]:      [...r[HISTORY_KEY],      ...newHist],
+              [COPY_HISTORY_KEY]: [...r[COPY_HISTORY_KEY], ...newCopy],
+              [SAVED_LATER_KEY]:  [...r[SAVED_LATER_KEY],  ...newSL],
+              [SETTINGS_KEY]:     { ...r[SETTINGS_KEY], ...unpacked.settings },
+            }, () => {
+              alert(
+                `Imported:\n` +
+                `• ${newAnns.length} annotation(s)\n` +
+                `• ${newHist.length} history record(s)\n` +
+                `• ${newSL.length} saved-for-later set(s)\n` +
+                `• ${newCopy.length} copy log(s)`
+              );
+              if (unpacked.settings && unpacked.settings.darkMode !== undefined) {
+                applyDarkMode(unpacked.settings.darkMode);
+              }
+            });
+          });
+          importAllFile.value = '';
         };
-        reader.readAsText(file);
-        importFile.value = '';
+        reader.readAsArrayBuffer(file);
       });
     }
 
@@ -1566,8 +2014,41 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           });
           // Show undo banner instead of confirm dialog
-          showClearUndoBanner(anns, now);
+          showClearUndoBanner(anns, now, 'cleared');
         });
+      });
+    });
+  });
+
+  // ── Clear All (right-click): save current annotations to "Saved for Later"
+  clearBtn.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    chrome.storage.local.get({ annotations: [], [SAVED_LATER_KEY]: [] }, r => {
+      const anns = r.annotations;
+      if (anns.length === 0) return;
+
+      const now = new Date().toISOString();
+      const setId = `sfl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const set = {
+        id:          setId,
+        savedAt:     now,
+        count:       anns.length,
+        annotations: anns.map(a => ({ ...a })), // snapshot
+      };
+      const newSaved = [...r[SAVED_LATER_KEY], set];
+
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations: [], [SAVED_LATER_KEY]: newSaved }, () => {
+        isWritingFromPopup = false;
+        render([]);
+        chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+          if (tabs[0]) {
+            anns.forEach(ann => {
+              chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId: ann.id, xpath: ann.xpath }).catch(() => {});
+            });
+          }
+        });
+        showClearUndoBanner(anns, now, 'saved', setId);
       });
     });
   });

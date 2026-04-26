@@ -119,22 +119,9 @@ body {
   background: rgba(255,255,255,0.32);
 }
 
-/* Settings gear gets a larger font-size for visual parity with the emojis */
-#settings-btn {
+/* All header emoji buttons share the same font-size for visual consistency */
+.header-icon-btn {
   font-size: 16px;
-}
-
-/* Small shortcut hint text inside the search button */
-.header-btn-hint {
-  font-size: 8px;
-  font-weight: 500;
-  opacity: 0.8;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  line-height: 1;
-}
-.header-btn-icon {
-  line-height: 1;
 }
 
 /* ── Search bar (Google Docs-style) ──────────────────────────────────────── */
@@ -956,8 +943,9 @@ button {
   transition: background 0.15s;
 }
 
-/* Cut All button: flex-column for icon text + hint text */
-.cut-btn {
+/* Cut All / Clear All buttons: flex-column for icon text + hint text */
+.cut-btn,
+.clear-btn {
   display: flex !important;
   flex-direction: column;
   align-items: center;
@@ -1147,4 +1135,89 @@ button {
 .btn-backup-now:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* ── Sync truncation warning (Settings) ──────────────────────────────────── */
+.sync-truncation-warning {
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+  font-size: 11.5px;
+  line-height: 1.5;
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin-top: 6px;
+}
+[data-theme="dark"] .sync-truncation-warning {
+  background: #422006;
+  border-color: #b45309;
+  color: #fcd34d;
+}
+
+/* ── Saved for Later history items ──────────────────────────────────────── */
+.sfl-set {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.sfl-set-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.sfl-set-meta {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.sfl-set-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sfl-set-btn {
+  flex: 0 0 auto;
+  background: var(--section-bg);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: 600 10.5px/1.4 system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.sfl-set-btn:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+.sfl-set-btn.sfl-set-btn--danger { color: #dc2626; }
+.sfl-set-btn.sfl-set-btn--danger:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+.sfl-set-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  max-height: 140px;
+  overflow-y: auto;
+}
+.sfl-set-list li {
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--border);
+  word-break: break-word;
+}
+.sfl-set-list li:last-child { border-bottom: none; }
+.sfl-set-list li code {
+  font-size: 10px;
+  margin-right: 5px;
 }

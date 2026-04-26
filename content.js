@@ -217,44 +217,13 @@ function setAll(anns, cb) {
 }
 function genId() { return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
 
-// ── Sync backup (mirrors annotations into chrome.storage.sync) ─────────────
-// Survives extension uninstall/reinstall as long as Chrome is signed in.
-const _SYNC_PREFIX     = 'ann_sync_';
-const _SYNC_CHUNK_SIZE = 7000;
-let   _syncTimer       = null;
-
-function backupAnnotationsToSync(annotations) {
-  clearTimeout(_syncTimer);
-  _syncTimer = setTimeout(() => {
-    try {
-      const json   = JSON.stringify(annotations || []);
-      const chunks = [];
-      for (let i = 0; i < json.length; i += _SYNC_CHUNK_SIZE)
-        chunks.push(json.slice(i, i + _SYNC_CHUNK_SIZE));
-
-      chrome.storage.sync.get(null, existing => {
-        const stale = Object.keys(existing).filter(k => k.startsWith(_SYNC_PREFIX));
-        const clear = stale.length
-          ? new Promise(res => chrome.storage.sync.remove(stale, res))
-          : Promise.resolve();
-        clear.then(() => {
-          const data = {
-            [`${_SYNC_PREFIX}count`]: chunks.length,
-            [`${_SYNC_PREFIX}ts`]:    new Date().toISOString(),
-          };
-          chunks.forEach((c, i) => { data[`${_SYNC_PREFIX}${i}`] = c; });
-          chrome.storage.sync.set(data).then(() => {
-            chrome.storage.local.set({ _lastSyncBackup: new Date().toISOString(), _syncBackupError: null });
-          }).catch(err => {
-            chrome.storage.local.set({ _syncBackupError: 'Quota exceeded.' });
-            console.warn('[Annotator content] Sync backup quota:', err.message);
-          });
-        });
-      });
-    } catch (e) {
-      console.warn('[Annotator content] Sync backup error:', e);
-    }
-  }, 2000); // 2-second debounce so rapid edits don't hammer the sync API
+// ── Sync backup (delegated to background service worker) ──────────────────
+// The background script owns the v2 compressed sync format. We just nudge
+// it on every annotation change so it can debounce + write.
+function backupAnnotationsToSync(_annotations) {
+  try {
+    chrome.runtime.sendMessage({ type: 'scheduleBackup' }).catch(() => {});
+  } catch {}
 }
 
 // ── History limit enforcement ──────────────────────────────────────────────
@@ -285,9 +254,9 @@ function buildPanel() {
       ✏ Annotation
       <button id="${ANN}-close-btn" title="Close">✕</button>
     </div>
-    <textarea id="${ANN}-textarea" placeholder="Notes and observations about this element…"></textarea>
+    <textarea id="${ANN}-textarea"></textarea>
     <div id="${ANN}-panel-footer">
-      <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Whole page</button>
+      <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Page Note</button>
       <span id="${ANN}-save-status"></span>
       <button id="${ANN}-delete-btn">🗑 Delete</button>
     </div>`;
@@ -403,7 +372,8 @@ function openPanel(chip, annId) {
 
     const ta = panel.querySelector(`#${ANN}-textarea`);
     ta.value = comment;
-    setSaveStatus(comment ? '' : 'Start typing : auto-saves as you go');
+    ta.removeAttribute('placeholder'); // no pre-typing hint
+    setSaveStatus('');
 
     // Reflect current page-level state on the button
     const pageBtn = panel.querySelector(`#${ANN}-page-btn`);
@@ -432,10 +402,32 @@ function positionPanel(panel, chip) {
 }
 
 function closePanel() {
+  // If the active annotation has no comment, discard it instead of saving
+  // an empty record. Keeps "open chip → close without typing" non-destructive
+  // for existing notes and free of clutter for newly-created ones.
+  const idToCheck = activeAnnId;
   const p = document.getElementById(`${ANN}-panel`);
   if (p) p.style.display = 'none';
   activeChip    = null;
   activeAnnId   = null;
+
+  if (!idToCheck) return;
+  // Cancel any pending debounced save before checking — otherwise a queued
+  // empty-string write can land after we discard.
+  clearTimeout(saveTimer);
+  getAll(anns => {
+    const ann = anns.find(a => a.id === idToCheck);
+    if (!ann) return;
+    if (ann.comment && ann.comment.trim()) return; // has content — keep
+    // Empty: discard silently (no history record, no chip)
+    const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${idToCheck}"]`);
+    if (chip) chip.remove();
+    if (!ann.pageLevel) {
+      const el = resolveXPath(ann.xpath);
+      if (el) el.classList.remove(`${ANN}-hl`);
+    }
+    setAll(anns.filter(a => a.id !== idToCheck));
+  });
 }
 
 function setSaveStatus(msg) {
@@ -562,7 +554,80 @@ function restoreAnnotations() {
           if (el) injectChip(el, ann.id, ann.comment);
         }
       });
+    // After chips are placed, run any post-navigation intent left by the popup
+    consumeNavIntent();
   });
+}
+
+// ── Post-navigation intent (set by popup before navigating this tab) ──────
+// The popup writes _navIntent into chrome.storage.local before redirecting
+// the active tab to a different URL. When the content script loads on the
+// new page, it picks up the intent and runs the requested action: focus a
+// specific annotation's panel, or open every chip on the page.
+function consumeNavIntent() {
+  chrome.storage.local.get({ _navIntent: null }, r => {
+    const intent = r._navIntent;
+    if (!intent) return;
+    if (intent.expiresAt && Date.now() > intent.expiresAt) {
+      chrome.storage.local.remove('_navIntent');
+      return;
+    }
+    if (intent.url && intent.url !== window.location.href) return; // not for this page
+
+    // Clear immediately so we don't re-fire on subsequent navigations
+    chrome.storage.local.remove('_navIntent');
+
+    if (intent.type === 'focusAnnotation' && intent.annId) {
+      // Slight delay so all chips are wired up
+      setTimeout(() => focusAnnotationOnPage(intent.annId), 200);
+    } else if (intent.type === 'openAllForUrl') {
+      setTimeout(() => openAllChipsOnPage(), 200);
+    }
+  });
+}
+
+function focusAnnotationOnPage(annId) {
+  const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
+  if (!chip) return;
+  chip.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  openPanel(chip, annId);
+  // openPanel already focuses the textarea
+}
+
+// Sequentially "click" every chip on this page (so each gets a panel pop).
+// Since the panel is a single shared element, opening multiple at once
+// would just leave the last one visible. Instead we briefly flash each chip
+// and then leave the LAST chip's panel open — matching the user expectation
+// of "open all" in a small popup.
+function openAllChipsOnPage() {
+  const chips = Array.from(document.querySelectorAll(`.${ANN}-chip`));
+  if (chips.length === 0) return;
+
+  chips.forEach(chip => {
+    chip.style.transition = 'transform 0.15s';
+    chip.style.transform  = 'scale(1.25)';
+    setTimeout(() => { chip.style.transform = ''; }, 400);
+
+    // Highlight the associated element for non-page chips
+    const annId = chip.dataset.annId;
+    if (annId) {
+      const url = window.location.href;
+      getAll(anns => {
+        const ann = anns.find(a => a.id === annId);
+        if (ann && !ann.pageLevel && ann.xpath) {
+          const el = resolveXPath(ann.xpath);
+          if (el) el.classList.add(`${ANN}-hl`);
+        }
+      });
+    }
+  });
+
+  // Open the panel for the first chip so the user has somewhere to type
+  const firstChip = chips[0];
+  if (firstChip && firstChip.dataset.annId) {
+    firstChip.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    openPanel(firstChip, firstChip.dataset.annId);
+  }
 }
 
 // ── Configurable modifier + Right-Click handler ────────────────────────────
@@ -682,6 +747,10 @@ chrome.runtime.onMessage.addListener((msg) => {
         }
       }
     });
+  }
+
+  if (msg.type === 'openAllAnnotations') {
+    openAllChipsOnPage();
   }
 });
 

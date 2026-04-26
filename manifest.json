@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Website Dev Annotator: AI Notes & Markdown Export",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Alt + Right-Click any web element to annotate it. Export notes as clean Markdown for AI tools like Cursor, Claude, and ChatGPT.",
   "permissions": ["storage", "activeTab", "clipboardWrite", "tabs", "alarms"],
   "host_permissions": ["<all_urls>"],
