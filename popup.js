@@ -1,4 +1,4 @@
-// popup.js : Website Dev Annotator
+// popup.js : AI Website Dev Annotator
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DEV MODE
@@ -13,7 +13,7 @@ const DEV_MODE = false;
 //
 // SETUP : one-time steps before publishing:
 //   1. Create a free Gumroad account → https://gumroad.com
-//   2. Create a product ("Website Dev Annotator Premium"), enable "Generate a
+//   2. Create a product ("AI Website Dev Annotator Premium"), enable "Generate a
 //      unique license key" in product settings, and set your price.
 //   3. Replace GUMROAD_PRODUCT_PERMALINK with the slug at the end of your
 //      product URL (e.g. for gumroad.com/l/websiteDevAnnotator → use
@@ -124,6 +124,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchInput   = document.getElementById('search-input');
   const searchCount   = document.getElementById('search-count');
   const restoreBanner = document.getElementById('restore-banner');
+  const clearUndoBanner = document.getElementById('clear-undo-banner');
   const footer        = document.querySelector('.footer');
 
   const HISTORY_KEY      = 'annotationHistory';
@@ -144,6 +145,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Sync backup state ─────────────────────────────────────────────────────
   let syncBackupTimer = null;
+
+  // ── Undo-clear state ──────────────────────────────────────────────────────
+  let undoClearData   = null; // { annotations: [], deletedAt: string }
+  let undoBannerTimer = null;
 
   // ── Sync backup helpers ──────────────────────────────────────────────────
   // Mirrors the current annotations array into chrome.storage.sync so data
@@ -328,9 +333,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const safeUrl = url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         const btn = listEl.querySelector(`.url-copy-btn[data-url="${safeUrl}"]`);
         if (btn) {
-          const orig = btn.textContent;
-          btn.textContent = '✅';
-          setTimeout(() => (btn.textContent = orig), 1500);
+          const orig = btn.innerHTML;
+          btn.innerHTML = '✅ Copied!';
+          setTimeout(() => (btn.innerHTML = orig), 1500);
         }
       }).catch(() => alert('Clipboard write failed. Try again.'));
     });
@@ -345,9 +350,9 @@ document.addEventListener('DOMContentLoaded', () => {
       navigator.clipboard.writeText(line).then(() => {
         const btn = listEl.querySelector(`.item-copy-btn[data-ann-id="${annId}"]`);
         if (btn) {
-          const orig = btn.textContent;
-          btn.textContent = '✅';
-          setTimeout(() => (btn.textContent = orig), 1500);
+          const orig = btn.innerHTML;
+          btn.innerHTML = '✅';
+          setTimeout(() => (btn.innerHTML = orig), 1500);
         }
       }).catch(() => alert('Clipboard write failed. Try again.'));
     });
@@ -378,6 +383,100 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ── Auto-resize a textarea to fit its content ─────────────────────────────
+  function autoResizeTextarea(ta) {
+    ta.style.height = 'auto';
+    ta.style.height = Math.max(46, ta.scrollHeight) + 'px';
+  }
+
+  function autoResizeAll(container) {
+    container.querySelectorAll('.item-note-edit').forEach(ta => autoResizeTextarea(ta));
+  }
+
+  // ── Navigate to an annotation on the page ─────────────────────────────────
+  function navigateToAnnotation(annId, itemEl) {
+    // Brief flash in popup
+    if (itemEl) {
+      itemEl.classList.add('item-nav-flash');
+      setTimeout(() => itemEl.classList.remove('item-nav-flash'), 700);
+    }
+
+    chrome.storage.local.get({ annotations: [] }, r => {
+      const ann = r.annotations.find(a => a.id === annId);
+      if (!ann) return;
+
+      chrome.tabs.query({}, tabs => {
+        const matchingTab = tabs.find(t => t.url === ann.url);
+        if (matchingTab) {
+          chrome.tabs.update(matchingTab.id, { active: true });
+          if (matchingTab.windowId) chrome.windows.update(matchingTab.windowId, { focused: true });
+          setTimeout(() => {
+            chrome.tabs.sendMessage(matchingTab.id, { type: 'focusAnnotation', annId }).catch(() => {});
+          }, 250);
+        } else {
+          chrome.tabs.create({ url: ann.url });
+        }
+      });
+    });
+  }
+
+  function navigateToUrl(url) {
+    chrome.tabs.query({}, tabs => {
+      const matchingTab = tabs.find(t => t.url === url);
+      if (matchingTab) {
+        chrome.tabs.update(matchingTab.id, { active: true });
+        if (matchingTab.windowId) chrome.windows.update(matchingTab.windowId, { focused: true });
+      } else {
+        chrome.tabs.create({ url });
+      }
+    });
+  }
+
+  // ── Undo-clear banner ─────────────────────────────────────────────────────
+  function showClearUndoBanner(previousAnnotations, deletedAt) {
+    undoClearData = { annotations: previousAnnotations, deletedAt };
+    clearTimeout(undoBannerTimer);
+
+    clearUndoBanner.innerHTML = `
+      <span class="undo-banner-text">Annotations saved to history</span>
+      <button id="undo-clear-btn" class="undo-clear-btn">Undo</button>
+    `;
+    clearUndoBanner.style.display = 'flex';
+
+    document.getElementById('undo-clear-btn').addEventListener('click', () => {
+      if (!undoClearData) return;
+      const { annotations: prevAnns, deletedAt: ts } = undoClearData;
+      undoClearData = null;
+      hideClearUndoBanner();
+
+      chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
+        // Remove the cleared annotations from history by matching id + deletedAt
+        const restoredIds = new Set(prevAnns.map(a => a.id));
+        const newHist = r[HISTORY_KEY].filter(a => !(restoredIds.has(a.id) && a.deletedAt === ts));
+        isWritingFromPopup = true;
+        chrome.storage.local.set({ annotations: prevAnns, [HISTORY_KEY]: newHist }, () => {
+          isWritingFromPopup = false;
+          render(prevAnns);
+          chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+            if (tabs[0]) {
+              prevAnns.forEach(ann => {
+                chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
+              });
+            }
+          });
+        });
+      });
+    });
+
+    undoBannerTimer = setTimeout(hideClearUndoBanner, 5000);
+  }
+
+  function hideClearUndoBanner() {
+    clearTimeout(undoBannerTimer);
+    clearUndoBanner.style.display = 'none';
+    clearUndoBanner.innerHTML = '';
+  }
+
   // ── Render annotation list ─────────────────────────────────────────────────
   function render(anns) {
     badge.textContent = anns.length > 0 ? String(anns.length) : '';
@@ -402,8 +501,8 @@ document.addEventListener('DOMContentLoaded', () => {
     Object.entries(byUrl).forEach(([url, items]) => {
       html += `<div class="url-group">
         <div class="url-header">
-          <div class="url-label" title="${escHtml(url)}">${escHtml(url)}</div>
-          <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋</button>
+          <div class="url-label url-label--clickable" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
+          <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋 Copy group</button>
         </div>`;
       items.forEach(ann => {
         const sel = getSelector(ann);
@@ -411,15 +510,14 @@ document.addEventListener('DOMContentLoaded', () => {
         html += `
         <div class="item${isPageLevel ? ' item--page-level' : ''}">
           <div class="item-sel">
-            <code>${escHtml(sel)}</code>
-            <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋</button>
+            <code class="ann-code--clickable" data-nav-ann-id="${escHtml(ann.id)}" title="Click to navigate to this annotation">${escHtml(sel)}</code>
+            <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋 Copy</button>
             <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Delete annotation">✕</button>
           </div>
           <textarea
             class="item-note-edit"
             data-ann-id="${escHtml(ann.id)}"
             placeholder="Add a note…"
-            rows="2"
           >${escHtml(ann.comment || '')}</textarea>
         </div>`;
       });
@@ -428,8 +526,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     listEl.innerHTML = html;
 
+    // Auto-resize all textareas to fit their content
+    autoResizeAll(listEl);
+
     listEl.querySelectorAll('.item-note-edit').forEach(ta => {
-      ta.addEventListener('input', () => saveComment(ta.dataset.annId, ta.value));
+      ta.addEventListener('input', () => {
+        saveComment(ta.dataset.annId, ta.value);
+        autoResizeTextarea(ta);
+      });
     });
     listEl.querySelectorAll('.item-delete-btn').forEach(btn => {
       btn.addEventListener('click', () => deleteAnnotation(btn.dataset.annId));
@@ -446,6 +550,28 @@ document.addEventListener('DOMContentLoaded', () => {
       applySearch(searchInput.value.trim());
     }
   }
+
+  // ── Navigation click delegation on the main list ───────────────────────────
+  listEl.addEventListener('click', e => {
+    // Click on annotation code element → navigate to that annotation
+    const codeEl = e.target.closest('.ann-code--clickable');
+    if (codeEl && !e.target.closest('button')) {
+      const annId = codeEl.dataset.navAnnId;
+      if (annId) {
+        const item = codeEl.closest('.item');
+        navigateToAnnotation(annId, item);
+      }
+      return;
+    }
+
+    // Click on URL group label → navigate to that URL
+    const urlLabel = e.target.closest('.url-label--clickable');
+    if (urlLabel && !e.target.closest('button')) {
+      const url = urlLabel.dataset.navUrl;
+      if (url) navigateToUrl(url);
+      return;
+    }
+  });
 
   function load() {
     chrome.storage.local.get({ annotations: [] }, r => render(r.annotations));
@@ -508,15 +634,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Search ────────────────────────────────────────────────────────────────
+  // ── Search helpers ────────────────────────────────────────────────────────
+
+  // Returns the currently visible content panel to search over
+  function getSearchTargetPanel() {
+    return historyVisible ? historyEl : listEl;
+  }
 
   function openSearch() {
-    if (settingsVisible || historyVisible) return;
+    if (settingsVisible) return; // settings open: no search
     searchActive = true;
     searchBar.style.display = 'flex';
     searchBtn.classList.add('active');
     searchInput.focus();
     searchInput.select();
+    // Re-apply search to whatever panel is now visible
+    if (searchInput.value.trim()) applySearch(searchInput.value.trim());
   }
 
   function closeSearch() {
@@ -528,17 +661,22 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function clearSearchHighlights() {
-    listEl.querySelectorAll('.item').forEach(el => {
-      el.classList.remove('search-match', 'search-no-match', 'search-current');
-    });
-    // Restore code elements that were highlighted
-    listEl.querySelectorAll('code').forEach(codeEl => {
-      if (codeEl.querySelector('mark.search-hl')) {
-        codeEl.textContent = codeEl.textContent; // strips all child elements
-      }
-    });
-    listEl.querySelectorAll('.item-note-edit.search-note-match').forEach(ta => {
-      ta.classList.remove('search-note-match');
+    // Clear highlights from both panels
+    [listEl, historyEl].forEach(panel => {
+      panel.querySelectorAll('.item').forEach(el => {
+        el.classList.remove('search-match', 'search-no-match', 'search-current');
+      });
+      panel.querySelectorAll('code').forEach(codeEl => {
+        if (codeEl.querySelector('mark.search-hl')) {
+          codeEl.textContent = codeEl.textContent; // strips all child elements
+        }
+      });
+      panel.querySelectorAll('.item-note-edit.search-note-match').forEach(ta => {
+        ta.classList.remove('search-note-match');
+      });
+      panel.querySelectorAll('.hist-note.search-note-match').forEach(div => {
+        div.classList.remove('search-note-match');
+      });
     });
     searchMatches = [];
     if (searchCount) searchCount.textContent = '';
@@ -560,19 +698,31 @@ document.addEventListener('DOMContentLoaded', () => {
     const termLower = term.toLowerCase();
     searchMatches = [];
 
-    listEl.querySelectorAll('.item').forEach(item => {
+    const panel = getSearchTargetPanel();
+
+    panel.querySelectorAll('.item').forEach(item => {
       const codeEl   = item.querySelector('code');
-      const ta       = item.querySelector('.item-note-edit');
       const codeText = codeEl ? codeEl.textContent : '';
-      const noteText = ta ? ta.value : '';
       const codeMatch = codeText.toLowerCase().includes(termLower);
-      const noteMatch = noteText.toLowerCase().includes(termLower);
+
+      let noteMatch = false;
+      let noteEl    = null;
+
+      if (historyVisible) {
+        noteEl = item.querySelector('.hist-note');
+        const noteText = noteEl ? noteEl.textContent : '';
+        noteMatch = noteText.toLowerCase().includes(termLower);
+      } else {
+        noteEl = item.querySelector('.item-note-edit');
+        const noteText = noteEl ? noteEl.value : '';
+        noteMatch = noteText.toLowerCase().includes(termLower);
+      }
 
       if (codeMatch || noteMatch) {
         item.classList.add('search-match');
         searchMatches.push(item);
         if (codeMatch && codeEl) highlightCodeEl(codeEl, term);
-        if (noteMatch && ta) ta.classList.add('search-note-match');
+        if (noteMatch && noteEl) noteEl.classList.add('search-note-match');
       } else {
         item.classList.add('search-no-match');
       }
@@ -661,12 +811,12 @@ document.addEventListener('DOMContentLoaded', () => {
     historyVisible  = true;
     settingsVisible = false;
     if (restoreBanner) restoreBanner.style.display = 'none';
-    if (searchActive) closeSearch();
+    // Search stays active — it will search history items instead
     listEl.style.display      = 'none';
     footer.style.display      = 'none';
     settingsEl.style.display  = 'none';
     historyEl.style.display   = 'block';
-    settingsBtn.textContent   = '⚙';
+    settingsBtn.textContent   = '⚙️';
     settingsBtn.title         = 'Settings';
     settingsBtn.classList.remove('active');
     historyBtn.textContent    = '✕';
@@ -752,6 +902,11 @@ document.addEventListener('DOMContentLoaded', () => {
       historyEl.querySelectorAll('.hist-restore-btn').forEach(btn => {
         btn.addEventListener('click', () => restoreAnnotation(btn.dataset.annId, btn.dataset.deletedAt));
       });
+
+      // Re-apply search highlights if search is active
+      if (searchActive && searchInput && searchInput.value.trim()) {
+        applySearch(searchInput.value.trim());
+      }
     });
   }
 
@@ -767,7 +922,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (copyHist.length === 0) {
         historyEl.innerHTML = historyTabsHTML('copies') +
-          `<p class="empty-msg">No copy history yet.<br>Click "Copy All as Markdown" to record an output here.</p>`;
+          `<p class="empty-msg">No copy history yet.<br>Use the copy button to record an output here.</p>`;
         attachTabListeners();
         return;
       }
@@ -787,6 +942,11 @@ document.addEventListener('DOMContentLoaded', () => {
       historyEl.innerHTML = html;
       attachTabListeners();
       attachExternalLinks(historyEl);
+
+      // Re-apply search highlights if search is active
+      if (searchActive && searchInput && searchInput.value.trim()) {
+        applySearch(searchInput.value.trim());
+      }
     });
   }
 
@@ -797,7 +957,7 @@ document.addEventListener('DOMContentLoaded', () => {
     listEl.style.display    = '';
     historyBtn.textContent  = '🕐';
     historyBtn.title        = 'View annotation history';
-    load();
+    load(); // render() re-applies search to listEl automatically
   }
 
   historyBtn.addEventListener('click', () => {
@@ -828,7 +988,7 @@ document.addEventListener('DOMContentLoaded', () => {
     settingsEl.style.display = 'none';
     footer.style.display     = '';
     listEl.style.display     = '';
-    settingsBtn.textContent  = '⚙';
+    settingsBtn.textContent  = '⚙️';
     settingsBtn.title        = 'Settings';
     settingsBtn.classList.remove('active');
     load();
@@ -930,11 +1090,11 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="settings-value" id="sync-backup-status">Checking…</span>
         </div>
         <div class="settings-row">
-          <span class="settings-label">File backup</span>
+          <span class="settings-label">Local backup</span>
           <span class="settings-value" id="file-backup-status">Checking…</span>
         </div>
         <p class="settings-hint" style="margin-top:4px;">
-          ☁ Sync updates every time you annotate · 💾 File (<code style="font-size:10px;">annotator-backup.json</code>) overwrites in Downloads every 15 min
+          ☁ Sync updates every time you annotate · 💾 Local snapshot saved every 15 min
         </p>
         <div class="settings-row" style="justify-content:flex-end;margin-top:4px;">
           <button id="backup-now-btn" class="btn-history-action">⚡ Backup Now</button>
@@ -1119,7 +1279,7 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.storage.local.get({ [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [], annotations: [] }, r => {
         const data = {
           exported:          new Date().toISOString(),
-          version:           '1.3.0',
+          version:           '1.5.0',
           annotations:       r.annotations,
           annotationHistory: r[HISTORY_KEY],
           copyHistory:       r[COPY_HISTORY_KEY],
@@ -1265,48 +1425,105 @@ document.addEventListener('DOMContentLoaded', () => {
     else showSettings();
   });
 
-  // ── Dense Markdown copy ────────────────────────────────────────────────────
-  copyBtn.addEventListener('click', () => {
-    chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [] }, r => {
-      const anns = r.annotations.filter(a => a.comment && a.comment.trim());
+  // ── Markdown generation helper ─────────────────────────────────────────────
+  function buildMarkdown(annotations, settings) {
+    const anns = annotations.filter(a => a.comment && a.comment.trim());
+    if (anns.length === 0) return null;
 
-      if (anns.length === 0) {
+    const byUrl = {};
+    anns.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
+    const urls = Object.keys(byUrl);
+
+    let md = '';
+    if (urls.length === 1) {
+      md += `## ${urls[0]}\n`;
+      byUrl[urls[0]].forEach((ann, i) => { md += formatLine(i + 1, ann); });
+    } else {
+      urls.forEach((url, ui) => {
+        if (ui > 0) md += '\n';
+        md += `### ${url}\n`;
+        byUrl[url].forEach((ann, i) => { md += formatLine(i + 1, ann); });
+      });
+    }
+
+    let finalMd = md.trim();
+    if (isPremium() && settings) {
+      if (settings.prependText && settings.prependText.trim()) finalMd = settings.prependText.trim() + '\n\n' + finalMd;
+      if (settings.appendText  && settings.appendText.trim())  finalMd = finalMd + '\n\n' + settings.appendText.trim();
+    }
+    return { md: finalMd, count: anns.length };
+  }
+
+  // ── Cut All (left-click: copy + clear) ───────────────────────────────────
+  copyBtn.addEventListener('click', () => {
+    chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [], [HISTORY_KEY]: [] }, r => {
+      if (r.annotations.length === 0) {
         alert('No annotations with notes to copy yet.');
         return;
       }
 
-      const byUrl = {};
-      anns.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
-      const urls = Object.keys(byUrl);
-
-      let md = '';
-      if (urls.length === 1) {
-        md += `## ${urls[0]}\n`;
-        byUrl[urls[0]].forEach((ann, i) => { md += formatLine(i + 1, ann); });
-      } else {
-        urls.forEach((url, ui) => {
-          if (ui > 0) md += '\n';
-          md += `### ${url}\n`;
-          byUrl[url].forEach((ann, i) => { md += formatLine(i + 1, ann); });
-        });
-      }
-
-      // [PREMIUM] Apply prepend / append text from settings
       loadSettings(s => {
-        let finalMd = md.trim();
-        if (isPremium()) {
-          if (s.prependText && s.prependText.trim()) finalMd = s.prependText.trim() + '\n\n' + finalMd;
-          if (s.appendText  && s.appendText.trim())  finalMd = finalMd + '\n\n' + s.appendText.trim();
+        const result = buildMarkdown(r.annotations, s);
+        if (!result) {
+          alert('No annotations with notes to copy yet.');
+          return;
         }
 
-        navigator.clipboard.writeText(finalMd).then(() => {
+        navigator.clipboard.writeText(result.md).then(() => {
+          // Add to copy history log
           const copyHist = r[COPY_HISTORY_KEY];
-          copyHist.push({ timestamp: new Date().toISOString(), output: finalMd, count: anns.length });
+          copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
+
+          // Move all annotations to history (the "cut" part)
+          const now  = new Date().toISOString();
+          const hist = r[HISTORY_KEY];
+          r.annotations.forEach(ann => hist.push({ ...ann, deletedAt: now }));
+
+          isWritingFromPopup = true;
+          chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist, [COPY_HISTORY_KEY]: copyHist }, () => {
+            enforceHistoryLimitInStorage(() => {
+              isWritingFromPopup = false;
+              render([]);
+              // Notify content script to remove chips
+              chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+                if (tabs[0]) {
+                  r.annotations.forEach(ann => {
+                    chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId: ann.id, xpath: ann.xpath }).catch(() => {});
+                  });
+                }
+              });
+              // Show undo banner
+              showClearUndoBanner(r.annotations, now);
+            });
+          });
+
+          // Brief button feedback
+          const origHtml = copyBtn.innerHTML;
+          copyBtn.innerHTML = '<span>✅ Cut!</span>';
+          setTimeout(() => (copyBtn.innerHTML = origHtml), 1500);
+        }).catch(() => alert('Clipboard write failed. Try again.'));
+      });
+    });
+  });
+
+  // Right-click on cut button: copy only (no clear)
+  copyBtn.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [] }, r => {
+      loadSettings(s => {
+        const result = buildMarkdown(r.annotations, s);
+        if (!result) {
+          alert('No annotations with notes to copy yet.');
+          return;
+        }
+        navigator.clipboard.writeText(result.md).then(() => {
+          const copyHist = r[COPY_HISTORY_KEY];
+          copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
           chrome.storage.local.set({ [COPY_HISTORY_KEY]: copyHist });
 
-          const orig = copyBtn.textContent;
-          copyBtn.textContent = '✅ Copied!';
-          setTimeout(() => (copyBtn.textContent = orig), 1500);
+          const origHtml = copyBtn.innerHTML;
+          copyBtn.innerHTML = '<span>✅ Copied!</span>';
+          setTimeout(() => (copyBtn.innerHTML = origHtml), 1500);
         }).catch(() => alert('Clipboard write failed. Try again.'));
       });
     });
@@ -1325,23 +1542,34 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${n}. \`${sel}\` | \`${ann.xpath}\` → ${ann.comment.trim()}\n`;
   }
 
-  // ── Clear All ──────────────────────────────────────────────────────────────
+  // ── Clear All (undo banner instead of confirm dialog) ─────────────────────
   clearBtn.addEventListener('click', () => {
-    if (confirm('Clear all annotations? They will be saved to history.')) {
-      chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
-        const anns = r.annotations;
-        const hist = r[HISTORY_KEY];
-        const now  = new Date().toISOString();
-        anns.forEach(ann => hist.push({ ...ann, deletedAt: now }));
-        isWritingFromPopup = true;
-        chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist }, () => {
-          enforceHistoryLimitInStorage(() => {
-            isWritingFromPopup = false;
-            load();
+    chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
+      const anns = r.annotations;
+      if (anns.length === 0) return; // nothing to clear
+
+      const hist = r[HISTORY_KEY];
+      const now  = new Date().toISOString();
+      anns.forEach(ann => hist.push({ ...ann, deletedAt: now }));
+
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist }, () => {
+        enforceHistoryLimitInStorage(() => {
+          isWritingFromPopup = false;
+          render([]);
+          // Notify content script to remove chips
+          chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+            if (tabs[0]) {
+              anns.forEach(ann => {
+                chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId: ann.id, xpath: ann.xpath }).catch(() => {});
+              });
+            }
           });
+          // Show undo banner instead of confirm dialog
+          showClearUndoBanner(anns, now);
         });
       });
-    }
+    });
   });
 
   // ── External link handler ──────────────────────────────────────────────────

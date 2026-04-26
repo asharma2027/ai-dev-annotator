@@ -1,4 +1,4 @@
-# Website Dev Annotator: AI Notes & Markdown Export
+# AI Website Dev Annotator: AI Notes & Markdown Export
 
 > **One-sentence pitch:** Alt + Right-Click any web element to annotate it, then export all your notes as clean Markdown for AI tools like Cursor, Claude, and ChatGPT.
 
@@ -6,7 +6,7 @@
 
 ## What it does
 
-Website Dev Annotator lets you attach sticky-note annotations directly to HTML elements on any web page. When you're done, one click copies everything as structured Markdown : ready to paste into any AI coding assistant, bug tracker, or documentation tool.
+AI Website Dev Annotator lets you attach sticky-note annotations directly to HTML elements on any web page. When you're done, one click copies everything as structured Markdown : ready to paste into any AI coding assistant, bug tracker, or documentation tool.
 
 **Use cases:**
 - Briefing AI tools (Cursor, Claude, ChatGPT) about which elements need changes and why
@@ -21,13 +21,18 @@ Website Dev Annotator lets you attach sticky-note annotations directly to HTML e
 ### Free
 - **Alt + Right-Click** gesture annotates any element : captures tag, ID, classes, XPath, URL, and your note
 - Unlimited annotations, grouped by page URL in the popup
-- Per-row inline note editing (auto-saves as you type)
+- Per-row inline note editing with **auto-expanding textboxes** (auto-saves as you type)
 - Per-row delete button : moves annotation to history rather than erasing it
-- **Copy All as Markdown** : one-click export of all notes in a clean, AI-ready format
+- **✂ Cut All** : one-click export + clear of all notes in a clean, AI-ready format
+  - *Right-click Cut All* to copy only (without clearing)
 - **🕐 History view** : last 30 deleted annotations with timestamps, including restore
-- **Copy Log** : last 10 "Copy All as Markdown" events with full output preview
+- **Copy Log** : last 10 copy events with full output preview
+- **Search** (⌘/Ctrl+F) : works over both the main annotation list and the history panel
+- Click any annotation selector (pink text) or URL group (blue text) to navigate directly to the annotated element on the page
+- **Clear All** shows an undo banner instead of a confirmation dialog — click Undo within 5 seconds to restore
 - Annotations persist in `chrome.storage.local` across page reloads and browser restarts
 - Inline panel on the page : edit or delete annotations without opening the popup
+- Auto-backup to `chrome.storage.sync` (cloud) and a local in-browser snapshot every 15 min — no download prompts
 
 ### Premium : $9.99 one-time
 - 🌙 **Dark mode** : a polished dark theme for the popup
@@ -43,9 +48,10 @@ Website Dev Annotator lets you attach sticky-note annotations directly to HTML e
 
 1. **Annotate** : On any page, hold `Alt` (or `Option` on Mac) and **Right-Click** any element. A panel opens where you type a note. It auto-saves as you type.
 2. **Review** : Click the extension icon in the toolbar to see all saved annotations grouped by page URL. Notes are editable inline.
-3. **Copy** : Click **Copy All as Markdown** to copy a clean, structured payload to the clipboard.
-4. **History** : Click 🕐 to browse past annotations, including deleted ones, with timestamps. Click `+` to restore any entry.
-5. **Settings** : Click ⚙ to toggle dark mode (Premium), configure prepend/append text (Premium), or enter a license key.
+3. **Navigate** : Click any pink annotation selector or blue URL group label to jump directly to that element on the page — the annotation panel opens automatically.
+4. **Cut** : Click **✂ Cut All** to copy a clean, structured Markdown payload to the clipboard and clear the current list. Right-click **✂ Cut All** to copy only, without clearing. An undo banner appears briefly so you can reverse the clear.
+5. **History** : Click 🕐 to browse past annotations, including deleted ones, with timestamps. Click `+` to restore any entry. Search works inside the history view too (⌘/Ctrl+F).
+6. **Settings** : Click ⚙️ to toggle dark mode (Premium), configure prepend/append text (Premium), or enter a license key.
 
 ---
 
@@ -66,7 +72,7 @@ Paste directly into Cursor's chat, Claude, or any AI tool : it already knows whi
 
 1. [Purchase a license key on Gumroad](https://arjunsharma10.gumroad.com/l/websiteDevAnnotator)
 2. Gumroad will email you a license key
-3. Open the extension popup → click ⚙ (Settings) → paste your key in the **Premium** section → click **Activate**
+3. Open the extension popup → click ⚙️ (Settings) → paste your key in the **Premium** section → click **Activate**
 4. Your license is stored locally and validated against Gumroad's API
 
 > **Keep your license key safe** : it's stored in `chrome.storage.local`. If you clear extension data, you'll need to re-enter it (the key itself remains valid indefinitely).
@@ -75,7 +81,7 @@ Paste directly into Cursor's chat, Claude, or any AI tool : it already knows whi
 
 ## Privacy
 
-Website Dev Annotator stores all annotation data **locally** in your browser via `chrome.storage.local`. No data is sent to any server unless you activate a license key, at which point only the key is sent to Gumroad's API to verify validity. No browsing history, page content, or personal data is ever collected or transmitted.
+AI Website Dev Annotator stores all annotation data **locally** in your browser via `chrome.storage.local`. No data is sent to any server unless you activate a license key, at which point only the key is sent to Gumroad's API to verify validity. No browsing history, page content, or personal data is ever collected or transmitted.
 
 ---
 
@@ -101,16 +107,17 @@ ai-dev-annotator/
 |-----|----------|
 | `annotations` | Active (non-deleted) annotations |
 | `annotationHistory` | Past annotations with `deletedAt` timestamp |
-| `copyHistory` | Log of every "Copy All as Markdown" event |
+| `copyHistory` | Log of every copy event |
 | `annotatorSettings` | User preferences (dark mode, prepend/append text) |
 | `license` | Validated license key info (premium) |
+| `_localBackupSnapshot` | Latest local in-browser backup snapshot |
 
 ---
 
 ## Source code
 
 This extension is fully open source. You can review all code at:
-**[[https://github.com/asharma2027/ai-dev-annotator/tree/production](https://github.com/asharma2027/ai-dev-annotator/tree/production)]**
+**[[https://github.com/asharma2027/ai-dev-annotator/tree/main](https://github.com/asharma2027/ai-dev-annotator/tree/main)]**
 
 ---
 

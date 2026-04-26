@@ -1,4 +1,4 @@
-/* styles.css : Dev Annotator popup UI */
+/* styles.css : AI Website Dev Annotator popup UI */
 
 /* ── CSS custom properties (light theme defaults) ────────────────────────── */
 :root {
@@ -67,15 +67,18 @@ body {
 .header {
   background: var(--header-bg);
   color: #fff;
-  padding: 12px 16px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .header h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .count-badge {
   background: rgba(255,255,255,0.25);
@@ -88,22 +91,50 @@ body {
   text-align: center;
 }
 
+/* ── Header icon buttons — all three share the same dimensions ───────────── */
 .header-icon-btn {
   flex: 0 0 auto;
   background: rgba(255,255,255,0.18);
   color: #fff;
   border: 1px solid rgba(255,255,255,0.35);
   border-radius: 5px;
-  padding: 3px 8px;
+  /* Fixed dimensions so settings / search / history are all the same size */
+  min-width: 34px;
+  min-height: 34px;
+  padding: 2px 6px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
-  line-height: 1.4;
+  line-height: 1.2;
+  /* Stack icon + optional hint vertically */
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
 }
 .header-icon-btn:hover,
 .header-icon-btn.active {
   background: rgba(255,255,255,0.32);
+}
+
+/* Settings gear gets a larger font-size for visual parity with the emojis */
+#settings-btn {
+  font-size: 16px;
+}
+
+/* Small shortcut hint text inside the search button */
+.header-btn-hint {
+  font-size: 8px;
+  font-weight: 500;
+  opacity: 0.8;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  line-height: 1;
+}
+.header-btn-icon {
+  line-height: 1;
 }
 
 /* ── Search bar (Google Docs-style) ──────────────────────────────────────── */
@@ -170,6 +201,41 @@ body {
   color: var(--text);
 }
 
+/* ── Undo-clear banner ───────────────────────────────────────────────────── */
+.clear-undo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #ecfdf5;
+  border-bottom: 1px solid #6ee7b7;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #065f46;
+}
+[data-theme="dark"] .clear-undo-banner {
+  background: #064e3b;
+  border-bottom-color: #059669;
+  color: #a7f3d0;
+}
+.undo-banner-text {
+  flex: 1;
+  font-weight: 500;
+}
+.undo-clear-btn {
+  flex: 0 0 auto;
+  background: #059669;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 4px 10px;
+  font: 600 11px/1.4 system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  transition: background 0.12s;
+  white-space: nowrap;
+}
+.undo-clear-btn:hover { background: #047857; }
+
 /* ── Main panels ─────────────────────────────────────────────────────────── */
 #annotations-list,
 #history-panel,
@@ -195,7 +261,7 @@ body {
 .url-header {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 6px;
 }
@@ -214,25 +280,36 @@ body {
   padding: 4px 0 5px;
 }
 
-/* Copy-group button: subtle icon next to the URL */
+/* Clickable URL label */
+.url-label--clickable {
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.url-label--clickable:hover {
+  opacity: 0.75;
+  text-decoration: underline;
+}
+
+/* Copy-group button: visible labeled pill */
 .url-copy-btn {
   flex: 0 0 auto;
-  background: none;
-  border: none;
+  background: var(--section-bg);
+  border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 12px;
-  padding: 2px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
   cursor: pointer;
-  border-radius: 3px;
-  opacity: 0.45;
-  line-height: 1;
-  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  border-radius: 4px;
+  white-space: nowrap;
+  line-height: 1.5;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
   margin-bottom: 3px;
 }
 .url-copy-btn:hover {
-  opacity: 1;
   color: var(--url-color);
   background: rgba(37,99,235,0.08);
+  border-color: rgba(37,99,235,0.3);
 }
 
 /* ── Annotation card ─────────────────────────────────────────────────────── */
@@ -252,6 +329,15 @@ body {
   border-left: 3px solid #3b82f6;
 }
 
+/* Navigation flash: brief yellow highlight when user clicks to navigate */
+.item-nav-flash {
+  animation: nav-flash 0.7s ease-out;
+}
+@keyframes nav-flash {
+  0%   { background: #fef9c3; box-shadow: 0 0 0 2px #facc15; }
+  100% { background: var(--surface); box-shadow: none; }
+}
+
 .item-sel {
   display: flex;
   align-items: center;
@@ -261,27 +347,32 @@ body {
 }
 .item-sel code { flex: 1; min-width: 0; }
 
-/* Copy-annotation button: subtle, reveals on hover */
+/* Clickable annotation code element */
+.ann-code--clickable {
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.ann-code--clickable:hover {
+  opacity: 0.75;
+  text-decoration: underline;
+}
+
+/* Copy-annotation button: labeled, always visible */
 .item-copy-btn {
   flex: 0 0 auto;
-  background: none;
-  border: 1px solid transparent;
-  color: #9ca3af;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 5px;
+  background: var(--section-bg);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
   border-radius: 4px;
   cursor: pointer;
-  line-height: 1;
-  opacity: 0.35;
-  transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
-}
-.item:hover .item-copy-btn,
-.item-copy-btn:focus {
-  opacity: 1;
+  line-height: 1.5;
+  white-space: nowrap;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .item-copy-btn:hover {
-  opacity: 1;
   color: #2563eb;
   background: #eff6ff;
   border-color: #bfdbfe;
@@ -318,7 +409,8 @@ body {
   font: 12px/1.5 system-ui, -apple-system, sans-serif;
   color: var(--text-secondary);
   background: var(--textarea-bg);
-  resize: vertical;
+  resize: none;
+  overflow: hidden;
   box-sizing: border-box;
   outline: none;
   transition: border-color 0.12s, box-shadow 0.12s, background 0.2s;
@@ -368,6 +460,12 @@ mark.search-hl {
 
 /* Textarea whose value contains a match gets an amber border */
 .item-note-edit.search-note-match {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(251,191,36,0.2);
+}
+
+/* History note div that contains a match */
+.hist-note.search-note-match {
   border-color: #f59e0b;
   box-shadow: 0 0 0 2px rgba(251,191,36,0.2);
 }
@@ -432,6 +530,8 @@ mark.search-hl {
   border-radius: 4px;
   padding: 4px 7px;
   transition: background 0.2s;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ── History: cap notice ─────────────────────────────────────────────────── */
@@ -855,6 +955,24 @@ button {
   font-size: 12.5px;
   transition: background 0.15s;
 }
+
+/* Cut All button: flex-column for icon text + hint text */
+.cut-btn {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1.2;
+  padding: 6px 6px !important;
+}
+.cut-hint {
+  font-size: 9px;
+  font-weight: 400;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
 #copy-btn  { background: #2563eb; color: #fff; }
 #copy-btn:hover  { background: #1d4ed8; }
 #clear-btn { background: #fee2e2; color: #dc2626; }

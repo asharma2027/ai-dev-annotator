@@ -1,4 +1,4 @@
-// content.js : Website Dev Annotator
+// content.js : AI Website Dev Annotator
 // Injected into every page. Hold your configured modifier + Right-Click any
 // element to annotate it. Notes auto-save in real-time and persist across
 // page reloads.
@@ -651,6 +651,37 @@ chrome.runtime.onMessage.addListener((msg) => {
       const el = resolveXPath(ann.xpath);
       if (el) injectChip(el, ann.id, ann.comment || '');
     }
+  }
+
+  if (msg.type === 'focusAnnotation') {
+    const { annId } = msg;
+    getAll(anns => {
+      const ann = anns.find(a => a.id === annId);
+      if (!ann) return;
+
+      // Find and open the chip panel
+      const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
+      if (chip) {
+        chip.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        openPanel(chip, annId);
+      }
+
+      // Also flash + scroll to the annotated element itself
+      if (!ann.pageLevel && ann.xpath && ann.xpath !== 'body') {
+        const el = resolveXPath(ann.xpath);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const prevOutline     = el.style.outline;
+          const prevTransition  = el.style.transition;
+          el.style.transition   = 'outline 0.15s';
+          el.style.outline      = '3px solid #f59e0b';
+          setTimeout(() => {
+            el.style.outline    = prevOutline;
+            el.style.transition = prevTransition;
+          }, 2000);
+        }
+      }
+    });
   }
 });
 

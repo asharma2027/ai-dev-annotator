@@ -1,14 +1,13 @@
-// background.js : Website Dev Annotator Service Worker
+// background.js : AI Website Dev Annotator Service Worker
 // Runs silently in the background to keep two independent backup layers in sync:
 //   1. chrome.storage.sync  – cloud backup tied to your Google account, not the extension install
-//   2. annotator-backup.json in Downloads – true disk backup, survives everything
+//   2. chrome.storage.local snapshot – local JSON backup, survives browser restarts
 
 const BACKUP_ALARM    = 'annotatorAutoBackup';
-const BACKUP_INTERVAL = 15;   // minutes between disk (file) backups
-const BACKUP_FILENAME = 'annotator-backup.json';
+const BACKUP_INTERVAL = 15;   // minutes between local snapshot backups
 const SYNC_PREFIX     = 'ann_sync_';
 const SYNC_CHUNK_SIZE = 7000; // chars per chunk — safely under chrome.storage.sync's 8 192-byte item limit
-const VERSION         = '1.4.0';
+const VERSION         = '1.5.0';
 
 // ── Alarm setup ────────────────────────────────────────────────────────────
 function setupAlarm() {
@@ -33,7 +32,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
 function performBackup() {
   chrome.storage.local.get(null, localData => {
     writeToSyncStorage(localData.annotations || []);
-    writeToFile(localData);
+    writeToLocalSnapshot(localData);
   });
 }
 
@@ -76,10 +75,11 @@ function writeToSyncStorage(annotations) {
   }
 }
 
-// ── Write to disk via chrome.downloads ────────────────────────────────────
-// Uses conflictAction:'overwrite' so the same file in Downloads is silently
-// replaced each time — no extra files accumulate.
-function writeToFile(localData) {
+// ── Write a local JSON snapshot to chrome.storage.local ───────────────────
+// Stores a complete backup snapshot under _localBackupSnapshot without any
+// download prompt — the data stays in the browser's own storage.
+// Users can export this data at any time via Settings → Export.
+function writeToLocalSnapshot(localData) {
   const backup = {
     _type:    'annotator-backup',
     _version: VERSION,
@@ -90,25 +90,15 @@ function writeToFile(localData) {
     annotatorSettings: localData.annotatorSettings || {},
   };
 
-  const json    = JSON.stringify(backup, null, 2);
-  // Use a data URL — works from service workers (no DOM/Blob required)
-  const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(json);
-
-  chrome.downloads.download({
-    url:            dataUrl,
-    filename:       BACKUP_FILENAME,
-    conflictAction: 'overwrite',
-    saveAs:         false,
-  }, downloadId => {
+  chrome.storage.local.set({
+    _localBackupSnapshot: backup,
+    _lastFileBackup:      new Date().toISOString(),
+    _fileBackupError:     null,
+  }, () => {
     if (chrome.runtime.lastError) {
-      console.warn('[Annotator] File backup failed:', chrome.runtime.lastError.message);
+      console.warn('[Annotator] Local snapshot backup failed:', chrome.runtime.lastError.message);
       chrome.storage.local.set({ _fileBackupError: chrome.runtime.lastError.message });
-      return;
     }
-    chrome.storage.local.set({
-      _lastFileBackup: new Date().toISOString(),
-      _fileBackupError: null,
-    });
   });
 }
 
