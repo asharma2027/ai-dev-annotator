@@ -156,6 +156,33 @@ document.addEventListener('DOMContentLoaded', () => {
   let undoClearData   = null; // { annotations: [], deletedAt: string }
   let undoBannerTimer = null;
 
+  // ── Multi-tab DOM sync helpers ───────────────────────────────────────────
+  // Annotation chip state must stay consistent across every open tab and window,
+  // not just the tab that happens to be active when the popup is open.
+  //
+  // broadcastRemove: safe to send to ALL tabs — the content script ignores the
+  //   message when it finds no matching chip, so non-matching pages are no-ops.
+  // broadcastRestore: scoped to the annotation's own URL — we only want to
+  //   inject a chip on pages that are actually showing that URL.
+
+  function broadcastRemove(annId, xpath) {
+    chrome.tabs.query({}, tabs => {
+      tabs.forEach(tab =>
+        chrome.tabs.sendMessage(tab.id, { type: 'removeAnnotation', annId, xpath }).catch(() => {})
+      );
+    });
+  }
+
+  function broadcastRestore(ann) {
+    chrome.tabs.query({}, tabs => {
+      tabs
+        .filter(tab => tab.url === ann.url)
+        .forEach(tab =>
+          chrome.tabs.sendMessage(tab.id, { type: 'restoreAnnotation', ann }).catch(() => {})
+        );
+    });
+  }
+
   // ─── Compression / serialization helpers ─────────────────────────────────
   // Pre-process a payload to make it as small as possible BEFORE compression:
   //   - drop null/undefined/empty fields
@@ -529,11 +556,7 @@ document.addEventListener('DOMContentLoaded', () => {
         enforceHistoryLimitInStorage(() => {
           isWritingFromPopup = false;
           render(remaining);
-          if (ann) {
-            chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-              if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId, xpath: ann.xpath }).catch(() => {});
-            });
-          }
+          if (ann) broadcastRemove(annId, ann.xpath);
         });
       });
     });
@@ -597,9 +620,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       chrome.storage.local.set({ annotations: newAnns, [HISTORY_KEY]: newHist }, () => {
         showHistory();
-        chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-          if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
-        });
+        broadcastRestore(ann);
       });
     });
   }
@@ -699,13 +720,7 @@ document.addEventListener('DOMContentLoaded', () => {
           chrome.storage.local.set({ annotations: prevAnns, [SAVED_LATER_KEY]: newSaved }, () => {
             isWritingFromPopup = false;
             render(prevAnns);
-            chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-              if (tabs[0]) {
-                prevAnns.forEach(ann => {
-                  chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
-                });
-              }
-            });
+            prevAnns.forEach(ann => broadcastRestore(ann));
           });
         });
         return;
@@ -719,13 +734,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.set({ annotations: prevAnns, [HISTORY_KEY]: newHist }, () => {
           isWritingFromPopup = false;
           render(prevAnns);
-          chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-            if (tabs[0]) {
-              prevAnns.forEach(ann => {
-                chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
-              });
-            }
-          });
+          prevAnns.forEach(ann => broadcastRestore(ann));
         });
       });
     });
@@ -884,13 +893,7 @@ document.addEventListener('DOMContentLoaded', () => {
         restoreBanner.style.display = 'none';
         render(annotations);
         // Notify active tab so chips get re-injected
-        chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-          if (tabs[0]) {
-            annotations.forEach(ann => {
-              chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
-            });
-          }
-        });
+        annotations.forEach(ann => broadcastRestore(ann));
       });
     });
 
@@ -1241,13 +1244,7 @@ document.addEventListener('DOMContentLoaded', () => {
       isWritingFromPopup = true;
       chrome.storage.local.set({ annotations: merged, [SAVED_LATER_KEY]: newSaved }, () => {
         isWritingFromPopup = false;
-        chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-          if (tabs[0]) {
-            toAdd.forEach(ann => {
-              chrome.tabs.sendMessage(tabs[0].id, { type: 'restoreAnnotation', ann }).catch(() => {});
-            });
-          }
-        });
+        toAdd.forEach(ann => broadcastRestore(ann));
         renderSavedForLater();
       });
     });
@@ -1935,13 +1932,7 @@ document.addEventListener('DOMContentLoaded', () => {
               isWritingFromPopup = false;
               render([]);
               // Notify content script to remove chips
-              chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-                if (tabs[0]) {
-                  r.annotations.forEach(ann => {
-                    chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId: ann.id, xpath: ann.xpath }).catch(() => {});
-                  });
-                }
-              });
+              r.annotations.forEach(ann => broadcastRemove(ann.id, ann.xpath));
               // Show undo banner
               showClearUndoBanner(r.annotations, now);
             });
@@ -2008,13 +1999,7 @@ document.addEventListener('DOMContentLoaded', () => {
           isWritingFromPopup = false;
           render([]);
           // Notify content script to remove chips
-          chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-            if (tabs[0]) {
-              anns.forEach(ann => {
-                chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId: ann.id, xpath: ann.xpath }).catch(() => {});
-              });
-            }
-          });
+          anns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
           // Show undo banner instead of confirm dialog
           showClearUndoBanner(anns, now, 'cleared');
         });
@@ -2043,13 +2028,7 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.storage.local.set({ annotations: [], [SAVED_LATER_KEY]: newSaved }, () => {
         isWritingFromPopup = false;
         render([]);
-        chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-          if (tabs[0]) {
-            anns.forEach(ann => {
-              chrome.tabs.sendMessage(tabs[0].id, { type: 'removeAnnotation', annId: ann.id, xpath: ann.xpath }).catch(() => {});
-            });
-          }
-        });
+        anns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
         showClearUndoBanner(anns, now, 'saved', setId);
       });
     });
