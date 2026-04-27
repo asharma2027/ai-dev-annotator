@@ -1221,3 +1221,65 @@ button {
   font-size: 10px;
   margin-right: 5px;
 }
+
+/* ── Change 14: toast + confirm banner styles ─────────────────────────── */
+.ann-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translate(-50%, 8px);
+  background: #1f1f23;
+  color: #fff;
+  font: 13px/1.4 system-ui, -apple-system, Segoe UI, sans-serif;
+  padding: 8px 14px;
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.25);
+  opacity: 0;
+  transition: opacity 160ms ease, transform 160ms ease;
+  z-index: 2147483647;
+  pointer-events: none;
+  max-width: calc(100% - 32px);
+  text-align: center;
+}
+.ann-toast--in {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.ann-toast--error  { background: #b3261e; }
+.ann-toast--ok     { background: #1b5e20; }
+
+.ann-confirm-banner {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #2a2a30;
+  color: #fff;
+  border-bottom: 1px solid #3a3a42;
+  font: 13px/1.4 system-ui, sans-serif;
+  z-index: 50;
+}
+.ann-confirm-msg     { flex: 1; }
+.ann-confirm-actions { display: flex; gap: 6px; }
+.ann-confirm-actions button {
+  font: inherit;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #4a4a52;
+  background: #1f1f23;
+  color: #fff;
+  cursor: pointer;
+}
+.ann-confirm-actions .ann-confirm-ok {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+.ann-confirm-actions .ann-confirm-ok:hover { background: #1d4ed8; }
+
+@media (prefers-color-scheme: light) {
+  .ann-toast            { background: #111; }
+  .ann-confirm-banner   { background: #f5f5f7; color: #111; border-bottom-color: #d8d8de; }
+  .ann-confirm-actions button { background: #fff; color: #111; border-color: #c8c8d0; }
+}

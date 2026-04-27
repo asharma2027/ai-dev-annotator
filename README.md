@@ -6,13 +6,19 @@
 
 ## What it does
 
-AI Website Dev Annotator lets you attach sticky-note annotations directly to HTML elements on any web page. When you're done, one click copies everything as structured Markdown : ready to paste into any AI coding assistant, bug tracker, or documentation tool.
+AI Website Dev Annotator is a Chrome extension built for developers who
+use AI coding assistants (Cursor, Claude Code, Copilot, ChatGPT, v0). You
+annotate any element on any website — bug, copy fix, layout note, design
+nit — then export the whole list as clean Markdown that you paste
+straight into your AI agent. Every annotation captures a stable CSS
+selector, the element’s text snippet, your note, and the URL, so the
+model has enough context to find and fix the issue without a screenshot.
 
-**Use cases:**
-- Briefing AI tools (Cursor, Claude, ChatGPT) about which elements need changes and why
-- Writing QA bug reports with exact element selectors
-- Taking design-review notes directly on a live site
-- Annotating UI for handoff or code review
+Typical flow:
+1. Open the site you’re reviewing.
+2. Click an element, type a note, repeat.
+3. Hit “Copy as Markdown” and paste into your AI assistant.
+4. The agent ships a PR.
 
 ---
 
@@ -46,7 +52,9 @@ AI Website Dev Annotator lets you attach sticky-note annotations directly to HTM
 
 ## How it works
 
-1. **Annotate** : On any page, hold `Alt` (or `Option` on Mac) and **Right-Click** any element. A panel opens where you type a note. It auto-saves as you type.
+1. Click the toolbar icon (or press `Alt+Shift+A`) and pick “Annotate”.
+   Click any element on the page, type a note, and press Esc or click
+   outside to save. Empty notes are auto-discarded.
 2. **Review** : Click the extension icon in the toolbar to see all saved annotations grouped by page URL. Notes are editable inline.
 3. **Navigate** : Click any pink annotation selector or blue URL group label to jump directly to that element on the page — the annotation panel opens automatically.
 4. **Cut** : Click **✂ Cut All** to copy a clean, structured Markdown payload to the clipboard and clear the current list. Right-click **✂ Cut All** to copy only, without clearing. An undo banner appears briefly so you can reverse the clear.
@@ -81,7 +89,28 @@ Paste directly into Cursor's chat, Claude, or any AI tool : it already knows whi
 
 ## Privacy
 
-AI Website Dev Annotator stores all annotation data **locally** in your browser via `chrome.storage.local`. No data is sent to any server unless you activate a license key, at which point only the key is sent to Gumroad's API to verify validity. No browsing history, page content, or personal data is ever collected or transmitted.
+AI Website Dev Annotator does not send your data anywhere. There is no
+server, no analytics, and no telemetry.
+
+| Data                              | Where it lives                              | Leaves your device?                                  |
+|-----------------------------------|---------------------------------------------|------------------------------------------------------|
+| Annotations, notes, element text  | `chrome.storage.local`                      | No.                                                  |
+| Copy / annotation history         | `chrome.storage.local`                      | No.                                                  |
+| Settings (theme, shortcuts, etc.) | `chrome.storage.local`                      | No.                                                  |
+| Auto-Backup snapshot (optional)   | `chrome.storage.sync`                       | Synced through your Google Account to other Chromes. |
+| License / receipt info            | `chrome.storage.local`                      | No.                                                  |
+
+Auto-Backup is opt-in. When enabled, a compressed bundle of your
+annotations is mirrored into `chrome.storage.sync` so a fresh Chrome
+install signed into the same Google account restores your work. Google
+encrypts Sync data in transit and at rest, and end-to-end if you set a
+Sync passphrase. Turn Auto-Backup off in Settings to keep everything
+strictly on this device.
+
+The extension reads the page’s DOM only when you actively annotate, and
+only to compute a stable CSS selector and capture up to 240 characters
+of the clicked element’s text. It does not read passwords, form values,
+cookies, or storage.
 
 ---
 
@@ -118,3 +147,28 @@ ai-dev-annotator/
 
 - ☕ **Ko-fi:** [ko-fi.com/asharma2027](https://ko-fi.com/asharma2027) : buy me a coffee if this saves you time
 - 💼 **Hire me:** [linkedin.com/in/asharma2027](https://www.linkedin.com/in/asharma2027/) : available for freelance and full-time opportunities
+
+---
+
+## Known limitations
+
+- **iframes:** Annotations live in the top frame only. If the element
+  you click is inside an embedded iframe (Stripe Checkout, Calendly,
+  YouTube embeds, Typeform, embedded Notion / Figma), the chip will
+  attach to the iframe container rather than the element inside it.
+  Open the embedded page in its own tab to annotate inner elements.
+- **Selectors on heavily dynamic SPAs:** Some apps regenerate class
+  names on every render (Tailwind JIT in dev mode, CSS-in-JS hash
+  classes). The extension prefers `id`, `data-*`, ARIA, and structural
+  selectors before falling back to class names, but a chip may still
+  become orphaned after a redeploy. Re-click the element to re-anchor.
+- **Shadow DOM:** Annotations cannot pierce closed shadow roots. Open
+  shadow roots are supported.
+- **`file://` URLs and `chrome://` pages:** Out of scope. The extension
+  runs on `http(s)://` only.
+
+---
+
+## License
+
+MIT — see [LICENSE](./LICENSE).

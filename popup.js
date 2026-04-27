@@ -29,11 +29,6 @@ const PREMIUM_PURCHASE_URL      = 'https://arjunsharma10.gumroad.com/l/websiteDe
 
 const LICENSE_STORAGE_KEY = 'license';
 
-// Free-tier history caps (premium = unlimited)
-const FREE_ANNOTATION_HISTORY_LIMIT = 30;
-const FREE_COPY_HISTORY_LIMIT       = 10;
-const FREE_MAX_HISTORY_SETTING      = 50; // max history length settable by non-premium users
-
 // Button action definitions — values used in settings storage
 const BUTTON_ACTIONS = {
   copyAll:      { emoji: '📋', label: 'Copy All'       },
@@ -113,6 +108,44 @@ async function deactivateLicense() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  // ── Change 13: inline toast + confirm helpers (replaces native alert/confirm) ─
+  function showToast(msg, opts) {
+    opts = opts || {};
+    const t = document.createElement('div');
+    t.className = 'ann-toast' + (opts.kind ? ' ann-toast--' + opts.kind : '');
+    t.textContent = msg;
+    document.body.appendChild(t);
+    void t.offsetWidth;
+    t.classList.add('ann-toast--in');
+    setTimeout(() => {
+      t.classList.remove('ann-toast--in');
+      setTimeout(() => { try { t.remove(); } catch(_){} }, 200);
+    }, opts.duration || 2200);
+  }
+
+  // Returns Promise<boolean>. Renders an inline confirm banner inside `host`
+  // (or document.body if none given).
+  function showConfirm(msg, opts) {
+    opts = opts || {};
+    return new Promise((resolve) => {
+      const host = opts.host || document.body;
+      const wrap = document.createElement('div');
+      wrap.className = 'ann-confirm-banner';
+      wrap.innerHTML = `
+        <div class="ann-confirm-msg"></div>
+        <div class="ann-confirm-actions">
+          <button class="ann-confirm-cancel">Cancel</button>
+          <button class="ann-confirm-ok">${opts.okLabel || 'OK'}</button>
+        </div>`;
+      wrap.querySelector('.ann-confirm-msg').textContent = msg;
+      const cleanup = (val) => { try { wrap.remove(); } catch(_){} resolve(val); };
+      wrap.querySelector('.ann-confirm-ok').addEventListener('click',     () => cleanup(true));
+      wrap.querySelector('.ann-confirm-cancel').addEventListener('click', () => cleanup(false));
+      host.appendChild(wrap);
+      setTimeout(() => wrap.querySelector('.ann-confirm-ok').focus(), 0);
+    });
+  }
+
   const listEl      = document.getElementById('annotations-list');
   const historyEl   = document.getElementById('history-panel');
   const settingsEl  = document.getElementById('settings-panel');
@@ -197,6 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const ANN_SHORT_KEYS = {
     id: 'i', url: 'u', tag: 'g', elId: 'e', classes: 'c',
     xpath: 'x', comment: 't', timestamp: 's', pageLevel: 'p', deletedAt: 'd',
+    text: 'tx',
   };
   const ANN_LONG_KEYS = Object.fromEntries(
     Object.entries(ANN_SHORT_KEYS).map(([l, s]) => [s, l])
@@ -285,6 +319,25 @@ document.addEventListener('DOMContentLoaded', () => {
       })) : [],
       settings:      bundle.s || {},
     };
+  }
+
+  // ── Change 1: formatLine — format a single annotation as a Markdown bullet ─
+  // Used by copy-all, cut-all, copy-by-url, and export flows.
+  function formatLine(index, ann) {
+    const sel  = getSelector(ann);   // uses existing getSelector helper
+    const note = (ann.comment || '').trim();
+    const text = (ann.text    || '').trim();
+    const url  = (ann.url     || '').trim();
+    const ts   = ann.timestamp ? new Date(ann.timestamp).toISOString() : '';
+
+    // Escape pipes and backticks for inline code spans.
+    const safeSel   = sel.replace(/`/g, '\\`');
+    const noteBlock = note ? `\n   - ${note.replace(/\n/g, '\n     ')}` : '';
+    const textBlock = text ? `\n   - _"${text.replace(/\n/g, ' ').slice(0, 240)}"_` : '';
+    const urlBlock  = url  ? `\n   - ${url}` : '';
+    const tsBlock   = ts   ? `\n   - ${ts}` : '';
+
+    return `${index}. \`${safeSel}\`${noteBlock}${textBlock}${urlBlock}${tsBlock}\n`;
   }
 
   async function gzipString(str) {
@@ -576,7 +629,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.get({ annotations: [] }, r => {
       const anns = r.annotations.filter(a => a.url === url && a.comment && a.comment.trim());
       if (anns.length === 0) {
-        alert('No annotations with notes in this group.');
+        showToast('No annotations with notes in this group.');
         return;
       }
       let md = `## ${url}\n`;
@@ -590,7 +643,7 @@ document.addEventListener('DOMContentLoaded', () => {
           btn.innerHTML = '✅ Copied!';
           setTimeout(() => (btn.innerHTML = orig), 1500);
         }
-      }).catch(() => alert('Clipboard write failed. Try again.'));
+      }).catch(() => showToast('Clipboard write failed.', { kind: 'error' }));
     });
   }
 
@@ -607,7 +660,7 @@ document.addEventListener('DOMContentLoaded', () => {
           btn.innerHTML = '✅';
           setTimeout(() => (btn.innerHTML = orig), 1500);
         }
-      }).catch(() => alert('Clipboard write failed. Try again.'));
+      }).catch(() => showToast('Clipboard write failed.', { kind: 'error' }));
     });
   }
 
@@ -1176,13 +1229,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderAnnotationHistory() {
     chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
-      let hist = r[HISTORY_KEY];
-
-      const cappedMsg = !isPremium() && hist.length > FREE_ANNOTATION_HISTORY_LIMIT
-        ? `<p class="history-cap-notice">Showing the ${FREE_ANNOTATION_HISTORY_LIMIT} most recent deleted annotations.
-            <a href="#" class="meta-link upgrade-link" data-url="${escHtml(PREMIUM_PURCHASE_URL)}">Upgrade to Premium</a> for unlimited history.</p>`
-        : '';
-      if (!isPremium()) hist = hist.slice(-FREE_ANNOTATION_HISTORY_LIMIT);
+      const hist = r[HISTORY_KEY];
 
       if (hist.length === 0) {
         historyEl.innerHTML = historyTabsHTML('annotations') +
@@ -1195,7 +1242,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const byUrl  = {};
       sorted.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
 
-      let html = historyTabsHTML('annotations') + cappedMsg;
+      let html = historyTabsHTML('annotations');
       Object.entries(byUrl).forEach(([url, items]) => {
         html += `<div class="url-group">
           <div class="url-header">
@@ -1281,8 +1328,9 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', () => restoreSavedForLaterSet(btn.dataset.setId));
       });
       historyEl.querySelectorAll('.sfl-delete').forEach(btn => {
-        btn.addEventListener('click', () => {
-          if (!confirm('Delete this saved-for-later set? This cannot be undone.')) return;
+        btn.addEventListener('click', async () => {
+          const ok = await showConfirm('Delete this saved-for-later set? This cannot be undone.', { okLabel: 'Delete' });
+          if (!ok) return;
           deleteSavedForLaterSet(btn.dataset.setId);
         });
       });
@@ -1317,13 +1365,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderCopyHistory() {
     chrome.storage.local.get({ [COPY_HISTORY_KEY]: [] }, r => {
-      let copyHist = r[COPY_HISTORY_KEY];
-
-      const cappedMsg = !isPremium() && copyHist.length > FREE_COPY_HISTORY_LIMIT
-        ? `<p class="history-cap-notice">Showing the ${FREE_COPY_HISTORY_LIMIT} most recent copy events.
-            <a href="#" class="meta-link upgrade-link" data-url="${escHtml(PREMIUM_PURCHASE_URL)}">Upgrade to Premium</a> for unlimited history.</p>`
-        : '';
-      if (!isPremium()) copyHist = copyHist.slice(-FREE_COPY_HISTORY_LIMIT);
+      const copyHist = r[COPY_HISTORY_KEY];
 
       if (copyHist.length === 0) {
         historyEl.innerHTML = historyTabsHTML('copies') +
@@ -1332,7 +1374,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      let html = historyTabsHTML('copies') + cappedMsg;
+      let html = historyTabsHTML('copies');
       [...copyHist].reverse().forEach(entry => {
         html += `
         <div class="item copy-hist-item">
@@ -1451,6 +1493,16 @@ document.addEventListener('DOMContentLoaded', () => {
         <p class="settings-hint">
           Hold <strong id="shortcut-preview">${currentLabel}</strong> + Right-Click any element to annotate it.
         </p>
+        <div class="settings-row" id="open-popup-shortcut-row">
+          <div class="settings-row-label">
+            <div class="settings-row-title">Open popup shortcut</div>
+            <div class="settings-row-sub">
+              Default: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>.
+              Click to customize in Chrome.
+            </div>
+          </div>
+          <button id="open-popup-shortcut-btn" class="btn-secondary">Customize…</button>
+        </div>
       </div>
 
       <!-- ── Button Actions ── -->
@@ -1486,7 +1538,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="settings-value" id="file-backup-status">Checking…</span>
         </div>
         <p class="settings-hint" style="margin-top:4px;">
-          ☁ Sync updates every time you annotate · 💾 Local snapshot saved every 15 min
+          Annotations and history live on your device (chrome.storage.local). Auto-Backup mirrors a compressed snapshot to Chrome Sync (chrome.storage.sync) so it follows your Google account across signed-in Chrome installs. Sync is end-to-end encrypted by Google when you set a Sync passphrase. Disable Auto-Backup to keep data strictly local.
         </p>
         <div class="settings-row" style="justify-content:flex-end;margin-top:4px;">
           <button id="backup-now-btn" class="btn-history-action">⚡ Backup Now</button>
@@ -1499,7 +1551,6 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="settings-row">
           <label class="settings-label" for="max-history-input">
             Max length
-            ${!premium ? '<span class="lock-icon" title="Upgrade to unlock indefinite history">🔒</span>' : ''}
           </label>
           <div class="history-limit-row">
             <input
@@ -1507,19 +1558,17 @@ document.addEventListener('DOMContentLoaded', () => {
               id="max-history-input"
               class="history-limit-input"
               min="1"
-              max="${premium ? 10000 : FREE_MAX_HISTORY_SETTING}"
-              value="${isIndefiniteHist ? (premium ? 100 : FREE_MAX_HISTORY_SETTING) : Math.min(currentMaxHist, premium ? 10000 : FREE_MAX_HISTORY_SETTING)}"
-              ${isIndefiniteHist || !premium ? 'disabled' : ''}
+              max="10000"
+              value="${isIndefiniteHist ? 100 : currentMaxHist}"
+              ${isIndefiniteHist ? 'disabled' : ''}
             />
             <label class="history-indefinite-label">
               <input type="checkbox" id="indefinite-history"
-                ${isIndefiniteHist ? 'checked' : ''}
-                ${!premium ? 'disabled' : ''} />
-              Indefinite${!premium ? ' <span class="lock-icon">🔒</span>' : ''}
+                ${isIndefiniteHist ? 'checked' : ''} />
+              Indefinite
             </label>
           </div>
         </div>
-        ${!premium ? `<p class="settings-hint">History limited to ${FREE_MAX_HISTORY_SETTING} entries. Upgrade for indefinite history.</p>` : ''}
         <div class="settings-row settings-row--btns">
           <button id="clear-history-settings-btn" class="btn-history-action btn-history-danger">🗑 Clear History</button>
         </div>
@@ -1579,7 +1628,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
 
       <div class="settings-github-row">
-        <a href="#" class="meta-link" data-url="https://github.com/asharma2027/ai-dev-annotator/tree/production" title="View source on GitHub">View source on GitHub →</a>
+        <a href="#" class="meta-link" data-url="https://github.com/asharma2027/ai-dev-annotator/tree/main" title="View source on GitHub">View source on GitHub →</a>
       </div>
     `;
 
@@ -1648,7 +1697,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ── Button Actions selects ────────────────────────────────────────────
-    const selCopyLeft   = settingsEl.querySelector('#copy-btn-left');
+    // ── Open popup shortcut button ─────────────────────────────────────────
+    document.getElementById('open-popup-shortcut-btn')
+      ?.addEventListener('click', () => {
+        chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+      });
+
+        const selCopyLeft   = settingsEl.querySelector('#copy-btn-left');
     const selCopyRight  = settingsEl.querySelector('#copy-btn-right');
     const selClearLeft  = settingsEl.querySelector('#clear-btn-left');
     const selClearRight = settingsEl.querySelector('#clear-btn-right');
@@ -1668,7 +1723,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const maxHistInput  = settingsEl.querySelector('#max-history-input');
     const indefiniteChk = settingsEl.querySelector('#indefinite-history');
 
-    if (indefiniteChk && maxHistInput && premium) {
+    if (indefiniteChk && maxHistInput) {
       indefiniteChk.addEventListener('change', () => {
         if (indefiniteChk.checked) {
           maxHistInput.disabled = true;
@@ -1682,7 +1737,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    if (maxHistInput && premium) {
+    if (maxHistInput) {
       maxHistInput.addEventListener('change', () => {
         const val = Math.max(1, parseInt(maxHistInput.value, 10) || 100);
         maxHistInput.value = val;
@@ -1722,7 +1777,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } catch (e) {
-        alert('Export failed: ' + (e?.message || e));
+        showToast('Export failed: ' + (e?.message || e), { kind: 'error' });
       } finally {
         btn.disabled = false;
         btn.textContent = orig;
@@ -1751,7 +1806,7 @@ document.addEventListener('DOMContentLoaded', () => {
               const txt = new TextDecoder().decode(new Uint8Array(buf));
               bundle = JSON.parse(txt);
             } catch {
-              alert('Invalid file. Please select a valid .annotator export.');
+              showToast('Invalid file. Please select a valid .annotator export.', { kind: 'error' });
               importAllFile.value = '';
               return;
             }
@@ -1770,17 +1825,16 @@ document.addEventListener('DOMContentLoaded', () => {
             };
           }
 
-          if (!confirm(
+          const ok = await showConfirm(
             `Import this data?\n\n` +
             `• ${unpacked.annotations.length} active annotation(s)\n` +
             `• ${unpacked.history.length} history record(s)\n` +
             `• ${unpacked.savedForLater.length} saved-for-later set(s)\n` +
             `• ${unpacked.copyHistory.length} copy log(s)\n\n` +
-            `Existing items will be merged (not overwritten).`
-          )) {
-            importAllFile.value = '';
-            return;
-          }
+            `Existing items will be merged (not overwritten).`,
+            { host: settingsEl }
+          );
+          if (!ok) { importAllFile.value = ''; return; }
 
           chrome.storage.local.get({
             annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
@@ -1802,12 +1856,10 @@ document.addEventListener('DOMContentLoaded', () => {
               [SAVED_LATER_KEY]:  [...r[SAVED_LATER_KEY],  ...newSL],
               [SETTINGS_KEY]:     { ...r[SETTINGS_KEY], ...unpacked.settings },
             }, () => {
-              alert(
-                `Imported:\n` +
-                `• ${newAnns.length} annotation(s)\n` +
-                `• ${newHist.length} history record(s)\n` +
-                `• ${newSL.length} saved-for-later set(s)\n` +
-                `• ${newCopy.length} copy log(s)`
+              showToast(
+                `Imported: ${newAnns.length} annotation(s) · ${newHist.length} history · ` +
+                `${newSL.length} saved-for-later · ${newCopy.length} copy log(s)`,
+                { kind: 'ok' }
               );
               if (unpacked.settings && unpacked.settings.darkMode !== undefined) {
                 applyDarkMode(unpacked.settings.darkMode);
@@ -1821,10 +1873,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ── Clear history ─────────────────────────────────────────────────────
-    settingsEl.querySelector('#clear-history-settings-btn')?.addEventListener('click', () => {
-      if (confirm('Clear all annotation and copy history? This cannot be undone.')) {
+    settingsEl.querySelector('#clear-history-settings-btn')?.addEventListener('click', async () => {
+      const ok = await showConfirm(
+        'Clear all annotation and copy history? This cannot be undone.',
+        { okLabel: 'Delete', host: settingsEl }
+      );
+      if (ok) {
         chrome.storage.local.set({ [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [] }, () => {
-          alert('History cleared.');
+          showToast('History cleared.', { kind: 'ok' });
         });
       }
     });
@@ -1892,10 +1948,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Button action implementations ─────────────────────────────────────────
   function doCopyAll(btn) {
     chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [] }, r => {
-      if (r.annotations.length === 0) { alert('No annotations with notes to copy yet.'); return; }
+      if (r.annotations.length === 0) { showToast('No annotations with notes to copy yet.'); return; }
       loadSettings(s => {
         const result = buildMarkdown(r.annotations, s);
-        if (!result) { alert('No annotations with notes to copy yet.'); return; }
+        if (!result) { showToast('No annotations with notes to copy yet.'); return; }
         navigator.clipboard.writeText(result.md).then(() => {
           const copyHist = r[COPY_HISTORY_KEY];
           copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
@@ -1905,17 +1961,17 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.innerHTML = '<span>✅ Copied!</span>';
             setTimeout(() => (btn.innerHTML = origHtml), 1500);
           }
-        }).catch(() => alert('Clipboard write failed. Try again.'));
+        }).catch(() => showToast('Clipboard write failed. Try again.', { kind: 'error' }));
       });
     });
   }
 
   function doCutAll(btn) {
     chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [], [HISTORY_KEY]: [] }, r => {
-      if (r.annotations.length === 0) { alert('No annotations with notes to copy yet.'); return; }
+      if (r.annotations.length === 0) { showToast('No annotations with notes to copy yet.'); return; }
       loadSettings(s => {
         const result = buildMarkdown(r.annotations, s);
-        if (!result) { alert('No annotations with notes to copy yet.'); return; }
+        if (!result) { showToast('No annotations with notes to copy yet.'); return; }
         navigator.clipboard.writeText(result.md).then(() => {
           const copyHist = r[COPY_HISTORY_KEY];
           copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
@@ -1936,7 +1992,7 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.innerHTML = '<span>✅ Cut!</span>';
             setTimeout(() => (btn.innerHTML = origHtml), 1500);
           }
-        }).catch(() => alert('Clipboard write failed. Try again.'));
+        }).catch(() => showToast('Clipboard write failed. Try again.', { kind: 'error' }));
       });
     });
   }

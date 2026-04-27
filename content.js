@@ -5,6 +5,30 @@
 
 const ANN = 'aiann'; // CSS class/id prefix to avoid collisions
 
+// ── Change 8: Extension context invalidation handling ────────────────────────
+let __aiann_contextDead = false;
+function showContextInvalidatedNotice() {
+  if (__aiann_contextDead) return;
+  __aiann_contextDead = true;
+  try {
+    const n = document.createElement('div');
+    n.id = 'aiann-context-dead';
+    n.textContent = 'AI Dev Annotator was updated — refresh this page to keep annotating.';
+    n.style.cssText = [
+      'position:fixed','bottom:16px','right:16px',
+      'z-index:2147483647',
+      'background:#1f1f23','color:#fff',
+      'font:13px/1.4 system-ui,sans-serif',
+      'padding:10px 14px','border-radius:8px',
+      'box-shadow:0 6px 24px rgba(0,0,0,0.25)',
+      'max-width:320px','cursor:pointer'
+    ].join(';');
+    n.addEventListener('click', () => n.remove());
+    document.body.appendChild(n);
+    setTimeout(() => { try { n.remove(); } catch (_){} }, 12000);
+  } catch (_) {}
+}
+
 // ── Annotation shortcut : configurable modifier key ────────────────────────
 // Loaded from chrome.storage.local at init and updated in real-time whenever
 // the user changes it in Settings. Default: Alt + Right-Click.
@@ -13,19 +37,32 @@ let cachedShortcut = { modifier: 'alt' };
 function loadShortcut() {
   try {
     chrome.storage.local.get({ annotatorSettings: {} }, r => {
+      if (chrome.runtime.lastError) {
+        if (String(chrome.runtime.lastError.message).includes('Extension context invalidated')) {
+          showContextInvalidatedNotice();
+          return;
+        }
+      }
       const s = r.annotatorSettings || {};
       cachedShortcut = s.shortcut || { modifier: 'alt' };
     });
-  } catch {}
+  } catch (e) {
+    if (String(e && e.message).includes('Extension context invalidated')) {
+      showContextInvalidatedNotice();
+      return;
+    }
+  }
 }
 
 // Keep in sync with any Settings changes without requiring a page reload
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.annotatorSettings) {
-    const newSettings = changes.annotatorSettings.newValue || {};
-    cachedShortcut = newSettings.shortcut || { modifier: 'alt' };
-  }
-});
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.annotatorSettings) {
+      const newSettings = changes.annotatorSettings.newValue || {};
+      cachedShortcut = newSettings.shortcut || { modifier: 'alt' };
+    }
+  });
+} catch (_) {}
 
 loadShortcut();
 
@@ -41,7 +78,7 @@ function injectStyles() {
       background-color: rgba(253, 230, 138, 0.3) !important;
       border-radius: 2px;
     }
-    /* Inline chip badge inserted after each annotated element */
+    /* Chip badge — now rendered in the overlay */
     .${ANN}-chip {
       display: inline-flex;
       align-items: center;
@@ -182,6 +219,16 @@ function injectStyles() {
       border-color: #3b82f6 !important;
       color: #1d4ed8 !important;
     }
+
+    /* Change 15: panel hint */
+    .aiann-panel-hint {
+      font-size: 11px;
+      opacity: 0.65;
+      margin-top: 4px;
+      line-height: 1.35;
+      font-family: system-ui, sans-serif;
+      color: #6b7280;
+    }
   `;
   document.head.appendChild(s);
 }
@@ -214,14 +261,32 @@ const STORE_KEY   = 'annotations';
 const HISTORY_KEY = 'annotationHistory';
 function getAll(cb) {
   try {
-    chrome.storage.local.get({ [STORE_KEY]: [] }, r => cb(r[STORE_KEY]));
-  } catch { cb([]); }
+    chrome.storage.local.get({ [STORE_KEY]: [] }, r => {
+      if (chrome.runtime.lastError) {
+        if (String(chrome.runtime.lastError.message).includes('Extension context invalidated')) {
+          showContextInvalidatedNotice();
+          cb([]);
+          return;
+        }
+      }
+      cb(r[STORE_KEY]);
+    });
+  } catch (e) {
+    if (String(e && e.message).includes('Extension context invalidated')) {
+      showContextInvalidatedNotice();
+    }
+    cb([]);
+  }
 }
 function setAll(anns, cb) {
   try {
     chrome.storage.local.set({ [STORE_KEY]: anns }, cb);
     backupAnnotationsToSync(anns); // keep sync mirror up-to-date
-  } catch {}
+  } catch (e) {
+    if (String(e && e.message).includes('Extension context invalidated')) {
+      showContextInvalidatedNotice();
+    }
+  }
 }
 function genId() { return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
 
@@ -231,13 +296,23 @@ function genId() { return `ann_${Date.now()}_${Math.random().toString(36).slice(
 function backupAnnotationsToSync(_annotations) {
   try {
     chrome.runtime.sendMessage({ type: 'scheduleBackup' }).catch(() => {});
-  } catch {}
+  } catch (e) {
+    if (String(e && e.message).includes('Extension context invalidated')) {
+      showContextInvalidatedNotice();
+    }
+  }
 }
 
 // ── History limit enforcement ──────────────────────────────────────────────
 function enforceHistoryLimit() {
   try {
     chrome.storage.local.get({ annotatorSettings: {}, [HISTORY_KEY]: [] }, r => {
+      if (chrome.runtime.lastError) {
+        if (String(chrome.runtime.lastError.message).includes('Extension context invalidated')) {
+          showContextInvalidatedNotice();
+          return;
+        }
+      }
       const settings = r.annotatorSettings || {};
       const maxLen   = (settings.maxHistoryLength !== undefined && settings.maxHistoryLength !== null)
         ? settings.maxHistoryLength : 100;
@@ -248,6 +323,10 @@ function enforceHistoryLimit() {
     });
   } catch {}
 }
+
+// ── Change 18: Normalize URL to origin + pathname only ────────────────────
+// Strips query string and hash so annotations survive filtering/pagination.
+const __aiann_pageKey = window.location.origin + window.location.pathname;
 
 // ── Shared panel ────────────────────────────────────────────────────────────
 let activeChip    = null;
@@ -265,6 +344,7 @@ function buildPanel() {
       <button id="${ANN}-close-btn" title="Close">✕</button>
     </div>
     <textarea id="${ANN}-textarea"></textarea>
+    <div class="aiann-panel-hint">Empty notes are auto-discarded.&nbsp;&nbsp;Esc to close · saves automatically.</div>
     <div id="${ANN}-panel-footer">
       <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Page Note</button>
       <span id="${ANN}-save-status"></span>
@@ -280,6 +360,14 @@ function buildPanel() {
 
   p.querySelector(`#${ANN}-delete-btn`).addEventListener('click', () => deleteAnnotation(activeAnnId));
   p.querySelector(`#${ANN}-close-btn`).addEventListener('click', closePanel);
+
+  // Change 10: Esc key closes the panel (autosave behavior unchanged)
+  p.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      closePanel();
+    }
+  });
 
   // ── Page-level toggle ─────────────────────────────────────────────────
   p.querySelector(`#${ANN}-page-btn`).addEventListener('click', () => {
@@ -298,12 +386,11 @@ function buildPanel() {
         const origEl = resolveXPath(ann.xpath);
         if (origEl) origEl.classList.remove(`${ANN}-hl`);
 
-        // Also remove the chip from its current position and move to page chip container
+        // Remove the overlay chip and move to page chip container
         const existingChip = document.querySelector(`.${ANN}-chip[data-ann-id="${ann.id}"]`);
         if (existingChip && !existingChip.closest(`#${ANN}-page-chips`)) {
-          existingChip.remove();
+          removeChip(ann.id);
           injectPageChip(ann.id, ann.comment || '');
-          // Update activeChip reference
           activeChip = document.querySelector(`#${ANN}-page-chips .${ANN}-chip[data-ann-id="${ann.id}"]`);
         }
 
@@ -324,11 +411,11 @@ function buildPanel() {
           const el = resolveXPath(ann.xpath);
           if (el) {
             el.classList.add(`${ANN}-hl`);
-            // Remove page chip and inject regular chip
+            // Remove page chip and inject overlay chip
             const pageChip = document.querySelector(`#${ANN}-page-chips .${ANN}-chip[data-ann-id="${ann.id}"]`);
             if (pageChip) pageChip.remove();
             injectChip(el, ann.id, ann.comment || '');
-            activeChip = document.querySelector(`.${ANN}-chip[data-ann-id="${ann.id}"]`);
+            activeChip = __aiann_chipMap.get(ann.id) || null;
           }
         }
         delete ann.pageLevel;
@@ -430,8 +517,7 @@ function closePanel() {
     if (!ann) return;
     if (ann.comment && ann.comment.trim()) return; // has content — keep
     // Empty: discard silently (no history record, no chip)
-    const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${idToCheck}"]`);
-    if (chip) chip.remove();
+    removeChip(idToCheck);
     if (!ann.pageLevel) {
       const el = resolveXPath(ann.xpath);
       if (el) el.classList.remove(`${ANN}-hl`);
@@ -475,14 +561,19 @@ function deleteAnnotation(annId) {
       }
       try {
         chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
+          if (chrome.runtime.lastError) {
+            if (String(chrome.runtime.lastError.message).includes('Extension context invalidated')) {
+              showContextInvalidatedNotice();
+              return;
+            }
+          }
           const hist = r[HISTORY_KEY];
           hist.push({ ...ann, deletedAt: new Date().toISOString() });
           try { chrome.storage.local.set({ [HISTORY_KEY]: hist }, enforceHistoryLimit); } catch {}
         });
       } catch {}
     }
-    const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${id}"]`);
-    if (chip) chip.remove();
+    removeChip(id);
     setAll(anns.filter(a => a.id !== id));
   });
 }
@@ -498,34 +589,173 @@ function getPageChipContainer() {
   return container;
 }
 
-// ── Inject chip sibling after annotated element ────────────────────────────
-function injectChip(el, annId, comment) {
-  if (document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`)) return;
+// ── Change 6: Chip overlay infrastructure ─────────────────────────────────
+// All element-level chips are rendered into a single fixed overlay div,
+// avoiding layout disruption inside tables, grids, flex containers, etc.
+let __aiann_chipOverlay = null;
+const __aiann_chipMap   = new Map(); // annotationId → chipEl
+const __aiann_targetMap = new Map(); // annotationId → targetEl
 
+function getChipOverlay() {
+  if (__aiann_chipOverlay && document.body.contains(__aiann_chipOverlay)) {
+    return __aiann_chipOverlay;
+  }
+  const o = document.createElement('div');
+  o.id = 'aiann-chip-overlay';
+  o.style.cssText = [
+    'position:fixed',
+    'top:0','left:0',
+    'width:0','height:0',
+    'pointer-events:none',
+    'z-index:2147483646',
+    'contain:layout style'
+  ].join(';');
+  document.body.appendChild(o);
+  __aiann_chipOverlay = o;
+  return o;
+}
+
+function positionChipAtElement(chipEl, targetEl) {
+  if (!targetEl || !targetEl.getBoundingClientRect) {
+    chipEl.style.display = 'none';
+    return;
+  }
+  const r = targetEl.getBoundingClientRect();
+  // Hide chips for elements that are 0x0 or fully off-screen.
+  if (r.width === 0 && r.height === 0) {
+    chipEl.style.display = 'none';
+    return;
+  }
+  chipEl.style.display = '';
+  chipEl.style.position = 'fixed';
+  chipEl.style.pointerEvents = 'auto';
+  // Anchor: top-right of target, nudged 4px outward.
+  chipEl.style.top  = Math.max(0, r.top - 2) + 'px';
+  chipEl.style.left = Math.min(
+    window.innerWidth - 24,
+    r.right - 8
+  ) + 'px';
+}
+
+// ── Change 9: Auto-detect collisions with site widgets ────────────────────
+function repositionPageChipContainer() {
+  const c = document.getElementById(`${ANN}-page-chips`);
+  if (!c) return;
+
+  // Default anchor: bottom-right, 16px inset.
+  const inset = 16;
+  const w = c.offsetWidth  || 220;
+  const h = c.offsetHeight || 56;
+  const candidates = [
+    { bottom: inset, right: inset },
+    { bottom: inset + h + 12, right: inset },         // shift up
+    { bottom: inset, right: inset + w + 12 },         // shift left
+    { top: inset, right: inset },                     // top-right fallback
+    { top: inset, left: inset }                       // top-left last resort
+  ];
+
+  const collidesAt = (pos) => {
+    const r = { left: 0, top: 0, right: 0, bottom: 0 };
+    if (pos.right  != null) { r.right  = window.innerWidth - pos.right; r.left = r.right - w; }
+    if (pos.left   != null) { r.left   = pos.left;                       r.right = r.left + w; }
+    if (pos.bottom != null) { r.bottom = window.innerHeight - pos.bottom; r.top = r.bottom - h; }
+    if (pos.top    != null) { r.top    = pos.top;                        r.bottom = r.top + h; }
+    const pts = [
+      [r.left + 4, r.top + 4],
+      [r.right - 4, r.top + 4],
+      [r.left + 4, r.bottom - 4],
+      [r.right - 4, r.bottom - 4],
+      [(r.left + r.right) / 2, (r.top + r.bottom) / 2]
+    ];
+    for (const [x, y] of pts) {
+      const els = document.elementsFromPoint(x, y) || [];
+      for (const el of els) {
+        if (!el || el === c || c.contains(el)) continue;
+        if (el.id && el.id.startsWith('aiann-')) continue;
+        const cs = getComputedStyle(el);
+        if (cs.position === 'fixed' && cs.visibility !== 'hidden' && cs.display !== 'none') {
+          const rect = el.getBoundingClientRect();
+          if (rect.width >= 32 && rect.height >= 32) return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const apply = (pos) => {
+    c.style.top = c.style.right = c.style.bottom = c.style.left = '';
+    Object.entries(pos).forEach(([k, v]) => { c.style[k] = v + 'px'; });
+  };
+
+  for (const pos of candidates) {
+    if (!collidesAt(pos)) { apply(pos); return; }
+  }
+  // All collided — use first candidate anyway.
+  apply(candidates[0]);
+}
+
+function repositionAllChips() {
+  __aiann_chipMap.forEach((chip, id) => {
+    const target = __aiann_targetMap.get(id) || null;
+    positionChipAtElement(chip, target);
+  });
+  repositionPageChipContainer();
+}
+
+// Wire reposition triggers (idempotent — guard against double-binding):
+if (!window.__aiann_chipReposBound) {
+  window.__aiann_chipReposBound = true;
+  window.addEventListener('scroll',  repositionAllChips, { passive: true, capture: true });
+  window.addEventListener('resize',  repositionAllChips, { passive: true });
+  const ro = new ResizeObserver(repositionAllChips);
+  ro.observe(document.documentElement);
+  const mo = new MutationObserver(repositionAllChips);
+  mo.observe(document.documentElement, {
+    childList: true, subtree: true, attributes: true,
+    attributeFilter: ['style', 'class']
+  });
+}
+
+// ── Inject chip for an annotated element (overlay-based) ──────────────────
+function injectChip(el, annId, comment) {
   el.classList.add(`${ANN}-hl`);
 
-  const chip = document.createElement('span');
-  chip.className  = `${ANN}-chip${comment && comment.trim() ? ' has-note' : ''}`;
-  chip.dataset.annId = annId;
-  chip.textContent   = '✏';
-  chip.title = comment && comment.trim() ? comment.trim().slice(0, 80) : '(no note)';
-
-  chip.addEventListener('click', e => {
-    e.stopPropagation();
-    e.preventDefault();
-    const panel = document.getElementById(`${ANN}-panel`);
-    if (activeAnnId === annId && panel && panel.style.display === 'block') {
-      closePanel();
-    } else {
-      openPanel(chip, annId);
-    }
-  });
-
-  try {
-    el.insertAdjacentElement('afterend', chip);
-  } catch {
-    document.body.appendChild(chip);
+  const overlay = getChipOverlay();
+  let chip = __aiann_chipMap.get(annId);
+  if (!chip) {
+    chip = document.createElement('span');
+    chip.className = `${ANN}-chip`;
+    chip.dataset.annId = annId;
+    chip.textContent   = '✏';
+    chip.addEventListener('click', e => {
+      e.stopPropagation();
+      e.preventDefault();
+      const panel = document.getElementById(`${ANN}-panel`);
+      if (activeAnnId === annId && panel && panel.style.display === 'block') {
+        closePanel();
+      } else {
+        openPanel(chip, annId);
+      }
+    });
+    overlay.appendChild(chip);
+    __aiann_chipMap.set(annId, chip);
   }
+  // Update content
+  chip.className = `${ANN}-chip${comment && comment.trim() ? ' has-note' : ''}`;
+  chip.title = comment && comment.trim() ? comment.trim().slice(0, 80) : '(no note)';
+  chip.textContent = '✏';
+
+  // Store target for repositioning
+  __aiann_targetMap.set(annId, el);
+  positionChipAtElement(chip, el);
+}
+
+// Remove a chip from the overlay and clean up maps
+function removeChip(annotationId) {
+  const chip = __aiann_chipMap.get(annotationId);
+  if (chip && chip.parentNode) chip.parentNode.removeChild(chip);
+  __aiann_chipMap.delete(annotationId);
+  __aiann_targetMap.delete(annotationId);
 }
 
 // ── Inject a fixed-position page-level chip ────────────────────────────────
@@ -554,10 +784,20 @@ function injectPageChip(annId, comment) {
 
 // ── Restore annotations on page load ──────────────────────────────────────
 function restoreAnnotations() {
-  const url = window.location.href;
+  // Change 18: match by origin+pathname, also accept old full-href entries
+  const pageKey = __aiann_pageKey;
   getAll(anns => {
     anns
-      .filter(a => a.url === url)
+      .filter(a => {
+        if (!a.url) return false;
+        // Normalize stored url for comparison
+        try {
+          const u = new URL(a.url);
+          return (u.origin + u.pathname) === pageKey;
+        } catch (_) {
+          return a.url === pageKey;
+        }
+      })
       .forEach(ann => {
         if (ann.pageLevel || ann.tag === 'page') {
           injectPageChip(ann.id, ann.comment || '');
@@ -579,13 +819,28 @@ function restoreAnnotations() {
 function consumeNavIntent() {
   try {
     chrome.storage.local.get({ _navIntent: null }, r => {
+      if (chrome.runtime.lastError) {
+        if (String(chrome.runtime.lastError.message).includes('Extension context invalidated')) {
+          showContextInvalidatedNotice();
+          return;
+        }
+      }
       const intent = r._navIntent;
       if (!intent) return;
       if (intent.expiresAt && Date.now() > intent.expiresAt) {
         try { chrome.storage.local.remove('_navIntent'); } catch {}
         return;
       }
-      if (intent.url && intent.url !== window.location.href) return; // not for this page
+      // Change 18: compare with normalized URL
+      if (intent.url) {
+        try {
+          const u = new URL(intent.url);
+          const normIntent = u.origin + u.pathname;
+          if (normIntent !== __aiann_pageKey) return;
+        } catch (_) {
+          if (intent.url !== window.location.href) return;
+        }
+      }
 
       // Clear immediately so we don't re-fire on subsequent navigations
       try { chrome.storage.local.remove('_navIntent'); } catch {}
@@ -597,7 +852,11 @@ function consumeNavIntent() {
         setTimeout(() => openAllChipsOnPage(), 200);
       }
     });
-  } catch {}
+  } catch (e) {
+    if (String(e && e.message).includes('Extension context invalidated')) {
+      showContextInvalidatedNotice();
+    }
+  }
 }
 
 function focusAnnotationOnPage(annId) {
@@ -625,7 +884,6 @@ function openAllChipsOnPage() {
     // Highlight the associated element for non-page chips
     const annId = chip.dataset.annId;
     if (annId) {
-      const url = window.location.href;
       getAll(anns => {
         const ann = anns.find(a => a.id === annId);
         if (ann && !ann.pageLevel && ann.xpath) {
@@ -644,7 +902,9 @@ function openAllChipsOnPage() {
   }
 }
 
-// ── Configurable modifier + Right-Click handler ────────────────────────────
+// ── Change 5: Capture-phase contextmenu listener ─────────────────────────
+// Using capture:true so sites like Notion/Figma that call stopPropagation
+// in their bubble-phase handlers don't swallow our right-click.
 document.addEventListener('contextmenu', e => {
   // Read the cached modifier key (updated from Settings in real-time)
   const mod = (cachedShortcut.modifier || 'alt').toLowerCase();
@@ -670,13 +930,23 @@ document.addEventListener('contextmenu', e => {
 
   // If already annotated, open existing annotation instead of creating a duplicate
   if (target.classList.contains(`${ANN}-hl`)) {
-    let chip = null;
-    let node = target.nextSibling;
-    while (node) {
-      if (node.classList && node.classList.contains(`${ANN}-chip`)) { chip = node; break; }
-      node = node.nextSibling;
+    const chip = __aiann_chipMap.get(
+      [...__aiann_targetMap.entries()].find(([, el]) => el === target)?.[0]
+    ) || null;
+    if (!chip) {
+      // fallback: querySelector (covers page-level chips too)
+      let node = target.nextSibling;
+      while (node) {
+        if (node.classList && node.classList.contains(`${ANN}-chip`)) {
+          openPanel(node, node.dataset.annId);
+          return;
+        }
+        node = node.nextSibling;
+      }
+    } else {
+      openPanel(chip, chip.dataset.annId);
+      return;
     }
-    if (chip) { openPanel(chip, chip.dataset.annId); return; }
   }
 
   const classes = typeof target.className === 'string' && target.className.trim()
@@ -686,87 +956,128 @@ document.addEventListener('contextmenu', e => {
         .join('')
     : '';
 
+  // Change 4: capture up to 240 chars of innerText at annotation creation time
   const ann = {
     id:        genId(),
-    url:       window.location.href,
+    url:       __aiann_pageKey,  // Change 18: store only origin + pathname
     tag:       target.tagName.toLowerCase(),
     elId:      target.id || '',
     classes,
     xpath:     getXPath(target),
     comment:   '',
     timestamp: new Date().toISOString(),
+    text: (() => {
+      try {
+        const raw = (target && target.innerText) ? target.innerText : '';
+        // Collapse whitespace, trim, hard cap at 240 chars.
+        return raw.replace(/\s+/g, ' ').trim().slice(0, 240);
+      } catch (_) { return ''; }
+    })(),
   };
 
   getAll(anns => {
     anns.push(ann);
     setAll(anns, () => {
       injectChip(target, ann.id, '');
-      const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${ann.id}"]`);
+      const chip = __aiann_chipMap.get(ann.id);
       if (chip) openPanel(chip, ann.id);
     });
   });
-});
+}, { capture: true, passive: false });
 
 // ── Message listener (commands from the popup) ─────────────────────────────
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'removeAnnotation') {
-    const { annId, xpath } = msg;
-    if (activeAnnId === annId) closePanel();
-    const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
-    if (chip) chip.remove();
-    // Only remove element highlight for non-page-level annotations
-    if (xpath && xpath !== 'body') {
-      const el = resolveXPath(xpath);
-      if (el) el.classList.remove(`${ANN}-hl`);
+try {
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'removeAnnotation') {
+      const { annId, xpath } = msg;
+      if (activeAnnId === annId) closePanel();
+      removeChip(annId);
+      // Only remove element highlight for non-page-level annotations
+      if (xpath && xpath !== 'body') {
+        const el = resolveXPath(xpath);
+        if (el) el.classList.remove(`${ANN}-hl`);
+      }
     }
-  }
 
-  if (msg.type === 'restoreAnnotation') {
-    const ann = msg.ann;
-    if (!ann) return;
-    if (ann.pageLevel || ann.tag === 'page') {
-      injectPageChip(ann.id, ann.comment || '');
-    } else if (ann.xpath) {
-      const el = resolveXPath(ann.xpath);
-      if (el) injectChip(el, ann.id, ann.comment || '');
-    }
-  }
-
-  if (msg.type === 'focusAnnotation') {
-    const { annId } = msg;
-    getAll(anns => {
-      const ann = anns.find(a => a.id === annId);
+    if (msg.type === 'restoreAnnotation') {
+      const ann = msg.ann;
       if (!ann) return;
-
-      // Find and open the chip panel
-      const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
-      if (chip) {
-        chip.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        openPanel(chip, annId);
-      }
-
-      // Also flash + scroll to the annotated element itself
-      if (!ann.pageLevel && ann.xpath && ann.xpath !== 'body') {
+      if (ann.pageLevel || ann.tag === 'page') {
+        injectPageChip(ann.id, ann.comment || '');
+      } else if (ann.xpath) {
         const el = resolveXPath(ann.xpath);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          const prevOutline     = el.style.outline;
-          const prevTransition  = el.style.transition;
-          el.style.transition   = 'outline 0.15s';
-          el.style.outline      = '3px solid #f59e0b';
-          setTimeout(() => {
-            el.style.outline    = prevOutline;
-            el.style.transition = prevTransition;
-          }, 2000);
-        }
+        if (el) injectChip(el, ann.id, ann.comment || '');
       }
-    });
-  }
+    }
 
-  if (msg.type === 'openAllAnnotations') {
-    openAllChipsOnPage();
+    if (msg.type === 'focusAnnotation') {
+      const { annId } = msg;
+      getAll(anns => {
+        const ann = anns.find(a => a.id === annId);
+        if (!ann) return;
+
+        // Find and open the chip panel
+        const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${annId}"]`);
+        if (chip) {
+          chip.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          openPanel(chip, annId);
+        }
+
+        // Also flash + scroll to the annotated element itself
+        if (!ann.pageLevel && ann.xpath && ann.xpath !== 'body') {
+          const el = resolveXPath(ann.xpath);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const prevOutline     = el.style.outline;
+            const prevTransition  = el.style.transition;
+            el.style.transition   = 'outline 0.15s';
+            el.style.outline      = '3px solid #f59e0b';
+            setTimeout(() => {
+              el.style.outline    = prevOutline;
+              el.style.transition = prevTransition;
+            }, 2000);
+          }
+        }
+      });
+    }
+
+    if (msg.type === 'openAllAnnotations') {
+      openAllChipsOnPage();
+    }
+  });
+} catch (e) {
+  if (String(e && e.message).includes('Extension context invalidated')) {
+    showContextInvalidatedNotice();
   }
-});
+}
+
+// ── Change 7: SPA navigation tracking ────────────────────────────────────
+// Many target sites (Notion, GitHub, Linear) are SPAs that change
+// location.href via history.pushState/replaceState without a real navigation.
+(function installNavListener() {
+  if (window.__aiann_navInstalled) return;
+  window.__aiann_navInstalled = true;
+
+  let lastUrl = location.href;
+  const onUrlChange = () => {
+    const nowUrl = location.href;
+    if (nowUrl === lastUrl) return;
+    lastUrl = nowUrl;
+    // Tear down chips for previous URL, reload for new URL.
+    try {
+      __aiann_chipMap.forEach((_chip, id) => removeChip(id));
+    } catch (_) {}
+    // Reload annotations for the new URL
+    restoreAnnotations();
+  };
+
+  window.addEventListener('popstate',   onUrlChange);
+  window.addEventListener('hashchange', onUrlChange);
+  const _ps = history.pushState;
+  const _rs = history.replaceState;
+  history.pushState    = function () { const r = _ps.apply(this, arguments); onUrlChange(); return r; };
+  history.replaceState = function () { const r = _rs.apply(this, arguments); onUrlChange(); return r; };
+})();
 
 // ── Init ──────────────────────────────────────────────────────────────────
 injectStyles();

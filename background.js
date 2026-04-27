@@ -35,7 +35,24 @@ function setupAlarm() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(setupAlarm);
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+  setupAlarm();
+  // Change 18c — one-shot migration: strip query/hash from stored annotation URLs
+  try {
+    const { annotations = [] } = await chrome.storage.local.get('annotations');
+    let changed = false;
+    for (const a of annotations) {
+      if (typeof a.url === 'string' && /[?#]/.test(a.url)) {
+        try {
+          const u = new URL(a.url);
+          a.url = u.origin + u.pathname;
+          changed = true;
+        } catch (_) {}
+      }
+    }
+    if (changed) await chrome.storage.local.set({ annotations });
+  } catch (_) {}
+});
 chrome.runtime.onStartup.addListener(setupAlarm);
 
 chrome.alarms.onAlarm.addListener(alarm => {
@@ -46,6 +63,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
 const ANN_SHORT_KEYS = {
   id: 'i', url: 'u', tag: 'g', elId: 'e', classes: 'c',
   xpath: 'x', comment: 't', timestamp: 's', pageLevel: 'p', deletedAt: 'd',
+  text: 'tx',
 };
 
 function shortenAnn(ann) {
