@@ -108,13 +108,6 @@ ai-dev-annotator/
 
 ---
 
-## Source code
-
-This extension is fully open source. You can review all code at:
-**[[https://github.com/asharma2027/ai-dev-annotator/tree/production](https://github.com/asharma2027/ai-dev-annotator/tree/production)]**
-
----
-
 ## Support & contact
 
 - ☕ **Ko-fi:** [ko-fi.com/asharma2027](https://ko-fi.com/asharma2027) : buy me a coffee if this saves you time
