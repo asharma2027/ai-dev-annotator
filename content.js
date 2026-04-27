@@ -11,10 +11,12 @@ const ANN = 'aiann'; // CSS class/id prefix to avoid collisions
 let cachedShortcut = { modifier: 'alt' };
 
 function loadShortcut() {
-  chrome.storage.local.get({ annotatorSettings: {} }, r => {
-    const s = r.annotatorSettings || {};
-    cachedShortcut = s.shortcut || { modifier: 'alt' };
-  });
+  try {
+    chrome.storage.local.get({ annotatorSettings: {} }, r => {
+      const s = r.annotatorSettings || {};
+      cachedShortcut = s.shortcut || { modifier: 'alt' };
+    });
+  } catch {}
 }
 
 // Keep in sync with any Settings changes without requiring a page reload
@@ -210,10 +212,16 @@ function resolveXPath(xpath) {
 // ── Storage helpers ────────────────────────────────────────────────────────
 const STORE_KEY   = 'annotations';
 const HISTORY_KEY = 'annotationHistory';
-function getAll(cb) { chrome.storage.local.get({ [STORE_KEY]: [] }, r => cb(r[STORE_KEY])); }
+function getAll(cb) {
+  try {
+    chrome.storage.local.get({ [STORE_KEY]: [] }, r => cb(r[STORE_KEY]));
+  } catch { cb([]); }
+}
 function setAll(anns, cb) {
-  chrome.storage.local.set({ [STORE_KEY]: anns }, cb);
-  backupAnnotationsToSync(anns); // keep sync mirror up-to-date
+  try {
+    chrome.storage.local.set({ [STORE_KEY]: anns }, cb);
+    backupAnnotationsToSync(anns); // keep sync mirror up-to-date
+  } catch {}
 }
 function genId() { return `ann_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`; }
 
@@ -228,15 +236,17 @@ function backupAnnotationsToSync(_annotations) {
 
 // ── History limit enforcement ──────────────────────────────────────────────
 function enforceHistoryLimit() {
-  chrome.storage.local.get({ annotatorSettings: {}, [HISTORY_KEY]: [] }, r => {
-    const settings = r.annotatorSettings || {};
-    const maxLen   = (settings.maxHistoryLength !== undefined && settings.maxHistoryLength !== null)
-      ? settings.maxHistoryLength : 100;
-    if (maxLen <= 0) return; // 0 = indefinite
-    const hist = r[HISTORY_KEY];
-    if (hist.length <= maxLen) return;
-    chrome.storage.local.set({ [HISTORY_KEY]: hist.slice(-maxLen) });
-  });
+  try {
+    chrome.storage.local.get({ annotatorSettings: {}, [HISTORY_KEY]: [] }, r => {
+      const settings = r.annotatorSettings || {};
+      const maxLen   = (settings.maxHistoryLength !== undefined && settings.maxHistoryLength !== null)
+        ? settings.maxHistoryLength : 100;
+      if (maxLen <= 0) return; // 0 = indefinite
+      const hist = r[HISTORY_KEY];
+      if (hist.length <= maxLen) return;
+      try { chrome.storage.local.set({ [HISTORY_KEY]: hist.slice(-maxLen) }); } catch {}
+    });
+  } catch {}
 }
 
 // ── Shared panel ────────────────────────────────────────────────────────────
@@ -463,11 +473,13 @@ function deleteAnnotation(annId) {
         const el = resolveXPath(ann.xpath);
         if (el) el.classList.remove(`${ANN}-hl`);
       }
-      chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
-        const hist = r[HISTORY_KEY];
-        hist.push({ ...ann, deletedAt: new Date().toISOString() });
-        chrome.storage.local.set({ [HISTORY_KEY]: hist }, enforceHistoryLimit);
-      });
+      try {
+        chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
+          const hist = r[HISTORY_KEY];
+          hist.push({ ...ann, deletedAt: new Date().toISOString() });
+          try { chrome.storage.local.set({ [HISTORY_KEY]: hist }, enforceHistoryLimit); } catch {}
+        });
+      } catch {}
     }
     const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${id}"]`);
     if (chip) chip.remove();
@@ -565,25 +577,27 @@ function restoreAnnotations() {
 // new page, it picks up the intent and runs the requested action: focus a
 // specific annotation's panel, or open every chip on the page.
 function consumeNavIntent() {
-  chrome.storage.local.get({ _navIntent: null }, r => {
-    const intent = r._navIntent;
-    if (!intent) return;
-    if (intent.expiresAt && Date.now() > intent.expiresAt) {
-      chrome.storage.local.remove('_navIntent');
-      return;
-    }
-    if (intent.url && intent.url !== window.location.href) return; // not for this page
+  try {
+    chrome.storage.local.get({ _navIntent: null }, r => {
+      const intent = r._navIntent;
+      if (!intent) return;
+      if (intent.expiresAt && Date.now() > intent.expiresAt) {
+        try { chrome.storage.local.remove('_navIntent'); } catch {}
+        return;
+      }
+      if (intent.url && intent.url !== window.location.href) return; // not for this page
 
-    // Clear immediately so we don't re-fire on subsequent navigations
-    chrome.storage.local.remove('_navIntent');
+      // Clear immediately so we don't re-fire on subsequent navigations
+      try { chrome.storage.local.remove('_navIntent'); } catch {}
 
-    if (intent.type === 'focusAnnotation' && intent.annId) {
-      // Slight delay so all chips are wired up
-      setTimeout(() => focusAnnotationOnPage(intent.annId), 200);
-    } else if (intent.type === 'openAllForUrl') {
-      setTimeout(() => openAllChipsOnPage(), 200);
-    }
-  });
+      if (intent.type === 'focusAnnotation' && intent.annId) {
+        // Slight delay so all chips are wired up
+        setTimeout(() => focusAnnotationOnPage(intent.annId), 200);
+      } else if (intent.type === 'openAllForUrl') {
+        setTimeout(() => openAllChipsOnPage(), 200);
+      }
+    });
+  } catch {}
 }
 
 function focusAnnotationOnPage(annId) {

@@ -270,8 +270,10 @@ document.addEventListener('DOMContentLoaded', () => {
   async function gunzipToString(bytes) {
     const ds = new DecompressionStream('gzip');
     const writer = ds.writable.getWriter();
-    writer.write(bytes);
-    writer.close();
+    // Suppress unhandled rejections from write/close — the error surfaces
+    // through the readable side and is caught by the caller's try/catch.
+    writer.write(bytes).catch(() => {});
+    writer.close().catch(() => {});
     const buf = await new Response(ds.readable).arrayBuffer();
     return new TextDecoder().decode(buf);
   }

@@ -94,8 +94,9 @@ function buildBundle({ annotations = [], history = [], copyHistory = [], savedFo
 async function gzipString(str) {
   const cs = new CompressionStream('gzip');
   const writer = cs.writable.getWriter();
-  writer.write(new TextEncoder().encode(str));
-  writer.close();
+  // Suppress unhandled rejections — any error surfaces via the readable side.
+  writer.write(new TextEncoder().encode(str)).catch(() => {});
+  writer.close().catch(() => {});
   const buf = await new Response(cs.readable).arrayBuffer();
   return new Uint8Array(buf);
 }
