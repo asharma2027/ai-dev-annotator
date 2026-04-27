@@ -32,6 +32,15 @@ const LICENSE_STORAGE_KEY = 'license';
 // Free-tier history caps (premium = unlimited)
 const FREE_ANNOTATION_HISTORY_LIMIT = 30;
 const FREE_COPY_HISTORY_LIMIT       = 10;
+const FREE_MAX_HISTORY_SETTING      = 50; // max history length settable by non-premium users
+
+// Button action definitions — values used in settings storage
+const BUTTON_ACTIONS = {
+  copyAll:      { emoji: '📋', label: 'Copy All'       },
+  cutAll:       { emoji: '✂',  label: 'Cut All'        },
+  clearAll:     { emoji: '🗑', label: 'Clear All'      },
+  saveForLater: { emoji: '💾', label: 'Save for Later' },
+};
 
 // Human-readable labels for each modifier key
 const MODIFIER_LABELS = {
@@ -42,21 +51,14 @@ const MODIFIER_LABELS = {
 };
 
 // ─── Cached premium status ────────────────────────────────────────────────────
-let _premium = DEV_MODE;
+let _premium = true; // all features always unlocked
 
 function isPremium() {
   return _premium;
 }
 
 async function refreshPremiumStatus() {
-  if (DEV_MODE) { _premium = true; return; }
-  return new Promise(resolve => {
-    chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
-      const lic = r[LICENSE_STORAGE_KEY];
-      _premium = !!(lic && lic.valid === true);
-      resolve(_premium);
-    });
-  });
+  _premium = true; // all features always enabled
 }
 
 // ─── Gumroad license validation ───────────────────────────────────────────────
@@ -452,11 +454,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Settings defaults ────────────────────────────────────────────────────
   const DEFAULT_SETTINGS = {
-    shortcut:         { modifier: 'alt' }, // free: customizable annotation trigger
-    prependText:      '',                  // [PREMIUM] prepended to markdown output
-    appendText:       '',                  // [PREMIUM] appended  to markdown output
-    darkMode:         false,               // [PREMIUM] dark / light theme toggle
+    shortcut:         { modifier: 'alt' }, // customizable annotation trigger
+    prependText:      '',                  // prepended to markdown output
+    appendText:       '',                  // appended to markdown output
+    darkMode:         false,               // dark / light theme toggle
     maxHistoryLength: 100,                 // 0 = indefinite
+    buttonActions: {
+      copyBtn:  { left: 'copyAll',  right: 'cutAll'       },
+      clearBtn: { left: 'clearAll', right: 'saveForLater' },
+    },
   };
 
   function loadSettings(cb) {
@@ -479,7 +485,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.dataset.theme = enabled ? 'dark' : 'light';
   }
 
-  loadSettings(s => applyDarkMode(s.darkMode));
+  loadSettings(s => {
+    applyDarkMode(s.darkMode);
+    updateButtonLabels(s);
+  });
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function escHtml(s) {
@@ -844,6 +853,27 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // ── Update footer button labels from settings ────────────────────────────
+  function updateButtonLabels(settings) {
+    const btnActions = settings.buttonActions || DEFAULT_SETTINGS.buttonActions;
+    const copyLeft   = btnActions.copyBtn?.left   || 'copyAll';
+    const copyRight  = btnActions.copyBtn?.right  || 'cutAll';
+    const clearLeft  = btnActions.clearBtn?.left  || 'clearAll';
+    const clearRight = btnActions.clearBtn?.right || 'saveForLater';
+
+    const copyLeftCfg   = BUTTON_ACTIONS[copyLeft]   || BUTTON_ACTIONS.copyAll;
+    const copyRightCfg  = BUTTON_ACTIONS[copyRight]  || BUTTON_ACTIONS.cutAll;
+    const clearLeftCfg  = BUTTON_ACTIONS[clearLeft]  || BUTTON_ACTIONS.clearAll;
+    const clearRightCfg = BUTTON_ACTIONS[clearRight] || BUTTON_ACTIONS.saveForLater;
+
+    copyBtn.innerHTML = `
+      <span>${copyLeftCfg.emoji} ${escHtml(copyLeftCfg.label)}</span>
+      <span class="cut-hint">right-click: ${escHtml(copyRightCfg.label.toLowerCase())}</span>`;
+    clearBtn.innerHTML = `
+      <span>${clearLeftCfg.emoji} ${escHtml(clearLeftCfg.label)}</span>
+      <span class="cut-hint">right-click: ${escHtml(clearRightCfg.label.toLowerCase())}</span>`;
+  }
+
   function load() {
     chrome.storage.local.get({ annotations: [] }, r => render(r.annotations));
   }
@@ -864,12 +894,40 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // ── Sync restore banner ───────────────────────────────────────────────────
+  // Called on startup: if local storage is empty (e.g. after reinstall) but
+  // chrome.storage.sync has data, auto-restores the full bundle so annotations
+  // are never lost after reinstalling, without requiring any user action.
   function checkSyncRestore() {
     chrome.storage.local.get({ annotations: [] }, async local => {
       if (local.annotations.length > 0) return; // local has data — no restore needed
       const result = await readFromSync();
-      if (!result || !result.annotations || result.annotations.length === 0) return;
-      showRestoreBanner(result.annotations, result.ts);
+      if (!result) return;
+      const hasData = (result.annotations   && result.annotations.length   > 0)
+                   || (result.history        && result.history.length        > 0)
+                   || (result.savedForLater  && result.savedForLater.length  > 0);
+      if (!hasData) return;
+
+      // Auto-restore full bundle — no banner required
+      const toSet = {};
+      if (result.annotations  && result.annotations.length)   toSet.annotations       = result.annotations;
+      if (result.history       && result.history.length)       toSet[HISTORY_KEY]      = result.history;
+      if (result.copyHistory   && result.copyHistory.length)   toSet[COPY_HISTORY_KEY] = result.copyHistory;
+      if (result.savedForLater && result.savedForLater.length) toSet[SAVED_LATER_KEY]  = result.savedForLater;
+      if (result.settings && Object.keys(result.settings).length) toSet[SETTINGS_KEY] = result.settings;
+
+      isWritingFromPopup = true;
+      chrome.storage.local.set(toSet, () => {
+        isWritingFromPopup = false;
+        const anns = result.annotations || [];
+        if (anns.length) {
+          render(anns);
+          anns.forEach(ann => broadcastRestore(ann));
+        }
+        if (result.settings) {
+          if (result.settings.darkMode !== undefined) applyDarkMode(result.settings.darkMode);
+          updateButtonLabels({ ...DEFAULT_SETTINGS, ...result.settings });
+        }
+      });
     });
   }
 
@@ -1199,7 +1257,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="sfl-set-header">
             <span class="sfl-set-meta">📅 ${escHtml(when)} · ${set.count || items.length} annotation${(set.count || items.length) !== 1 ? 's' : ''}</span>
             <div class="sfl-set-actions">
-              <button class="sfl-set-btn sfl-restore" data-set-id="${escHtml(set.id)}" title="Restore these annotations">↺ Restore</button>
+              <button class="hist-restore-btn sfl-restore" data-set-id="${escHtml(set.id)}" title="Restore these annotations">↺</button>
               <button class="sfl-set-btn sfl-set-btn--danger sfl-delete" data-set-id="${escHtml(set.id)}" title="Delete this set">🗑</button>
             </div>
           </div>
@@ -1342,56 +1400,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderSettings() {
-    const premium = isPremium();
-
+    const premium = isPremium(); // always true — all features unlocked
     loadSettings(s => {
-      let licenseSection = '';
-
-      if (premium && !DEV_MODE) {
-        chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
-          const lic   = r[LICENSE_STORAGE_KEY];
-          const email = lic?.email ? escHtml(lic.email) : ':';
-          licenseSection = `
-            <div class="settings-section">
-              <div class="settings-section-title">⭐ Premium</div>
-              <div class="settings-row">
-                <span class="settings-label">Status</span>
-                <span class="settings-value premium-active-badge">✅ Active</span>
-              </div>
-              <div class="settings-row">
-                <span class="settings-label">Licensed to</span>
-                <span class="settings-value" style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${email}</span>
-              </div>
-              <div class="settings-row" style="justify-content:flex-end;">
-                <button id="deactivate-btn" class="btn-deactivate">Remove License</button>
-              </div>
-            </div>`;
-          buildAndInjectSettings(s, licenseSection, premium);
-        });
-      } else if (!premium) {
-        const purchaseUrl = PREMIUM_PURCHASE_URL || '#';
-        licenseSection = `
-          <div class="settings-section">
-            <div class="settings-section-title">⭐ Premium : $9.99 one-time</div>
-            <ul class="premium-features-list">
-              <li>🌙 Dark mode</li>
-              <li>📝 Custom Markdown prepend &amp; append</li>
-              <li>📋 Unlimited copy &amp; annotation history</li>
-              <li>🚀 All future premium features</li>
-            </ul>
-            <a href="#" class="btn-premium-upgrade" data-url="${escHtml(purchaseUrl)}">⭐ Get Premium : $9.99</a>
-            <div class="license-divider">Already purchased?</div>
-            <div class="license-input-row">
-              <input type="text" id="license-key-input" class="license-input" placeholder="Paste your license key…" spellcheck="false" autocomplete="off" />
-              <button id="activate-btn" class="btn-activate">Activate</button>
-            </div>
-            <div id="license-status" class="license-status"></div>
-          </div>`;
-        buildAndInjectSettings(s, licenseSection, premium);
-      } else {
-        // DEV_MODE : no license section shown
-        buildAndInjectSettings(s, licenseSection, premium);
-      }
+      // All features are always enabled — no license key required
+      const licenseSection = `
+        <div class="settings-section">
+          <div class="settings-section-title">⭐ Features</div>
+          <div class="settings-row">
+            <span class="settings-label">Status</span>
+            <span class="settings-value premium-active-badge">✅ All Features Enabled</span>
+          </div>
+        </div>`;
+      buildAndInjectSettings(s, licenseSection, premium);
     });
   }
 
@@ -1402,17 +1422,21 @@ document.addEventListener('DOMContentLoaded', () => {
       ? s.maxHistoryLength : 100;
     const isIndefiniteHist = currentMaxHist === 0;
 
-    settingsEl.innerHTML = `
-      ${DEV_MODE ? `
-      <div class="settings-section settings-section--dev">
-        <div class="settings-section-title">🛠 Developer</div>
-        <div class="settings-row">
-          <span class="settings-label">Dev Mode</span>
-          <span class="settings-value dev-mode-badge dev-mode-on">ON : all premium features unlocked</span>
-        </div>
-      </div>` : ''}
+    // Button action current values
+    const btnActions    = s.buttonActions || DEFAULT_SETTINGS.buttonActions;
+    const copyBtnLeft   = btnActions.copyBtn?.left   || 'copyAll';
+    const copyBtnRight  = btnActions.copyBtn?.right  || 'cutAll';
+    const clearBtnLeft  = btnActions.clearBtn?.left  || 'clearAll';
+    const clearBtnRight = btnActions.clearBtn?.right || 'saveForLater';
 
-      <!-- ── Annotation Shortcut (FREE : all users) ── -->
+    // Build <option> list for a given action key
+    const actionOptions = (selected) => Object.entries(BUTTON_ACTIONS)
+      .map(([key, cfg]) =>
+        `<option value="${escHtml(key)}" ${selected === key ? 'selected' : ''}>${cfg.emoji} ${escHtml(cfg.label)}</option>`)
+      .join('');
+
+    settingsEl.innerHTML = `
+      <!-- ── Annotation Shortcut ── -->
       <div class="settings-section">
         <div class="settings-section-title">⌨ Annotation Shortcut</div>
         <div class="settings-row">
@@ -1429,7 +1453,28 @@ document.addEventListener('DOMContentLoaded', () => {
         </p>
       </div>
 
-      <!-- ── Auto-Backup (FREE : all users) ── -->
+      <!-- ── Button Actions ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">🖱 Button Actions</div>
+        <div class="settings-row">
+          <label class="settings-label" for="copy-btn-left">Left button · left click</label>
+          <select id="copy-btn-left" class="shortcut-select">${actionOptions(copyBtnLeft)}</select>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="copy-btn-right">Left button · right click</label>
+          <select id="copy-btn-right" class="shortcut-select">${actionOptions(copyBtnRight)}</select>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="clear-btn-left">Right button · left click</label>
+          <select id="clear-btn-left" class="shortcut-select">${actionOptions(clearBtnLeft)}</select>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="clear-btn-right">Right button · right click</label>
+          <select id="clear-btn-right" class="shortcut-select">${actionOptions(clearBtnRight)}</select>
+        </div>
+      </div>
+
+      <!-- ── Auto-Backup ── -->
       <div class="settings-section" id="backup-status-section">
         <div class="settings-section-title">💾 Auto-Backup</div>
         <div class="settings-row">
@@ -1448,27 +1493,33 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       </div>
 
-      <!-- ── History (FREE : all users) ── -->
+      <!-- ── History ── -->
       <div class="settings-section">
         <div class="settings-section-title">📜 History</div>
         <div class="settings-row">
-          <label class="settings-label" for="max-history-input">Max length</label>
+          <label class="settings-label" for="max-history-input">
+            Max length
+            ${!premium ? '<span class="lock-icon" title="Upgrade to unlock indefinite history">🔒</span>' : ''}
+          </label>
           <div class="history-limit-row">
             <input
               type="number"
               id="max-history-input"
               class="history-limit-input"
               min="1"
-              max="10000"
-              value="${isIndefiniteHist ? 100 : currentMaxHist}"
-              ${isIndefiniteHist ? 'disabled' : ''}
+              max="${premium ? 10000 : FREE_MAX_HISTORY_SETTING}"
+              value="${isIndefiniteHist ? (premium ? 100 : FREE_MAX_HISTORY_SETTING) : Math.min(currentMaxHist, premium ? 10000 : FREE_MAX_HISTORY_SETTING)}"
+              ${isIndefiniteHist || !premium ? 'disabled' : ''}
             />
             <label class="history-indefinite-label">
-              <input type="checkbox" id="indefinite-history" ${isIndefiniteHist ? 'checked' : ''} />
-              Indefinite
+              <input type="checkbox" id="indefinite-history"
+                ${isIndefiniteHist ? 'checked' : ''}
+                ${!premium ? 'disabled' : ''} />
+              Indefinite${!premium ? ' <span class="lock-icon">🔒</span>' : ''}
             </label>
           </div>
         </div>
+        ${!premium ? `<p class="settings-hint">History limited to ${FREE_MAX_HISTORY_SETTING} entries. Upgrade for indefinite history.</p>` : ''}
         <div class="settings-row settings-row--btns">
           <button id="clear-history-settings-btn" class="btn-history-action btn-history-danger">🗑 Clear History</button>
         </div>
@@ -1492,60 +1543,43 @@ document.addEventListener('DOMContentLoaded', () => {
 
       ${licenseSection}
 
-      <!-- ── Appearance (PREMIUM) ── -->
+      <!-- ── Appearance ── -->
       <div class="settings-section">
-        <div class="settings-section-title">
-          Appearance
-          ${!premium ? '<span class="premium-badge">⭐ Premium</span>' : ''}
-        </div>
+        <div class="settings-section-title">🌙 Appearance</div>
         <div class="settings-row settings-row--toggle">
-          <span class="settings-label">
-            Dark Mode
-            ${!premium ? '<span class="lock-icon" title="Upgrade to Premium to unlock">🔒</span>' : ''}
-          </span>
-          <div class="toggle-wrap${!premium ? ' premium-locked' : ''}">
+          <span class="settings-label">Dark Mode</span>
+          <div class="toggle-wrap">
             <label class="toggle-switch">
-              <input type="checkbox" id="dark-mode-toggle" ${s.darkMode ? 'checked' : ''} ${!premium ? 'disabled' : ''}>
+              <input type="checkbox" id="dark-mode-toggle" ${s.darkMode ? 'checked' : ''}>
               <span class="toggle-slider"></span>
             </label>
           </div>
         </div>
       </div>
 
-      <!-- ── Markdown Copy (PREMIUM) ── -->
+      <!-- ── Markdown Copy ── -->
       <div class="settings-section">
-        <div class="settings-section-title">
-          Markdown Copy
-          ${!premium ? '<span class="premium-badge">⭐ Premium</span>' : ''}
-        </div>
+        <div class="settings-section-title">📝 Markdown Copy</div>
         <div class="settings-field">
-          <label class="settings-label" for="prepend-text">
-            Prepend Text
-            ${!premium ? '<span class="lock-icon" title="Upgrade to Premium to unlock">🔒</span>' : ''}
-          </label>
+          <label class="settings-label" for="prepend-text">Prepend Text</label>
           <textarea
             id="prepend-text"
-            class="settings-textarea${!premium ? ' premium-locked' : ''}"
+            class="settings-textarea"
             placeholder="Text added before the markdown output…"
-            ${!premium ? 'disabled' : ''}
           >${escHtml(s.prependText || '')}</textarea>
         </div>
         <div class="settings-field">
-          <label class="settings-label" for="append-text">
-            Append Text
-            ${!premium ? '<span class="lock-icon" title="Upgrade to Premium to unlock">🔒</span>' : ''}
-          </label>
+          <label class="settings-label" for="append-text">Append Text</label>
           <textarea
             id="append-text"
-            class="settings-textarea${!premium ? ' premium-locked' : ''}"
+            class="settings-textarea"
             placeholder="Text added after the markdown output…"
-            ${!premium ? 'disabled' : ''}
           >${escHtml(s.appendText || '')}</textarea>
         </div>
       </div>
 
       <div class="settings-github-row">
-        <a href="#" class="meta-link" data-url="https://github.com/asharma2027/ai-dev-annotator" title="View source on GitHub">View source on GitHub →</a>
+        <a href="#" class="meta-link" data-url="https://github.com/asharma2027/ai-dev-annotator/tree/production" title="View source on GitHub">View source on GitHub →</a>
       </div>
     `;
 
@@ -1592,7 +1626,6 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => {
           btn.disabled = false;
           btn.textContent = '⚡ Backup Now';
-          // Refresh status
           chrome.storage.local.get({ _lastSyncBackup: null, _lastFileBackup: null }, bd => {
             const syncEl = settingsEl.querySelector('#sync-backup-status');
             const fileEl = settingsEl.querySelector('#file-backup-status');
@@ -1603,7 +1636,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
 
-    // ── Shortcut selector (free, always wired) ────────────────────────────
+    // ── Shortcut selector ────────────────────────────────────────────────
     const modSelect = settingsEl.querySelector('#shortcut-modifier');
     const preview   = settingsEl.querySelector('#shortcut-preview');
     if (modSelect) {
@@ -1614,11 +1647,28 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // ── History settings (free, always wired) ─────────────────────────────
+    // ── Button Actions selects ────────────────────────────────────────────
+    const selCopyLeft   = settingsEl.querySelector('#copy-btn-left');
+    const selCopyRight  = settingsEl.querySelector('#copy-btn-right');
+    const selClearLeft  = settingsEl.querySelector('#clear-btn-left');
+    const selClearRight = settingsEl.querySelector('#clear-btn-right');
+
+    function saveButtonActions() {
+      const actions = {
+        copyBtn:  { left: selCopyLeft.value,  right: selCopyRight.value  },
+        clearBtn: { left: selClearLeft.value, right: selClearRight.value },
+      };
+      saveSettings({ buttonActions: actions }, ss => updateButtonLabels(ss));
+    }
+    [selCopyLeft, selCopyRight, selClearLeft, selClearRight].forEach(sel => {
+      if (sel) sel.addEventListener('change', saveButtonActions);
+    });
+
+    // ── History settings ─────────────────────────────────────────────────
     const maxHistInput  = settingsEl.querySelector('#max-history-input');
     const indefiniteChk = settingsEl.querySelector('#indefinite-history');
 
-    if (indefiniteChk && maxHistInput) {
+    if (indefiniteChk && maxHistInput && premium) {
       indefiniteChk.addEventListener('change', () => {
         if (indefiniteChk.checked) {
           maxHistInput.disabled = true;
@@ -1632,7 +1682,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    if (maxHistInput) {
+    if (maxHistInput && premium) {
       maxHistInput.addEventListener('change', () => {
         const val = Math.max(1, parseInt(maxHistInput.value, 10) || 100);
         maxHistInput.value = val;
@@ -1641,8 +1691,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ── Export ALL data ───────────────────────────────────────────────────
-    // File format: gzipped JSON of the v2 bundle (same compact format used
-    // for sync, but never truncated). File extension: `.annotator`.
     settingsEl.querySelector('#export-all-btn')?.addEventListener('click', async () => {
       const btn = settingsEl.querySelector('#export-all-btn');
       const orig = btn.textContent;
@@ -1661,7 +1709,7 @@ document.addEventListener('DOMContentLoaded', () => {
           settings:      r[SETTINGS_KEY],
         });
         bundle._exported = new Date().toISOString();
-        bundle._version  = '1.6.0';
+        bundle._version  = '1.7.0';
         const json = JSON.stringify(bundle);
         const gz   = await gzipString(json);
         const blob = new Blob([gz], { type: 'application/gzip' });
@@ -1682,8 +1730,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ── Import ALL data ───────────────────────────────────────────────────
-    // Accepts either the new gzipped `.annotator` format or a legacy plain
-    // JSON history file (for backward compatibility with old exports).
     const importAllBtn  = settingsEl.querySelector('#import-all-btn');
     const importAllFile = settingsEl.querySelector('#import-all-file');
     if (importAllBtn && importAllFile) {
@@ -1697,12 +1743,10 @@ document.addEventListener('DOMContentLoaded', () => {
           let bundle = null;
           let unpacked = null;
 
-          // First try gzipped binary
           try {
             const json = await gunzipToString(new Uint8Array(buf));
             bundle = JSON.parse(json);
           } catch {
-            // Fall back to plain JSON
             try {
               const txt = new TextDecoder().decode(new Uint8Array(buf));
               bundle = JSON.parse(txt);
@@ -1713,7 +1757,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
           }
 
-          // Two shapes: new compact bundle (has v=2) or legacy export
           if (bundle && bundle.v === 2) {
             unpacked = unpackBundle(bundle);
           } else {
@@ -1743,17 +1786,14 @@ document.addEventListener('DOMContentLoaded', () => {
             annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
             [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {},
           }, r => {
-            const annIds = new Set(r.annotations.map(a => a.id));
+            const annIds  = new Set(r.annotations.map(a => a.id));
             const newAnns = unpacked.annotations.filter(a => !annIds.has(a.id));
-
             const histKeys = new Set(r[HISTORY_KEY].map(a => a.id + '|' + (a.deletedAt || '')));
             const newHist  = unpacked.history.filter(a => !histKeys.has(a.id + '|' + (a.deletedAt || '')));
-
-            const copyTs = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
+            const copyTs  = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
             const newCopy = unpacked.copyHistory.filter(c => !copyTs.has(c.timestamp));
-
-            const slIds = new Set(r[SAVED_LATER_KEY].map(s => s.id));
-            const newSL = unpacked.savedForLater.filter(s => !slIds.has(s.id));
+            const slIds   = new Set(r[SAVED_LATER_KEY].map(s => s.id));
+            const newSL   = unpacked.savedForLater.filter(s => !slIds.has(s.id));
 
             chrome.storage.local.set({
               annotations:        [...r.annotations,       ...newAnns],
@@ -1789,81 +1829,29 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    if (premium) {
-      // ── Dark mode toggle ────────────────────────────────────────────────
-      const darkToggle = settingsEl.querySelector('#dark-mode-toggle');
-      if (darkToggle) {
-        darkToggle.addEventListener('change', () => {
-          saveSettings({ darkMode: darkToggle.checked }, updated => applyDarkMode(updated.darkMode));
-        });
-      }
+    // ── Dark mode toggle ──────────────────────────────────────────────────
+    const darkToggle = settingsEl.querySelector('#dark-mode-toggle');
+    if (darkToggle) {
+      darkToggle.addEventListener('change', () => {
+        saveSettings({ darkMode: darkToggle.checked }, updated => applyDarkMode(updated.darkMode));
+      });
+    }
 
-      // ── Prepend / append text ────────────────────────────────────────────
-      let prependTimer, appendTimer;
-      const prependTa = settingsEl.querySelector('#prepend-text');
-      const appendTa  = settingsEl.querySelector('#append-text');
-      if (prependTa) {
-        prependTa.addEventListener('input', () => {
-          clearTimeout(prependTimer);
-          prependTimer = setTimeout(() => saveSettings({ prependText: prependTa.value }), 350);
-        });
-      }
-      if (appendTa) {
-        appendTa.addEventListener('input', () => {
-          clearTimeout(appendTimer);
-          appendTimer = setTimeout(() => saveSettings({ appendText: appendTa.value }), 350);
-        });
-      }
-
-      // ── Remove License button ────────────────────────────────────────────
-      const deactivateBtn = settingsEl.querySelector('#deactivate-btn');
-      if (deactivateBtn) {
-        deactivateBtn.addEventListener('click', async () => {
-          if (confirm('Remove your license key? You can re-enter it any time.')) {
-            await deactivateLicense();
-            applyDarkMode(false);
-            renderSettings();
-          }
-        });
-      }
-    } else {
-      // ── Activate button ──────────────────────────────────────────────────
-      const activateBtn   = settingsEl.querySelector('#activate-btn');
-      const licenseInput  = settingsEl.querySelector('#license-key-input');
-      const licenseStatus = settingsEl.querySelector('#license-status');
-
-      if (activateBtn && licenseInput) {
-        activateBtn.addEventListener('click', async () => {
-          const key = licenseInput.value.trim();
-          if (!key) {
-            licenseStatus.textContent = 'Please enter a license key.';
-            licenseStatus.className   = 'license-status error';
-            return;
-          }
-          activateBtn.disabled    = true;
-          activateBtn.textContent = '…';
-          licenseStatus.textContent = '';
-          licenseStatus.className   = 'license-status';
-
-          const result = await activateLicense(key);
-
-          activateBtn.disabled    = false;
-          activateBtn.textContent = 'Activate';
-
-          if (result.valid) {
-            licenseStatus.textContent = '✅ Activated! Enjoy Premium.';
-            licenseStatus.className   = 'license-status success';
-            setTimeout(() => renderSettings(), 900);
-          } else {
-            licenseStatus.textContent = result.error || 'Invalid license key.';
-            licenseStatus.className   = 'license-status error';
-          }
-        });
-
-        licenseInput.addEventListener('keydown', e => {
-          if (e.key === 'Enter') activateBtn.click();
-        });
-      }
+    // ── Prepend / append text ─────────────────────────────────────────────
+    let prependTimer, appendTimer;
+    const prependTa = settingsEl.querySelector('#prepend-text');
+    const appendTa  = settingsEl.querySelector('#append-text');
+    if (prependTa) {
+      prependTa.addEventListener('input', () => {
+        clearTimeout(prependTimer);
+        prependTimer = setTimeout(() => saveSettings({ prependText: prependTa.value }), 350);
+      });
+    }
+    if (appendTa) {
+      appendTa.addEventListener('input', () => {
+        clearTimeout(appendTimer);
+        appendTimer = setTimeout(() => saveSettings({ appendText: appendTa.value }), 350);
+      });
     }
   }
 
@@ -1901,129 +1889,85 @@ document.addEventListener('DOMContentLoaded', () => {
     return { md: finalMd, count: anns.length };
   }
 
-  // ── Cut All (left-click: copy + clear) ───────────────────────────────────
-  copyBtn.addEventListener('click', () => {
-    chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [], [HISTORY_KEY]: [] }, r => {
-      if (r.annotations.length === 0) {
-        alert('No annotations with notes to copy yet.');
-        return;
-      }
-
+  // ── Button action implementations ─────────────────────────────────────────
+  function doCopyAll(btn) {
+    chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [] }, r => {
+      if (r.annotations.length === 0) { alert('No annotations with notes to copy yet.'); return; }
       loadSettings(s => {
         const result = buildMarkdown(r.annotations, s);
-        if (!result) {
-          alert('No annotations with notes to copy yet.');
-          return;
-        }
-
+        if (!result) { alert('No annotations with notes to copy yet.'); return; }
         navigator.clipboard.writeText(result.md).then(() => {
-          // Add to copy history log
           const copyHist = r[COPY_HISTORY_KEY];
           copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
+          chrome.storage.local.set({ [COPY_HISTORY_KEY]: copyHist });
+          if (btn) {
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '<span>✅ Copied!</span>';
+            setTimeout(() => (btn.innerHTML = origHtml), 1500);
+          }
+        }).catch(() => alert('Clipboard write failed. Try again.'));
+      });
+    });
+  }
 
-          // Move all annotations to history (the "cut" part)
+  function doCutAll(btn) {
+    chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [], [HISTORY_KEY]: [] }, r => {
+      if (r.annotations.length === 0) { alert('No annotations with notes to copy yet.'); return; }
+      loadSettings(s => {
+        const result = buildMarkdown(r.annotations, s);
+        if (!result) { alert('No annotations with notes to copy yet.'); return; }
+        navigator.clipboard.writeText(result.md).then(() => {
+          const copyHist = r[COPY_HISTORY_KEY];
+          copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
           const now  = new Date().toISOString();
           const hist = r[HISTORY_KEY];
           r.annotations.forEach(ann => hist.push({ ...ann, deletedAt: now }));
-
           isWritingFromPopup = true;
           chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist, [COPY_HISTORY_KEY]: copyHist }, () => {
             enforceHistoryLimitInStorage(() => {
               isWritingFromPopup = false;
               render([]);
-              // Notify content script to remove chips
               r.annotations.forEach(ann => broadcastRemove(ann.id, ann.xpath));
-              // Show undo banner
               showClearUndoBanner(r.annotations, now);
             });
           });
-
-          // Brief button feedback
-          const origHtml = copyBtn.innerHTML;
-          copyBtn.innerHTML = '<span>✅ Cut!</span>';
-          setTimeout(() => (copyBtn.innerHTML = origHtml), 1500);
+          if (btn) {
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '<span>✅ Cut!</span>';
+            setTimeout(() => (btn.innerHTML = origHtml), 1500);
+          }
         }).catch(() => alert('Clipboard write failed. Try again.'));
       });
     });
-  });
-
-  // Right-click on cut button: copy only (no clear)
-  copyBtn.addEventListener('contextmenu', e => {
-    e.preventDefault();
-    chrome.storage.local.get({ annotations: [], [COPY_HISTORY_KEY]: [] }, r => {
-      loadSettings(s => {
-        const result = buildMarkdown(r.annotations, s);
-        if (!result) {
-          alert('No annotations with notes to copy yet.');
-          return;
-        }
-        navigator.clipboard.writeText(result.md).then(() => {
-          const copyHist = r[COPY_HISTORY_KEY];
-          copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
-          chrome.storage.local.set({ [COPY_HISTORY_KEY]: copyHist });
-
-          const origHtml = copyBtn.innerHTML;
-          copyBtn.innerHTML = '<span>✅ Copied!</span>';
-          setTimeout(() => (copyBtn.innerHTML = origHtml), 1500);
-        }).catch(() => alert('Clipboard write failed. Try again.'));
-      });
-    });
-  });
-
-  function formatLine(n, ann) {
-    // Page-level annotation
-    if (ann.pageLevel || ann.tag === 'page') {
-      return `${n}. \`(whole page)\` → ${ann.comment.trim()}\n`;
-    }
-    const sel   = getSelector(ann);
-    const hasId = ann.elId
-      ? !!ann.elId
-      : (ann.id && ann.id !== 'N/A' && !ann.id.startsWith('ann_'));
-    if (hasId) return `${n}. \`${sel}\` → ${ann.comment.trim()}\n`;
-    return `${n}. \`${sel}\` | \`${ann.xpath}\` → ${ann.comment.trim()}\n`;
   }
 
-  // ── Clear All (undo banner instead of confirm dialog) ─────────────────────
-  clearBtn.addEventListener('click', () => {
+  function doClearAll() {
     chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
       const anns = r.annotations;
-      if (anns.length === 0) return; // nothing to clear
-
+      if (anns.length === 0) return;
       const hist = r[HISTORY_KEY];
       const now  = new Date().toISOString();
       anns.forEach(ann => hist.push({ ...ann, deletedAt: now }));
-
       isWritingFromPopup = true;
       chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist }, () => {
         enforceHistoryLimitInStorage(() => {
           isWritingFromPopup = false;
           render([]);
-          // Notify content script to remove chips
           anns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
-          // Show undo banner instead of confirm dialog
           showClearUndoBanner(anns, now, 'cleared');
         });
       });
     });
-  });
+  }
 
-  // ── Clear All (right-click): save current annotations to "Saved for Later"
-  clearBtn.addEventListener('contextmenu', e => {
-    e.preventDefault();
+  function doSaveForLater() {
     chrome.storage.local.get({ annotations: [], [SAVED_LATER_KEY]: [] }, r => {
       const anns = r.annotations;
       if (anns.length === 0) return;
-
-      const now = new Date().toISOString();
+      const now   = new Date().toISOString();
       const setId = `sfl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      const set = {
-        id:          setId,
-        savedAt:     now,
-        count:       anns.length,
-        annotations: anns.map(a => ({ ...a })), // snapshot
-      };
+      const set   = { id: setId, savedAt: now, count: anns.length, annotations: anns.map(a => ({ ...a })) };
       const newSaved = [...r[SAVED_LATER_KEY], set];
-
       isWritingFromPopup = true;
       chrome.storage.local.set({ annotations: [], [SAVED_LATER_KEY]: newSaved }, () => {
         isWritingFromPopup = false;
@@ -2031,6 +1975,45 @@ document.addEventListener('DOMContentLoaded', () => {
         anns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
         showClearUndoBanner(anns, now, 'saved', setId);
       });
+    });
+  }
+
+  function dispatchBtnAction(action, btn) {
+    if      (action === 'copyAll')      doCopyAll(btn);
+    else if (action === 'cutAll')       doCutAll(btn);
+    else if (action === 'clearAll')     doClearAll();
+    else if (action === 'saveForLater') doSaveForLater();
+  }
+
+  // ── Left footer button (copy-btn) ────────────────────────────────────────
+  copyBtn.addEventListener('click', () => {
+    loadSettings(s => {
+      const action = s.buttonActions?.copyBtn?.left || 'copyAll';
+      dispatchBtnAction(action, copyBtn);
+    });
+  });
+
+  copyBtn.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    loadSettings(s => {
+      const action = s.buttonActions?.copyBtn?.right || 'cutAll';
+      dispatchBtnAction(action, copyBtn);
+    });
+  });
+
+  // ── Right footer button (clear-btn) ──────────────────────────────────────
+  clearBtn.addEventListener('click', () => {
+    loadSettings(s => {
+      const action = s.buttonActions?.clearBtn?.left || 'clearAll';
+      dispatchBtnAction(action, clearBtn);
+    });
+  });
+
+  clearBtn.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    loadSettings(s => {
+      const action = s.buttonActions?.clearBtn?.right || 'saveForLater';
+      dispatchBtnAction(action, clearBtn);
     });
   });
 

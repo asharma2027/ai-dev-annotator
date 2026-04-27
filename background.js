@@ -16,7 +16,7 @@ const SYNC_PREFIX     = 'ann_sync_';   // legacy v1 keys (cleaned up on every wr
 const SYNC_V2_PREFIX  = 'annv2_';
 const SYNC_CHUNK_SIZE = 7000;
 const SYNC_MAX_BYTES  = 95000;
-const VERSION         = '1.6.0';
+const VERSION         = '1.7.0';
 
 const HISTORY_KEY      = 'annotationHistory';
 const COPY_HISTORY_KEY = 'copyHistory';
