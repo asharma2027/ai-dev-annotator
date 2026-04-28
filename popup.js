@@ -209,9 +209,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function broadcastRestore(ann) {
+    const normUrl = (() => {
+      try { const u = new URL(ann.url || ''); return u.origin + u.pathname; } catch { return ann.url || ''; }
+    })();
     chrome.tabs.query({}, tabs => {
       tabs
-        .filter(tab => tab.url === ann.url)
+        .filter(tab => {
+          try { const u = new URL(tab.url || ''); return (u.origin + u.pathname) === normUrl; } catch { return tab.url === ann.url; }
+        })
         .forEach(tab =>
           chrome.tabs.sendMessage(tab.id, { type: 'restoreAnnotation', ann }).catch(() => {})
         );
@@ -394,8 +399,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // the compressed payload doesn't fit, history is truncated oldest-first
   // until it does. Truncation is signaled via _syncTruncated for the UI.
   function backupToSync() {
-    clearTimeout(syncBackupTimer);
-    syncBackupTimer = setTimeout(() => { performSyncBackup(); }, 1500);
+    loadSettings(s => {
+      if (s.backupEnabled === false) return;
+      clearTimeout(syncBackupTimer);
+      syncBackupTimer = setTimeout(() => { performSyncBackup(); }, 1500);
+    });
   }
 
   async function performSyncBackup() {
@@ -512,6 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
     appendText:       '',                  // appended to markdown output
     darkMode:         false,               // dark / light theme toggle
     maxHistoryLength: 100,                 // 0 = indefinite
+    backupEnabled:    true,               // enable/disable auto-backup to sync
     buttonActions: {
       copyBtn:  { left: 'copyAll',  right: 'cutAll'       },
       clearBtn: { left: 'clearAll', right: 'saveForLater' },
@@ -612,7 +621,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const anns = r.annotations;
       const hist = r[HISTORY_KEY];
       const ann  = anns.find(a => a.id === annId);
-      if (ann) hist.push({ ...ann, deletedAt: new Date().toISOString() });
+      if (ann) {
+        // Remove any existing history entries for the same annotation ID to prevent duplicates
+        const dedupedHist = hist.filter(h => h.id !== ann.id);
+        dedupedHist.push({ ...ann, deletedAt: new Date().toISOString() });
+        hist.length = 0;
+        hist.push(...dedupedHist);
+      }
       const remaining = anns.filter(a => a.id !== annId);
       chrome.storage.local.set({ annotations: remaining, [HISTORY_KEY]: hist }, () => {
         enforceHistoryLimitInStorage(() => {
@@ -664,6 +679,31 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ── Clear a URL group (saves to history) ───────────────────────────────────
+  function clearGroup(url) {
+    chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
+      const groupAnns = r.annotations.filter(a => a.url === url);
+      if (groupAnns.length === 0) return;
+      const remaining = r.annotations.filter(a => a.url !== url);
+      const hist = r[HISTORY_KEY];
+      const now = new Date().toISOString();
+      groupAnns.forEach(ann => {
+        const dedupedHist = hist.filter(h => h.id !== ann.id);
+        dedupedHist.push({ ...ann, deletedAt: now });
+        hist.length = 0;
+        hist.push(...dedupedHist);
+      });
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations: remaining, [HISTORY_KEY]: hist }, () => {
+        enforceHistoryLimitInStorage(() => {
+          isWritingFromPopup = false;
+          render(remaining);
+          groupAnns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+        });
+      });
+    });
+  }
+
   // ── Restore a history entry ────────────────────────────────────────────────
   function restoreAnnotation(annId, deletedAt) {
     chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [] }, r => {
@@ -674,6 +714,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const ann = { ...hist[histIdx] };
       delete ann.deletedAt;
+
+      // Normalize URL to origin+pathname to match existing annotations
+      if (ann.url) {
+        try {
+          const u = new URL(ann.url);
+          ann.url = u.origin + u.pathname;
+        } catch (_) {}
+      }
 
       if (anns.some(a => a.id === ann.id)) { showHistory(); return; }
 
@@ -836,6 +884,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="url-header">
           <div class="url-label url-label--clickable" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
           <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋 Copy group</button>
+          <button class="url-clear-group-btn" data-url="${escHtml(url)}" title="Clear group (saves to history)">🗑</button>
         </div>`;
       items.forEach(ann => {
         const sel = getSelector(ann);
@@ -845,7 +894,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="item-sel">
             <code class="ann-code--clickable" data-nav-ann-id="${escHtml(ann.id)}" title="Click to navigate to this annotation">${escHtml(sel)}</code>
             <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋 Copy</button>
-            <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Delete annotation">✕</button>
+            <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Clear annotation">🗑</button>
           </div>
           <textarea
             class="item-note-edit"
@@ -873,6 +922,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     listEl.querySelectorAll('.url-copy-btn').forEach(btn => {
       btn.addEventListener('click', () => copyGroup(btn.dataset.url));
+    });
+    listEl.querySelectorAll('.url-clear-group-btn').forEach(btn => {
+      btn.addEventListener('click', () => clearGroup(btn.dataset.url));
     });
     listEl.querySelectorAll('.item-copy-btn').forEach(btn => {
       btn.addEventListener('click', () => copyAnnotation(btn.dataset.annId));
@@ -1258,6 +1310,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 data-ann-id="${escHtml(ann.id)}"
                 data-deleted-at="${escHtml(ann.deletedAt || '')}"
                 title="Restore annotation">+</button>
+              <button class="hist-perm-delete-btn"
+                data-ann-id="${escHtml(ann.id)}"
+                data-deleted-at="${escHtml(ann.deletedAt || '')}"
+                title="Permanently delete">✕</button>
             </div>
             <div class="hist-meta">
               <span class="hist-ts">📅 ${escHtml(formatTimestamp(ann.timestamp))}</span>
@@ -1278,10 +1334,21 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', () => restoreAnnotation(btn.dataset.annId, btn.dataset.deletedAt));
       });
 
+      historyEl.querySelectorAll('.hist-perm-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => permDeleteAnnotationHistory(btn.dataset.annId, btn.dataset.deletedAt));
+      });
+
       // Re-apply search highlights if search is active
       if (searchActive && searchInput && searchInput.value.trim()) {
         applySearch(searchInput.value.trim());
       }
+    });
+  }
+
+  function permDeleteAnnotationHistory(annId, deletedAt) {
+    chrome.storage.local.get({ [HISTORY_KEY]: [] }, r => {
+      const newHist = r[HISTORY_KEY].filter(a => !(a.id === annId && a.deletedAt === deletedAt));
+      chrome.storage.local.set({ [HISTORY_KEY]: newHist }, () => renderAnnotationHistory());
     });
   }
 
@@ -1381,6 +1448,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="copy-hist-header">
             <span class="hist-ts">📋 ${escHtml(formatTimestamp(entry.timestamp))}</span>
             <span class="copy-hist-count">${entry.count} annotation${entry.count !== 1 ? 's' : ''}</span>
+            <button class="copy-hist-perm-delete-btn" data-ts="${escHtml(entry.timestamp)}" title="Permanently delete">✕</button>
           </div>
           <div class="copy-hist-preview">${escHtml(entry.output)}</div>
         </div>`;
@@ -1389,6 +1457,16 @@ document.addEventListener('DOMContentLoaded', () => {
       historyEl.innerHTML = html;
       attachTabListeners();
       attachExternalLinks(historyEl);
+
+      historyEl.querySelectorAll('.copy-hist-perm-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const ts = btn.dataset.ts;
+          chrome.storage.local.get({ [COPY_HISTORY_KEY]: [] }, r => {
+            const newHist = r[COPY_HISTORY_KEY].filter(c => c.timestamp !== ts);
+            chrome.storage.local.set({ [COPY_HISTORY_KEY]: newHist }, () => renderCopyHistory());
+          });
+        });
+      });
 
       // Re-apply search highlights if search is active
       if (searchActive && searchInput && searchInput.value.trim()) {
@@ -1529,6 +1607,15 @@ document.addEventListener('DOMContentLoaded', () => {
       <!-- ── Auto-Backup ── -->
       <div class="settings-section" id="backup-status-section">
         <div class="settings-section-title">💾 Auto-Backup</div>
+        <div class="settings-row settings-row--toggle">
+          <span class="settings-label">Enable Auto-Backup</span>
+          <div class="toggle-wrap">
+            <label class="toggle-switch">
+              <input type="checkbox" id="backup-enabled-toggle" ${s.backupEnabled !== false ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
         <div class="settings-row">
           <span class="settings-label">Sync backup</span>
           <span class="settings-value" id="sync-backup-status">Checking…</span>
@@ -1885,6 +1972,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
+    // ── Backup enabled toggle ────────────────────────────────────────────
+    const backupEnabledToggle = settingsEl.querySelector('#backup-enabled-toggle');
+    if (backupEnabledToggle) {
+      backupEnabledToggle.addEventListener('change', () => {
+        saveSettings({ backupEnabled: backupEnabledToggle.checked });
+      });
+    }
+
     // ── Dark mode toggle ──────────────────────────────────────────────────
     const darkToggle = settingsEl.querySelector('#dark-mode-toggle');
     if (darkToggle) {
@@ -1954,8 +2049,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!result) { showToast('No annotations with notes to copy yet.'); return; }
         navigator.clipboard.writeText(result.md).then(() => {
           const copyHist = r[COPY_HISTORY_KEY];
-          copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
-          chrome.storage.local.set({ [COPY_HISTORY_KEY]: copyHist });
+          const dedupedCopyHist = copyHist.filter(c => (c.output || '').trim() !== result.md.trim());
+          dedupedCopyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
+          chrome.storage.local.set({ [COPY_HISTORY_KEY]: dedupedCopyHist });
           if (btn) {
             const origHtml = btn.innerHTML;
             btn.innerHTML = '<span>✅ Copied!</span>';
@@ -1974,12 +2070,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!result) { showToast('No annotations with notes to copy yet.'); return; }
         navigator.clipboard.writeText(result.md).then(() => {
           const copyHist = r[COPY_HISTORY_KEY];
-          copyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
+          const dedupedCopyHist = copyHist.filter(c => (c.output || '').trim() !== result.md.trim());
+          dedupedCopyHist.push({ timestamp: new Date().toISOString(), output: result.md, count: result.count });
           const now  = new Date().toISOString();
           const hist = r[HISTORY_KEY];
-          r.annotations.forEach(ann => hist.push({ ...ann, deletedAt: now }));
+          r.annotations.forEach(ann => {
+            const dedupedHist = hist.filter(h => h.id !== ann.id);
+            dedupedHist.push({ ...ann, deletedAt: now });
+            hist.length = 0;
+            hist.push(...dedupedHist);
+          });
+          const copyHistToSave = dedupedCopyHist;
           isWritingFromPopup = true;
-          chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist, [COPY_HISTORY_KEY]: copyHist }, () => {
+          chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist, [COPY_HISTORY_KEY]: copyHistToSave }, () => {
             enforceHistoryLimitInStorage(() => {
               isWritingFromPopup = false;
               render([]);
@@ -2003,7 +2106,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (anns.length === 0) return;
       const hist = r[HISTORY_KEY];
       const now  = new Date().toISOString();
-      anns.forEach(ann => hist.push({ ...ann, deletedAt: now }));
+      anns.forEach(ann => {
+        const dedupedHist = hist.filter(h => h.id !== ann.id);
+        dedupedHist.push({ ...ann, deletedAt: now });
+        hist.length = 0;
+        hist.push(...dedupedHist);
+      });
       isWritingFromPopup = true;
       chrome.storage.local.set({ annotations: [], [HISTORY_KEY]: hist }, () => {
         enforceHistoryLimitInStorage(() => {
@@ -2023,7 +2131,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const now   = new Date().toISOString();
       const setId = `sfl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const set   = { id: setId, savedAt: now, count: anns.length, annotations: anns.map(a => ({ ...a })) };
-      const newSaved = [...r[SAVED_LATER_KEY], set];
+      const newIds = anns.map(a => a.id).sort().join(',');
+      const dedupedSaved = r[SAVED_LATER_KEY].filter(s => {
+        const sIds = (s.annotations || []).map(a => a.id).sort().join(',');
+        return sIds !== newIds;
+      });
+      const newSaved = [...dedupedSaved, set];
       isWritingFromPopup = true;
       chrome.storage.local.set({ annotations: [], [SAVED_LATER_KEY]: newSaved }, () => {
         isWritingFromPopup = false;
@@ -2109,5 +2222,22 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshPremiumStatus().then(() => {
     load();
     checkSyncRestore();
+  });
+
+  // Handle scroll-to-annotation intent from content.js element label click
+  chrome.storage.local.get({ _popupScrollTarget: null }, r => {
+    if (r._popupScrollTarget) {
+      const targetAnnId = r._popupScrollTarget;
+      chrome.storage.local.remove('_popupScrollTarget');
+      setTimeout(() => {
+        const codeEl = listEl.querySelector(`[data-nav-ann-id="${targetAnnId}"]`);
+        const item = codeEl ? codeEl.closest('.item') : null;
+        if (item) {
+          item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          item.classList.add('item-nav-flash');
+          setTimeout(() => item.classList.remove('item-nav-flash'), 1500);
+        }
+      }, 350);
+    }
   });
 });

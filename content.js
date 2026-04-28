@@ -222,7 +222,9 @@ function injectStyles() {
 
     /* Change 15: panel hint */
     .aiann-panel-hint {
-      font-size: 11px;
+      font-size: 10px;
+      white-space: nowrap;
+      overflow: hidden;
       opacity: 0.65;
       margin-top: 4px;
       line-height: 1.35;
@@ -335,16 +337,26 @@ let saveTimer     = null;
 // Stores original element data so we can revert a page-level toggle
 let originalAnnData = null;
 
+function getAnnSelector(ann) {
+  if (!ann) return '(unknown)';
+  if (ann.pageLevel || ann.tag === 'page') return '(whole page)';
+  const rawId = ann.elId ? `#${ann.elId}` : '';
+  const cls = (ann.classes && ann.classes !== 'N/A') ? ann.classes : '';
+  return `${ann.tag || '?'}${rawId}${cls}`;
+}
+
 function buildPanel() {
   const p = document.createElement('div');
   p.id = `${ANN}-panel`;
   p.innerHTML = `
     <div id="${ANN}-panel-header">
-      ✏ Annotation
+      <span id="${ANN}-element-label" title="Click to view in popup" style="cursor:pointer;color:#db2777;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;">...</span>
       <button id="${ANN}-close-btn" title="Close">✕</button>
     </div>
     <textarea id="${ANN}-textarea"></textarea>
-    <div class="aiann-panel-hint">Empty notes are auto-discarded.&nbsp;&nbsp;Esc to close · saves automatically.</div>
+    <div id="${ANN}-ctx-container" style="margin-top:5px;display:flex;flex-wrap:wrap;gap:3px;"></div>
+    <div class="aiann-panel-hint">Empty notes auto-discarded. Esc to save &amp; close</div>
+    <div style="font-size:9px;opacity:0.5;margin-top:2px;font-family:system-ui,sans-serif;color:#6b7280;">Alt+Right-click element to add context</div>
     <div id="${ANN}-panel-footer">
       <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Page Note</button>
       <span id="${ANN}-save-status"></span>
@@ -435,6 +447,16 @@ function buildPanel() {
     });
   });
 
+  p.querySelector(`#${ANN}-element-label`).addEventListener('click', () => {
+    const annId = document.getElementById(`${ANN}-element-label`)?.dataset.annId;
+    if (!annId) return;
+    try {
+      chrome.storage.local.set({ _popupScrollTarget: annId }, () => {
+        chrome.runtime.sendMessage({ type: 'openPopupAndFocus', annId }).catch(() => {});
+      });
+    } catch (e) {}
+  });
+
   document.addEventListener('mousedown', e => {
     const panel = document.getElementById(`${ANN}-panel`);
     if (
@@ -451,6 +473,30 @@ function buildPanel() {
 
 function getPanel() {
   return document.getElementById(`${ANN}-panel`) || buildPanel();
+}
+
+function renderContextChips(annId, contextElements) {
+  const panel = document.getElementById(`${ANN}-panel`);
+  if (!panel || activeAnnId !== annId) return;
+  let ctxContainer = panel.querySelector(`#${ANN}-ctx-container`);
+  if (!ctxContainer) {
+    ctxContainer = document.createElement('div');
+    ctxContainer.id = `${ANN}-ctx-container`;
+    ctxContainer.style.cssText = 'margin-top:5px;display:flex;flex-wrap:wrap;gap:3px;';
+    const hint = panel.querySelector('.aiann-panel-hint');
+    if (hint) hint.parentNode.insertBefore(ctxContainer, hint);
+    else panel.appendChild(ctxContainer);
+  }
+  ctxContainer.innerHTML = '';
+  if (!contextElements || contextElements.length === 0) return;
+  contextElements.forEach((ctx, i) => {
+    const sel = `${ctx.tag}${ctx.elId ? '#'+ctx.elId : ''}${ctx.classes||''}`;
+    const chip = document.createElement('span');
+    chip.style.cssText = 'font:600 9.5px/1 Menlo,monospace;background:#fce7f3;color:#9d174d;padding:2px 5px;border-radius:4px;cursor:default;';
+    chip.title = ctx.text || sel;
+    chip.textContent = sel.slice(0, 28) + (sel.length > 28 ? '…' : '');
+    ctxContainer.appendChild(chip);
+  });
 }
 
 function openPanel(chip, annId) {
@@ -472,6 +518,14 @@ function openPanel(chip, annId) {
     ta.removeAttribute('placeholder'); // no pre-typing hint
     setSaveStatus('');
 
+    // Populate the element label in the header
+    const labelEl = panel.querySelector(`#${ANN}-element-label`);
+    if (labelEl && ann) {
+      const sel = getAnnSelector(ann);
+      labelEl.textContent = sel;
+      labelEl.dataset.annId = annId;
+    }
+
     // Reflect current page-level state on the button
     const pageBtn = panel.querySelector(`#${ANN}-page-btn`);
     if (pageBtn && ann) {
@@ -485,6 +539,11 @@ function openPanel(chip, annId) {
     activeChip  = chip;
     activeAnnId = annId;
     ta.focus();
+
+    // Render context chips if any
+    if (ann && ann.contextElements && ann.contextElements.length > 0) {
+      renderContextChips(annId, ann.contextElements);
+    }
   });
 }
 
@@ -568,13 +627,47 @@ function deleteAnnotation(annId) {
             }
           }
           const hist = r[HISTORY_KEY];
-          hist.push({ ...ann, deletedAt: new Date().toISOString() });
-          try { chrome.storage.local.set({ [HISTORY_KEY]: hist }, enforceHistoryLimit); } catch {}
+          // Remove any existing history entries for the same annotation ID to prevent duplicates
+          const dedupedHist = hist.filter(h => h.id !== ann.id);
+          dedupedHist.push({ ...ann, deletedAt: new Date().toISOString() });
+          try { chrome.storage.local.set({ [HISTORY_KEY]: dedupedHist }, enforceHistoryLimit); } catch {}
         });
       } catch {}
     }
     removeChip(id);
     setAll(anns.filter(a => a.id !== id));
+  });
+}
+
+function addElementToContext(annId, el) {
+  if (!annId || !el) return;
+  const ctxEl = {
+    tag:    el.tagName ? el.tagName.toLowerCase() : '?',
+    elId:   el.id || '',
+    classes: typeof el.className === 'string' ? el.className.trim().split(/\s+/)
+      .filter(c => !c.startsWith(ANN)).map(c => `.${c}`).join('') : '',
+    xpath:  getXPath(el),
+    text:   (() => { try { return (el.innerText || '').replace(/\s+/g,' ').trim().slice(0,120); } catch{return '';} })(),
+  };
+
+  getAll(anns => {
+    const ann = anns.find(a => a.id === annId);
+    if (!ann) return;
+    if (!ann.contextElements) ann.contextElements = [];
+    ann.contextElements.push(ctxEl);
+    setAll(anns, () => {
+      setSaveStatus('Context added ✓');
+      renderContextChips(annId, ann.contextElements);
+      // Flash the element briefly
+      el.classList.add(`${ANN}-hl`);
+      setTimeout(() => {
+        if (!ann.pageLevel) {
+          // Only remove if not the annotation's own element
+          const mainEl = resolveXPath(ann.xpath);
+          if (el !== mainEl) el.classList.remove(`${ANN}-hl`);
+        }
+      }, 1200);
+    });
   });
 }
 
@@ -694,12 +787,18 @@ function repositionPageChipContainer() {
   apply(candidates[0]);
 }
 
+let __aiann_reposPending = false;
 function repositionAllChips() {
-  __aiann_chipMap.forEach((chip, id) => {
-    const target = __aiann_targetMap.get(id) || null;
-    positionChipAtElement(chip, target);
+  if (__aiann_reposPending) return;
+  __aiann_reposPending = true;
+  requestAnimationFrame(() => {
+    __aiann_chipMap.forEach((chip, id) => {
+      const target = __aiann_targetMap.get(id) || null;
+      positionChipAtElement(chip, target);
+    });
+    repositionPageChipContainer();
+    __aiann_reposPending = false;
   });
-  repositionPageChipContainer();
 }
 
 // Wire reposition triggers (idempotent — guard against double-binding):
@@ -709,7 +808,23 @@ if (!window.__aiann_chipReposBound) {
   window.addEventListener('resize',  repositionAllChips, { passive: true });
   const ro = new ResizeObserver(repositionAllChips);
   ro.observe(document.documentElement);
-  const mo = new MutationObserver(repositionAllChips);
+  const mo = new MutationObserver(mutations => {
+    // Skip mutations from our own chip overlay/page-chip container to prevent feedback loops
+    const allOurs = mutations.every(m => {
+      let node = m.target;
+      while (node && node !== document.documentElement) {
+        if (node.id && (
+          node.id === 'aiann-chip-overlay' ||
+          node.id === 'aiann-page-chips' ||
+          node.id === 'aiann-panel' ||
+          node.id.startsWith('aiann-')
+        )) return true;
+        node = node.parentNode;
+      }
+      return false;
+    });
+    if (!allOurs) repositionAllChips();
+  });
   mo.observe(document.documentElement, {
     childList: true, subtree: true, attributes: true,
     attributeFilter: ['style', 'class']
@@ -927,6 +1042,23 @@ document.addEventListener('contextmenu', e => {
     target === document.body ||
     target === document.documentElement
   ) return;
+
+  // If panel is open and user alt+right-clicks a different element → add to context
+  if (activeAnnId) {
+    const panel = document.getElementById(`${ANN}-panel`);
+    if (panel && panel.style.display === 'block') {
+      // Don't add our own UI elements
+      if (!target.closest(`#${ANN}-panel`) && !target.classList.contains(`${ANN}-chip`)) {
+        // Check it's not the currently annotated element itself
+        const currentTarget = __aiann_targetMap.get(activeAnnId);
+        if (target !== currentTarget) {
+          e.preventDefault();
+          addElementToContext(activeAnnId, target);
+          return; // Don't create new annotation
+        }
+      }
+    }
+  }
 
   // If already annotated, open existing annotation instead of creating a duplicate
   if (target.classList.contains(`${ANN}-hl`)) {

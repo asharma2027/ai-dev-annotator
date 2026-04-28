@@ -235,8 +235,12 @@ function writeToLocalSnapshot(localData) {
 // ── Debounced backup trigger from popup / content scripts ─────────────────
 let _bgBackupTimer = null;
 function scheduleBackup() {
-  clearTimeout(_bgBackupTimer);
-  _bgBackupTimer = setTimeout(performBackup, 1500);
+  chrome.storage.local.get({ annotatorSettings: {} }, r => {
+    const settings = r.annotatorSettings || {};
+    if (settings.backupEnabled === false) return;
+    clearTimeout(_bgBackupTimer);
+    _bgBackupTimer = setTimeout(performBackup, 1500);
+  });
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -247,6 +251,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === 'scheduleBackup') {
     scheduleBackup();
+    sendResponse({ ok: true });
+    return false;
+  }
+  if (msg.type === 'openPopupAndFocus') {
+    const { annId } = msg;
+    chrome.storage.local.set({ _popupScrollTarget: annId }, async () => {
+      try {
+        if (typeof chrome.action?.openPopup === 'function') {
+          await chrome.action.openPopup();
+        }
+      } catch (e) {
+        // openPopup may not be available in all contexts
+      }
+    });
     sendResponse({ ok: true });
     return false;
   }
