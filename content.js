@@ -584,6 +584,13 @@ function renderContextChips(annId, contextElements) {
 }
 
 function openPanel(chip, annId) {
+  // If switching to a different annotation while one is already active,
+  // run the standard close path on the previous one. This discards an empty
+  // in-progress annotation (and removes its yellow highlight) instead of
+  // leaving it orphaned when the user moves on to annotate another element.
+  if (activeAnnId && activeAnnId !== annId) {
+    closePanel();
+  }
   getAll(anns => {
     const ann     = anns.find(a => a.id === annId);
     const comment = ann ? (ann.comment || '') : '';
@@ -643,19 +650,43 @@ function closePanel() {
   // for existing notes and free of clutter for newly-created ones.
   const idToCheck = activeAnnId;
   const p = document.getElementById(`${ANN}-panel`);
+  // Read the live textarea value before we hide/clear — this is the source of
+  // truth for "is the note empty right now?", since the user may have cleared
+  // the text faster than the debounced save could persist it.
+  const ta = p ? p.querySelector(`#${ANN}-textarea`) : null;
+  const liveText = ta ? ta.value : '';
+  const liveEmpty = !liveText || !liveText.trim();
   if (p) p.style.display = 'none';
   activeChip    = null;
   activeAnnId   = null;
 
   if (!idToCheck) return;
   // Cancel any pending debounced save before checking — otherwise a queued
-  // empty-string write can land after we discard.
+  // write can land after we discard.
   clearTimeout(saveTimer);
   getAll(anns => {
     const ann = anns.find(a => a.id === idToCheck);
     if (!ann) return;
-    if (ann.comment && ann.comment.trim()) return; // has content — keep
-    // Empty: discard silently (no history record, no chip)
+    // Source of truth: the textarea contents at close time. If the user
+    // cleared the text (even if a stale non-empty value is still in storage
+    // because the debounce hasn't fired), treat it as empty and discard so
+    // the yellow highlight is removed in real time.
+    if (!liveEmpty) {
+      // Has content — make sure the latest text is persisted (the pending
+      // debounce was just cancelled), then keep the chip + highlight.
+      if (ann.comment !== liveText) {
+        ann.comment = liveText;
+        setAll(anns, () => {
+          const chip = document.querySelector(`.${ANN}-chip[data-ann-id="${idToCheck}"]`);
+          if (chip) {
+            chip.title = liveText.trim().slice(0, 80);
+            chip.classList.toggle('has-note', true);
+          }
+        });
+      }
+      return;
+    }
+    // Empty: discard silently (no history record, no chip, no highlight)
     removeChip(idToCheck);
     if (!ann.pageLevel) {
       const el = resolveXPath(ann.xpath);
