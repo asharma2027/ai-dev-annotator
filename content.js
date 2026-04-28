@@ -380,13 +380,27 @@ function getFullLabelText(ann) {
   return [main, ...ctxParts].join(', ');
 }
 
-// Update the pink element label in the open panel to reflect current ann state
+// Update the pink element label / blue page label in the open panel to
+// reflect the current ann state. For page-level annotations, hide the pink
+// element selector (it's meaningless: there's no specific element) and show
+// a blue page-URL label instead, mirroring the popup's blue url-group label.
 function updatePanelLabel(ann) {
   const labelEl = document.getElementById(`${ANN}-element-label`);
-  if (!labelEl) return;
-  const full = getFullLabelText(ann);
-  labelEl.textContent = full;
-  labelEl.title = `Click to open in popup\n${full}`;
+  const pageLabelEl = document.getElementById(`${ANN}-page-label`);
+  if (!ann) return;
+  const isPage = !!(ann.pageLevel || ann.tag === 'page');
+  if (labelEl) {
+    const full = getFullLabelText(ann);
+    labelEl.textContent = full;
+    labelEl.title = `Click to open in popup\n${full}`;
+    labelEl.style.display = isPage ? 'none' : '';
+  }
+  if (pageLabelEl) {
+    const pageText = ann.url || __aiann_pageKey;
+    pageLabelEl.textContent = pageText;
+    pageLabelEl.title = `Page annotation\n${pageText}`;
+    pageLabelEl.style.display = isPage ? '' : 'none';
+  }
 }
 
 function buildPanel() {
@@ -395,6 +409,7 @@ function buildPanel() {
   p.innerHTML = `
     <div id="${ANN}-panel-header">
       <span id="${ANN}-element-label" title="Click to open in popup" style="cursor:pointer;color:#db2777;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">...</span>
+      <span id="${ANN}-page-label" title="Page annotation" style="display:none;color:#2563eb;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;"></span>
       <button class="${ANN}-label-copy-btn" title="Copy selector(s) to clipboard">📋</button>
       <button id="${ANN}-close-btn" title="Close">✕</button>
     </div>
@@ -486,6 +501,9 @@ function buildPanel() {
             ? 'Currently: whole-page — click to revert to element-specific'
             : 'Mark as whole-page annotation (not element-specific)';
         }
+        // Live-update the header label so the pink/blue display tracks the
+        // toggle without needing to reopen the panel.
+        updatePanelLabel(ann);
         setSaveStatus('Saved ✓');
       });
     });
