@@ -22,6 +22,21 @@ const HISTORY_KEY      = 'annotationHistory';
 const COPY_HISTORY_KEY = 'copyHistory';
 const SETTINGS_KEY     = 'annotatorSettings';
 const SAVED_LATER_KEY  = 'savedForLater';
+const ANN_STORE_KEY    = '_annStore';
+
+// ── Change 2: dedup helpers (mirrors popup.js) ─────────────────────────────
+function resolveRefBg(ref, store) {
+  if (!ref) return null;
+  if (typeof ref === 'string') return store[ref] ? stripBgMeta(store[ref]) : null;
+  if (ref.id && store[ref.id]) return { ...stripBgMeta(store[ref.id]), ...ref };
+  if (ref.tag !== undefined || ref.url !== undefined) return ref;
+  if (ref.id) return store[ref.id] ? stripBgMeta(store[ref.id]) : null;
+  return null;
+}
+function stripBgMeta(entry) {
+  const { _refCount, ...rest } = entry || {};
+  return rest;
+}
 
 // ── Alarm setup ────────────────────────────────────────────────────────────
 function setupAlarm() {
@@ -146,9 +161,26 @@ function performBackup() {
 async function writeToSyncStorage(localData) {
   try {
     const annotations   = localData.annotations || [];
-    let   history       = localData[HISTORY_KEY] || [];
-    const copyHistory   = localData[COPY_HISTORY_KEY] || [];
-    const savedForLater = localData[SAVED_LATER_KEY] || [];
+    const store         = localData[ANN_STORE_KEY] || {};
+    // Resolve refs into full data so the sync payload is portable.
+    let   history       = (localData[HISTORY_KEY] || []).map(h => {
+      const ann = resolveRefBg(h, store);
+      return ann ? { ...ann, deletedAt: h.deletedAt || ann.deletedAt } : null;
+    }).filter(Boolean);
+    const copyHistory   = (localData[COPY_HISTORY_KEY] || []).map(c => {
+      const { annotationIds, ...rest } = c; return rest;
+    });
+    const savedForLater = (localData[SAVED_LATER_KEY] || []).map(set => {
+      const anns = Array.isArray(set.annotationIds)
+        ? set.annotationIds.map(id => resolveRefBg(id, store)).filter(Boolean)
+        : (set.annotations || []);
+      return {
+        id:          set.id,
+        savedAt:     set.savedAt,
+        count:       set.count || anns.length,
+        annotations: anns,
+      };
+    });
     const settings      = localData[SETTINGS_KEY] || {};
 
     let truncated = false;
@@ -209,15 +241,34 @@ async function writeToSyncStorage(localData) {
 
 // ── Write a local JSON snapshot to chrome.storage.local ───────────────────
 function writeToLocalSnapshot(localData) {
+  const store = localData[ANN_STORE_KEY] || {};
+  const fullHistory = (localData[HISTORY_KEY] || []).map(h => {
+    const ann = resolveRefBg(h, store);
+    return ann ? { ...ann, deletedAt: h.deletedAt || ann.deletedAt } : null;
+  }).filter(Boolean);
+  const fullSaved = (localData[SAVED_LATER_KEY] || []).map(set => {
+    const anns = Array.isArray(set.annotationIds)
+      ? set.annotationIds.map(id => resolveRefBg(id, store)).filter(Boolean)
+      : (set.annotations || []);
+    return {
+      id:          set.id,
+      savedAt:     set.savedAt,
+      count:       set.count || anns.length,
+      annotations: anns,
+    };
+  });
+  const fullCopyHistory = (localData[COPY_HISTORY_KEY] || []).map(c => {
+    const { annotationIds, ...rest } = c; return rest;
+  });
   const backup = {
     _type:    'annotator-backup',
     _version: VERSION,
     _saved:   new Date().toISOString(),
-    annotations:       localData.annotations            || [],
-    annotationHistory: localData[HISTORY_KEY]           || [],
-    copyHistory:       localData[COPY_HISTORY_KEY]      || [],
-    savedForLater:     localData[SAVED_LATER_KEY]       || [],
-    annotatorSettings: localData[SETTINGS_KEY]          || {},
+    annotations:       localData.annotations || [],
+    annotationHistory: fullHistory,
+    copyHistory:       fullCopyHistory,
+    savedForLater:     fullSaved,
+    annotatorSettings: localData[SETTINGS_KEY] || {},
   };
 
   chrome.storage.local.set({

@@ -1306,6 +1306,38 @@ button {
   border-color: #fca5a5;
 }
 
+/* ── Change 1: "Remove from current annotations" button (copy log) ─────── */
+/* Reversible action — uses a non-destructive blue palette, mirrors sizing
+   of the permanent-delete button next to it. */
+.copy-hist-remove-current-btn {
+  flex: 0 0 auto;
+  background: var(--section-bg);
+  border: 1px solid var(--border);
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+  line-height: 1.4;
+  margin-right: 4px;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.copy-hist-remove-current-btn:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+[data-theme="dark"] .copy-hist-remove-current-btn {
+  color: #60a5fa;
+}
+[data-theme="dark"] .copy-hist-remove-current-btn:hover {
+  background: #1e3a8a;
+  border-color: #3b82f6;
+  color: #bfdbfe;
+}
+
 /* ── Group-level clear button ────────────────────────────────────────────── */
 .url-clear-group-btn {
   flex: 0 0 auto;
