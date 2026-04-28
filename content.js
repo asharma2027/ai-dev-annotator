@@ -138,11 +138,35 @@ function injectStyles() {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 4px;
       margin-bottom: 8px;
       font: 700 11px system-ui, sans-serif;
       color: #78350f;
       letter-spacing: 0.04em;
       text-transform: uppercase;
+    }
+    .${ANN}-label-copy-btn {
+      flex: 0 0 auto;
+      opacity: 0;
+      pointer-events: none;
+      background: none;
+      border: 1px solid transparent;
+      color: #9ca3af;
+      font-size: 11px;
+      padding: 0 3px;
+      cursor: pointer;
+      border-radius: 4px;
+      line-height: 1;
+      transition: opacity 0.15s, color 0.12s, background 0.12s;
+    }
+    #${ANN}-panel-header:hover .${ANN}-label-copy-btn {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .${ANN}-label-copy-btn:hover {
+      color: #374151;
+      background: #f3f4f6;
+      border-color: #d1d5db;
     }
     #${ANN}-close-btn {
       background: none;
@@ -345,18 +369,38 @@ function getAnnSelector(ann) {
   return `${ann.tag || '?'}${rawId}${cls}`;
 }
 
+// Returns comma-separated selectors for the annotation + all context elements
+function getFullLabelText(ann) {
+  if (!ann) return '(unknown)';
+  const main = getAnnSelector(ann);
+  if (!ann.contextElements || ann.contextElements.length === 0) return main;
+  const ctxParts = ann.contextElements.map(ctx =>
+    `${ctx.tag || '?'}${ctx.elId ? '#' + ctx.elId : ''}${ctx.classes || ''}`
+  );
+  return [main, ...ctxParts].join(', ');
+}
+
+// Update the pink element label in the open panel to reflect current ann state
+function updatePanelLabel(ann) {
+  const labelEl = document.getElementById(`${ANN}-element-label`);
+  if (!labelEl) return;
+  const full = getFullLabelText(ann);
+  labelEl.textContent = full;
+  labelEl.title = `Click to open in popup\n${full}`;
+}
+
 function buildPanel() {
   const p = document.createElement('div');
   p.id = `${ANN}-panel`;
   p.innerHTML = `
     <div id="${ANN}-panel-header">
-      <span id="${ANN}-element-label" title="Click to view in popup" style="cursor:pointer;color:#db2777;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;">...</span>
+      <span id="${ANN}-element-label" title="Click to open in popup" style="cursor:pointer;color:#db2777;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">...</span>
+      <button class="${ANN}-label-copy-btn" title="Copy selector(s) to clipboard">📋</button>
       <button id="${ANN}-close-btn" title="Close">✕</button>
     </div>
     <textarea id="${ANN}-textarea"></textarea>
-    <div id="${ANN}-ctx-container" style="margin-top:5px;display:flex;flex-wrap:wrap;gap:3px;"></div>
     <div class="aiann-panel-hint">Empty notes auto-discarded. Esc to save &amp; close</div>
-    <div style="font-size:9px;opacity:0.5;margin-top:2px;font-family:system-ui,sans-serif;color:#6b7280;">Alt+Right-click element to add context</div>
+    <div style="font-size:9px;opacity:0.5;margin-top:2px;font-family:system-ui,sans-serif;color:#6b7280;">Alt+click any element to add it to this annotation</div>
     <div id="${ANN}-panel-footer">
       <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Page Note</button>
       <span id="${ANN}-save-status"></span>
@@ -457,6 +501,26 @@ function buildPanel() {
     } catch (e) {}
   });
 
+  // Hover-reveal copy button: copies the full selector text to clipboard
+  p.querySelector(`.${ANN}-label-copy-btn`).addEventListener('click', e => {
+    e.stopPropagation();
+    const labelEl = document.getElementById(`${ANN}-element-label`);
+    const text = labelEl ? labelEl.textContent : '';
+    if (!text || text === '...') return;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = p.querySelector(`.${ANN}-label-copy-btn`);
+      const orig = btn.textContent;
+      btn.textContent = '✓';
+      btn.style.opacity = '1';
+      btn.style.color = '#16a34a';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '';
+        btn.style.opacity = '';
+      }, 1200);
+    }).catch(() => {});
+  });
+
   document.addEventListener('mousedown', e => {
     const panel = document.getElementById(`${ANN}-panel`);
     if (
@@ -464,6 +528,8 @@ function buildPanel() {
       !panel.contains(e.target) &&
       !e.target.closest(`.${ANN}-chip`)
     ) {
+      // Don't close when Alt is held — user may be adding a context element
+      if (e.altKey) return;
       closePanel();
     }
   }, true);
@@ -518,12 +584,11 @@ function openPanel(chip, annId) {
     ta.removeAttribute('placeholder'); // no pre-typing hint
     setSaveStatus('');
 
-    // Populate the element label in the header
+    // Populate the element label in the header (full comma-separated selectors)
     const labelEl = panel.querySelector(`#${ANN}-element-label`);
     if (labelEl && ann) {
-      const sel = getAnnSelector(ann);
-      labelEl.textContent = sel;
       labelEl.dataset.annId = annId;
+      updatePanelLabel(ann);
     }
 
     // Reflect current page-level state on the button
@@ -540,10 +605,7 @@ function openPanel(chip, annId) {
     activeAnnId = annId;
     ta.focus();
 
-    // Render context chips if any
-    if (ann && ann.contextElements && ann.contextElements.length > 0) {
-      renderContextChips(annId, ann.contextElements);
-    }
+    // (label already updated above via updatePanelLabel)
   });
 }
 
@@ -656,9 +718,10 @@ function addElementToContext(annId, el) {
     if (!ann.contextElements) ann.contextElements = [];
     ann.contextElements.push(ctxEl);
     setAll(anns, () => {
-      setSaveStatus('Context added ✓');
-      renderContextChips(annId, ann.contextElements);
-      // Flash the element briefly
+      setSaveStatus('Element added ✓');
+      // Update the pink label in real-time to show comma-separated selectors
+      updatePanelLabel(ann);
+      // Flash the added element briefly
       el.classList.add(`${ANN}-hl`);
       setTimeout(() => {
         if (!ann.pageLevel) {
@@ -1043,23 +1106,6 @@ document.addEventListener('contextmenu', e => {
     target === document.documentElement
   ) return;
 
-  // If panel is open and user alt+right-clicks a different element → add to context
-  if (activeAnnId) {
-    const panel = document.getElementById(`${ANN}-panel`);
-    if (panel && panel.style.display === 'block') {
-      // Don't add our own UI elements
-      if (!target.closest(`#${ANN}-panel`) && !target.classList.contains(`${ANN}-chip`)) {
-        // Check it's not the currently annotated element itself
-        const currentTarget = __aiann_targetMap.get(activeAnnId);
-        if (target !== currentTarget) {
-          e.preventDefault();
-          addElementToContext(activeAnnId, target);
-          return; // Don't create new annotation
-        }
-      }
-    }
-  }
-
   // If already annotated, open existing annotation instead of creating a duplicate
   if (target.classList.contains(`${ANN}-hl`)) {
     const chip = __aiann_chipMap.get(
@@ -1210,6 +1256,36 @@ try {
   history.pushState    = function () { const r = _ps.apply(this, arguments); onUrlChange(); return r; };
   history.replaceState = function () { const r = _rs.apply(this, arguments); onUrlChange(); return r; };
 })();
+
+// ── Alt+Left-Click: add element to current open annotation ──────────────────
+// When the annotation panel is open, holding Alt and left-clicking any page
+// element adds that element to the current annotation's context selection.
+// The pink label in the panel header updates immediately (comma-separated).
+document.addEventListener('click', e => {
+  // Only when Alt is held and panel is open
+  if (!e.altKey) return;
+  if (!activeAnnId) return;
+  const panel = document.getElementById(`${ANN}-panel`);
+  if (!panel || panel.style.display !== 'block') return;
+
+  const target = e.target;
+  if (!target) return;
+  // Ignore clicks on our own UI elements
+  if (
+    target.closest(`#${ANN}-panel`) ||
+    target.classList.contains(`${ANN}-chip`) ||
+    target === document.body ||
+    target === document.documentElement
+  ) return;
+
+  // Ignore if this is already the primary annotated element
+  const currentTarget = __aiann_targetMap.get(activeAnnId);
+  if (target === currentTarget) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  addElementToContext(activeAnnId, target);
+}, { capture: true });
 
 // ── Init ──────────────────────────────────────────────────────────────────
 injectStyles();

@@ -893,7 +893,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="item${isPageLevel ? ' item--page-level' : ''}">
           <div class="item-sel">
             <code class="ann-code--clickable" data-nav-ann-id="${escHtml(ann.id)}" title="Click to navigate to this annotation">${escHtml(sel)}</code>
-            <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋 Copy</button>
+            <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋</button>
             <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Clear annotation">🗑</button>
           </div>
           <textarea
