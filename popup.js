@@ -166,6 +166,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const COPY_HISTORY_KEY = 'copyHistory';
   const SETTINGS_KEY     = 'annotatorSettings';
   const SAVED_LATER_KEY  = 'savedForLater';
+  // ── Copy-All snapshots ────────────────────────────────────────────────────
+  // Each Copy All click writes a "snapshot" record here that groups the
+  // annotations that were copied. The annotations themselves remain in the
+  // main `annotations` list (so future Copy All actions still include them);
+  // the snapshot is purely a UI grouping layer over the main list.
+  // Schema: { id, timestamp, annotationIds: string[], expanded: boolean }
+  const COPY_ALL_SNAPSHOTS_KEY = 'copyAllSnapshots';
   // ── Change 2: storage dedup ────────────────────────────────────────────────
   // Central reference store: history, copy logs, and saved-for-later sets all
   // store annotation IDs that point into _annStore instead of duplicating the
@@ -1077,30 +1084,24 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Render annotation list ─────────────────────────────────────────────────
-  function render(anns) {
-    badge.textContent = anns.length > 0 ? String(anns.length) : '';
-
-    if (anns.length === 0) {
-      // Read current shortcut to show the right gesture in the empty-state hint
-      loadSettings(s => {
-        const mod = modLabel(s.shortcut?.modifier || 'alt');
-        listEl.innerHTML = `
-          <p class="empty-msg">
-            No annotations yet.<br>
-            Hold <strong>${escHtml(mod)} + Right-Click</strong> any element on a page.
-          </p>`;
-      });
-      return;
-    }
-
+  // Helper: build the inner HTML for a set of annotations grouped by URL.
+  // Used both for the un-grouped "loose" annotations and for the contents of
+  // each Copy-All snapshot ("big box").
+  function buildGroupedAnnotationsHTML(anns, opts) {
+    opts = opts || {};
+    const showGroupCount = !!opts.showGroupCount;
     const byUrl = {};
     anns.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
 
     let html = '';
     Object.entries(byUrl).forEach(([url, items]) => {
+      const countBadge = showGroupCount
+        ? `<span class="count-badge copy-all-group-count" title="${items.length} annotation${items.length !== 1 ? 's' : ''}">${items.length}</span>`
+        : '';
       html += `<div class="url-group">
         <div class="url-header">
-          <div class="url-label url-label--clickable" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
+          ${countBadge}
+          <div class="url-label url-label--clickable copy-all-group-url" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
           <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋 Copy group</button>
           <button class="url-clear-group-btn" data-url="${escHtml(url)}" title="Clear group (saves to history)">🗑</button>
         </div>`;
@@ -1123,7 +1124,119 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       html += '</div>';
     });
+    return html;
+  }
 
+  // Format a snapshot's timestamp like "12:34 PM, Tuesday, Apr 30, 2026".
+  function formatSnapshotTimestamp(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const day  = d.toLocaleDateString(undefined, { weekday: 'long' });
+      const date = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+      return `${time}, ${day}, ${date}`;
+    } catch { return ts; }
+  }
+
+  // Reconcile snapshots against the current annotation list: drop any
+  // annotation IDs that are no longer in `anns`, and drop any snapshot whose
+  // annotation set is empty. Returns the surviving snapshots.
+  function reconcileSnapshots(snapshots, anns) {
+    const liveIds = new Set(anns.map(a => a.id));
+    const out = [];
+    snapshots.forEach(s => {
+      const ids  = (Array.isArray(s.annotationIds) ? s.annotationIds : []).filter(id => liveIds.has(id));
+      if (ids.length > 0) out.push({ ...s, annotationIds: ids });
+    });
+    return out;
+  }
+
+  function render(anns) {
+    badge.textContent = anns.length > 0 ? String(anns.length) : '';
+
+    if (anns.length === 0) {
+      // Read current shortcut to show the right gesture in the empty-state hint
+      loadSettings(s => {
+        const mod = modLabel(s.shortcut?.modifier || 'alt');
+        listEl.innerHTML = `
+          <p class="empty-msg">
+            No annotations yet.<br>
+            Hold <strong>${escHtml(mod)} + Right-Click</strong> any element on a page.
+          </p>`;
+      });
+      // Also clear stale snapshots so they don't reappear next time we have
+      // annotations.
+      chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: [] });
+      return;
+    }
+
+    chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+      const rawSnaps  = snapR[COPY_ALL_SNAPSHOTS_KEY] || [];
+      const snapshots = reconcileSnapshots(rawSnaps, anns);
+      // Persist reconciliation if we actually trimmed anything.
+      if (snapshots.length !== rawSnaps.length ||
+          snapshots.some((s, i) => (rawSnaps[i] && s.annotationIds.length !== (rawSnaps[i].annotationIds || []).length))) {
+        chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: snapshots });
+      }
+
+      // Annotations covered by any snapshot become "boxed"; the rest are loose.
+      const boxedIds = new Set();
+      snapshots.forEach(s => (s.annotationIds || []).forEach(id => boxedIds.add(id)));
+      const annsById = new Map(anns.map(a => [a.id, a]));
+      const looseAnns = anns.filter(a => !boxedIds.has(a.id));
+
+      let html = '';
+
+      // Render each snapshot ("big box") in the order they were captured.
+      snapshots.forEach(snap => {
+        const ids = snap.annotationIds || [];
+        const innerAnns = ids.map(id => annsById.get(id)).filter(Boolean);
+        const expanded  = !!snap.expanded;
+        const when      = formatSnapshotTimestamp(snap.timestamp);
+        html += `
+        <div class="copy-all-snapshot${expanded ? ' expanded' : ''}" data-snap-id="${escHtml(snap.id)}">
+          <div class="copy-all-header" data-snap-toggle="${escHtml(snap.id)}" role="button" tabindex="0" title="Click to ${expanded ? 'collapse' : 'expand'}">
+            <span class="copy-all-caret" aria-hidden="true">▸</span>
+            <span class="copy-all-title">📋 ${innerAnns.length} annotation${innerAnns.length !== 1 ? 's' : ''} copied</span>
+            <span class="copy-all-meta" title="${escHtml(snap.timestamp)}">at ${escHtml(when)}</span>
+            <span class="copy-all-spacer"></span>
+            <button class="copy-all-action copy-all-save" data-snap-id="${escHtml(snap.id)}" title="Save these annotations for later">💾 Save for later</button>
+            <button class="copy-all-action copy-all-clear" data-snap-id="${escHtml(snap.id)}" title="Clear (move to history)">🗑 Clear</button>
+            <button class="copy-all-action copy-all-collapse" data-snap-collapse="${escHtml(snap.id)}" title="Collapse">▴</button>
+          </div>
+          <div class="copy-all-summary">
+            ${(() => {
+              // Collapsed view: one row per URL group with a leading count badge.
+              const byUrl = {};
+              innerAnns.forEach(a => (byUrl[a.url] = byUrl[a.url] || []).push(a));
+              return Object.entries(byUrl).map(([url, items]) => `
+                <div class="copy-all-summary-row" data-snap-jump="${escHtml(snap.id)}" data-jump-url="${escHtml(url)}" role="button" tabindex="0" title="Click to expand and jump to this group">
+                  <span class="count-badge copy-all-group-count">${items.length}</span>
+                  <span class="copy-all-group-url" title="${escHtml(url)}">${escHtml(url)}</span>
+                </div>`).join('');
+            })()}
+          </div>
+          <div class="copy-all-body">
+            ${buildGroupedAnnotationsHTML(innerAnns, { showGroupCount: true })}
+          </div>
+        </div>`;
+      });
+
+      // Render any loose annotations (those not in any snapshot) below.
+      if (looseAnns.length > 0) {
+        if (snapshots.length > 0) {
+          html += `<div class="loose-anns-divider" title="Annotations added since the last Copy All">🆕 Since last Copy All</div>`;
+        }
+        html += buildGroupedAnnotationsHTML(looseAnns, { showGroupCount: false });
+      }
+
+      finishRender(html, anns);
+    });
+  }
+
+  // Wire up listeners + finalize the rendered list.
+  function finishRender(html, anns) {
     listEl.innerHTML = html;
 
     // Auto-resize all textareas to fit their content
@@ -1148,10 +1261,211 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.addEventListener('click', () => copyAnnotation(btn.dataset.annId));
     });
 
+    // ── Copy-All snapshot listeners ─────────────────────────────────────────
+    // Header click (or Enter/Space on focus) toggles expand/collapse.
+    listEl.querySelectorAll('[data-snap-toggle]').forEach(hdr => {
+      const handler = e => {
+        // Don't toggle when interacting with action buttons inside the header.
+        if (e.target.closest('button')) return;
+        if (e.target.closest('.copy-all-summary-row')) return;
+        if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+        if (e.type === 'keydown') e.preventDefault();
+        toggleCopyAllSnapshot(hdr.dataset.snapToggle);
+      };
+      hdr.addEventListener('click',   handler);
+      hdr.addEventListener('keydown', handler);
+    });
+    listEl.querySelectorAll('[data-snap-collapse]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        toggleCopyAllSnapshot(btn.dataset.snapCollapse, false);
+      });
+    });
+    listEl.querySelectorAll('.copy-all-save').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        copyAllSnapshotSaveForLater(btn.dataset.snapId);
+      });
+    });
+    listEl.querySelectorAll('.copy-all-clear').forEach(btn => {
+      btn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const ok = await showConfirm('Clear all annotations in this group? They will be moved to history.', { okLabel: 'Clear' });
+        if (!ok) return;
+        copyAllSnapshotClear(btn.dataset.snapId);
+      });
+    });
+    listEl.querySelectorAll('.copy-all-summary-row').forEach(row => {
+      const handler = e => {
+        if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+        if (e.type === 'keydown') e.preventDefault();
+        e.stopPropagation();
+        copyAllSnapshotJump(row.dataset.snapJump, row.dataset.jumpUrl);
+      };
+      row.addEventListener('click',   handler);
+      row.addEventListener('keydown', handler);
+    });
+
     // Re-apply search highlights if search is active
     if (searchActive && searchInput && searchInput.value.trim()) {
       applySearch(searchInput.value.trim());
     }
+  }
+
+  // ── Copy-All snapshot ops ────────────────────────────────────────────────
+  function updateSnapshot(snapId, mut, cb) {
+    chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, r => {
+      const snaps = (r[COPY_ALL_SNAPSHOTS_KEY] || []).map(s =>
+        s.id === snapId ? mut(s) : s
+      );
+      chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: snaps }, () => cb && cb(snaps));
+    });
+  }
+
+  function toggleCopyAllSnapshot(snapId, force) {
+    updateSnapshot(snapId, s => ({ ...s, expanded: typeof force === 'boolean' ? force : !s.expanded }), () => {
+      // Local DOM-only toggle to avoid a full re-render (preserves textarea
+      // focus, scroll, etc.).
+      const el = listEl.querySelector(`.copy-all-snapshot[data-snap-id="${cssEscape(snapId)}"]`);
+      if (!el) return;
+      if (typeof force === 'boolean') el.classList.toggle('expanded', force);
+      else el.classList.toggle('expanded');
+    });
+  }
+
+  // Helper: minimal CSS-escape for use in attribute selectors.
+  function cssEscape(s) {
+    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/"/g, '\\"');
+  }
+
+  // Save the snapshot's annotations to "saved for later", remove them from
+  // current annotations, and drop the snapshot.
+  function copyAllSnapshotSaveForLater(snapId) {
+    readDedupStorage(r => {
+      chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+        const snaps = snapR[COPY_ALL_SNAPSHOTS_KEY] || [];
+        const snap  = snaps.find(s => s.id === snapId);
+        if (!snap) return;
+        const ids   = (snap.annotationIds || []).filter(Boolean);
+        const idSet = new Set(ids);
+        const targetAnns = r.annotations.filter(a => idSet.has(a.id));
+        if (targetAnns.length === 0) {
+          // Snapshot is empty — just drop it.
+          chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: snaps.filter(s => s.id !== snapId) },
+            () => load());
+          return;
+        }
+        const remaining = r.annotations.filter(a => !idSet.has(a.id));
+        const store = { ...(r[ANN_STORE_KEY] || {}) };
+        const now   = new Date().toISOString();
+        const sflId = `sfl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+        // Mirror doSaveForLater: dedup identical sets, then bump refs.
+        const newIdsKey = [...ids].sort().join(',');
+        const dropped   = [];
+        const dedupedSaved = (r[SAVED_LATER_KEY] || []).filter(s => {
+          const sIds = Array.isArray(s.annotationIds) ? s.annotationIds : (s.annotations || []).map(a => a.id);
+          const key  = [...sIds].sort().join(',');
+          if (key === newIdsKey) { dropped.push(s); return false; }
+          return true;
+        });
+        dropped.forEach(d => {
+          const dIds = Array.isArray(d.annotationIds) ? d.annotationIds : (d.annotations || []).map(a => a.id);
+          refStoreDec(store, dIds.filter(Boolean));
+        });
+        targetAnns.forEach(ann => {
+          if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+          else store[ann.id] = { ...store[ann.id], ...ann };
+          store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+        });
+
+        const newSet = { id: sflId, savedAt: now, count: targetAnns.length, annotationIds: ids };
+        const newSaved = [...dedupedSaved, newSet];
+        const newSnaps = snaps.filter(s => s.id !== snapId);
+
+        isWritingFromPopup = true;
+        chrome.storage.local.set({
+          annotations: remaining,
+          [SAVED_LATER_KEY]: newSaved,
+          [ANN_STORE_KEY]: store,
+          [COPY_ALL_SNAPSHOTS_KEY]: newSnaps,
+        }, () => {
+          isWritingFromPopup = false;
+          render(remaining);
+          targetAnns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+          showToast(`Saved ${targetAnns.length} annotation${targetAnns.length !== 1 ? 's' : ''} for later.`);
+        });
+      });
+    });
+  }
+
+  // Clear the snapshot's annotations: move them to history and drop the snapshot.
+  function copyAllSnapshotClear(snapId) {
+    readDedupStorage(r => {
+      chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+        const snaps = snapR[COPY_ALL_SNAPSHOTS_KEY] || [];
+        const snap  = snaps.find(s => s.id === snapId);
+        if (!snap) return;
+        const idSet = new Set((snap.annotationIds || []).filter(Boolean));
+        const targetAnns = r.annotations.filter(a => idSet.has(a.id));
+        const remaining  = r.annotations.filter(a => !idSet.has(a.id));
+        const store = { ...(r[ANN_STORE_KEY] || {}) };
+        let   hist  = r[HISTORY_KEY];
+        const now   = new Date().toISOString();
+        targetAnns.forEach(ann => {
+          const oldRefs = hist.filter(h => h.id === ann.id);
+          if (oldRefs.length) refStoreDec(store, oldRefs.map(h => h.id));
+          hist = hist.filter(h => h.id !== ann.id);
+          if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+          else store[ann.id] = { ...store[ann.id], ...ann };
+          store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+          hist.push({ id: ann.id, deletedAt: now });
+        });
+        const newSnaps = snaps.filter(s => s.id !== snapId);
+        isWritingFromPopup = true;
+        chrome.storage.local.set({
+          annotations: remaining,
+          [HISTORY_KEY]: hist,
+          [ANN_STORE_KEY]: store,
+          [COPY_ALL_SNAPSHOTS_KEY]: newSnaps,
+        }, () => {
+          enforceHistoryLimitInStorage(() => {
+            isWritingFromPopup = false;
+            render(remaining);
+            targetAnns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+            showToast(`Cleared ${targetAnns.length} annotation${targetAnns.length !== 1 ? 's' : ''} (saved to history).`);
+          });
+        });
+      });
+    });
+  }
+
+  // Expand the snapshot and scroll the clicked URL group's header to the top
+  // of the visible scroll area.
+  function copyAllSnapshotJump(snapId, url) {
+    updateSnapshot(snapId, s => ({ ...s, expanded: true }), () => {
+      const snapEl = listEl.querySelector(`.copy-all-snapshot[data-snap-id="${cssEscape(snapId)}"]`);
+      if (!snapEl) return;
+      snapEl.classList.add('expanded');
+      // Find the matching url-group header inside the body.
+      const safeUrl = cssEscape(url);
+      const target = snapEl.querySelector(
+        `.copy-all-body .url-header [data-nav-url="${safeUrl}"]`
+      );
+      const headerRow = target ? target.closest('.url-header') : null;
+      const scrollEl = headerRow || snapEl;
+      // Scroll so the URL header is at the top of the viewport.
+      try {
+        scrollEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      } catch (_) {
+        scrollEl.scrollIntoView();
+      }
+      if (headerRow) {
+        headerRow.classList.add('item-nav-flash');
+        setTimeout(() => headerRow.classList.remove('item-nav-flash'), 700);
+      }
+    });
   }
 
   // ── Navigation click delegation on the main list ───────────────────────────
@@ -1294,11 +1608,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Returns the currently visible content panel to search over
   function getSearchTargetPanel() {
-    return historyVisible ? historyEl : listEl;
+    if (settingsVisible) return settingsEl;
+    if (historyVisible)  return historyEl;
+    return listEl;
   }
 
   function openSearch() {
-    if (settingsVisible) return; // settings open: no search
     searchActive = true;
     searchBar.style.display = 'flex';
     searchBtn.classList.add('active');
@@ -1317,34 +1632,196 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function clearSearchHighlights() {
-    // Clear highlights from both panels
-    [listEl, historyEl].forEach(panel => {
-      panel.querySelectorAll('.item').forEach(el => {
+    // Clear highlights from all panels we may have touched.
+    [listEl, historyEl, settingsEl].forEach(panel => {
+      panel.querySelectorAll('.item, .copy-all-snapshot, .sfl-set, .settings-section').forEach(el => {
         el.classList.remove('search-match', 'search-no-match', 'search-current');
       });
-      panel.querySelectorAll('code').forEach(codeEl => {
-        if (codeEl.querySelector('mark.search-hl')) {
-          codeEl.textContent = codeEl.textContent; // strips all child elements
-        }
+      // Restore any text nodes we wrapped in mark.search-hl.
+      panel.querySelectorAll('mark.search-hl').forEach(m => {
+        const parent = m.parentNode;
+        if (!parent) return;
+        parent.replaceChild(document.createTextNode(m.textContent), m);
+        parent.normalize();
       });
-      panel.querySelectorAll('.item-note-edit.search-note-match').forEach(ta => {
-        ta.classList.remove('search-note-match');
+      panel.querySelectorAll('.search-note-match').forEach(el => {
+        el.classList.remove('search-note-match');
       });
-      panel.querySelectorAll('.hist-note.search-note-match').forEach(div => {
-        div.classList.remove('search-note-match');
-      });
+      // Tear down any input/textarea overlays.
+      panel.querySelectorAll('.search-overlay-wrap').forEach(wrap => unwrapSearchOverlay(wrap));
     });
     searchMatches = [];
     if (searchCount) searchCount.textContent = '';
     if (searchCount) delete searchCount.dataset.empty;
   }
 
-  function highlightCodeEl(codeEl, term) {
-    const rawText = codeEl.textContent;
-    const escapedText = escHtml(rawText);
-    const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`(${escapedTerm})`, 'gi');
-    codeEl.innerHTML = escapedText.replace(re, '<mark class="search-hl">$1</mark>');
+  // Wrap a textarea/input with an overlay that mirrors content + highlight marks.
+  // Returns the inner highlight container we can write to.
+  function wrapSearchOverlay(field) {
+    const parent = field.parentNode;
+    if (!parent) return null;
+    const wrap = document.createElement('span');
+    wrap.className = 'search-overlay-wrap';
+    const isTextarea = field.tagName === 'TEXTAREA';
+    wrap.dataset.kind = isTextarea ? 'textarea' : 'input';
+    parent.insertBefore(wrap, field);
+    const overlay = document.createElement('div');
+    overlay.className = 'search-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(overlay);
+    wrap.appendChild(field);
+    field.classList.add('search-overlay-host');
+    // Copy the field's font + padding metrics to the overlay so the marks line
+    // up character-for-character with the underlying field text.
+    const cs = window.getComputedStyle(field);
+    overlay.style.font           = cs.font;
+    overlay.style.lineHeight     = cs.lineHeight;
+    overlay.style.letterSpacing  = cs.letterSpacing;
+    overlay.style.padding        = cs.padding;
+    overlay.style.borderWidth    = cs.borderWidth;
+    overlay.style.borderStyle    = cs.borderStyle;
+    overlay.style.boxSizing      = cs.boxSizing;
+    overlay.style.borderRadius   = cs.borderRadius;
+    overlay.style.textAlign      = cs.textAlign;
+    if (!isTextarea) overlay.style.whiteSpace = 'pre';
+    syncSearchOverlay(field);
+    field.addEventListener('input',  syncSearchOverlayHandler);
+    field.addEventListener('scroll', syncSearchOverlayScrollHandler);
+    return overlay;
+  }
+
+  function syncSearchOverlayHandler(e) { syncSearchOverlay(e.target); }
+  function syncSearchOverlayScrollHandler(e) {
+    const wrap = e.target.closest('.search-overlay-wrap');
+    const overlay = wrap?.querySelector('.search-overlay');
+    if (overlay) {
+      overlay.scrollTop  = e.target.scrollTop;
+      overlay.scrollLeft = e.target.scrollLeft;
+    }
+  }
+
+  function syncSearchOverlay(field) {
+    const wrap    = field.parentNode;
+    if (!wrap || !wrap.classList || !wrap.classList.contains('search-overlay-wrap')) return;
+    const overlay = wrap.querySelector('.search-overlay');
+    if (!overlay) return;
+    const term = (searchInput && searchInput.value.trim()) || '';
+    overlay.innerHTML = renderHighlightedText(field.value, term);
+    overlay.scrollTop  = field.scrollTop;
+    overlay.scrollLeft = field.scrollLeft;
+  }
+
+  function unwrapSearchOverlay(wrap) {
+    const field = wrap.querySelector('textarea, input');
+    if (field) {
+      field.classList.remove('search-overlay-host');
+      field.removeEventListener('input',  syncSearchOverlayHandler);
+      field.removeEventListener('scroll', syncSearchOverlayScrollHandler);
+      wrap.parentNode.insertBefore(field, wrap);
+    }
+    wrap.remove();
+  }
+
+  // Build escaped-HTML where every occurrence of term is wrapped in <mark>.
+  function renderHighlightedText(text, term) {
+    const safe = escHtml(text || '');
+    if (!term) return safe;
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re  = new RegExp(`(${esc})`, 'gi');
+    return safe.replace(re, '<mark class="search-hl">$1</mark>');
+  }
+
+  // Wrap matches in plain DOM text nodes (no rich formatting, e.g. <code>, .hist-note,
+  // labels, hint paragraphs). Walks only text-node descendants of root.
+  function highlightTextNodes(root, term) {
+    if (!root || !term) return false;
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re  = new RegExp(esc, 'gi');
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        // Skip text inside our own marks, scripts, and form controls' UA shadow.
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        const p = node.parentNode;
+        if (!p) return NodeFilter.FILTER_REJECT;
+        if (p.nodeName === 'SCRIPT' || p.nodeName === 'STYLE') return NodeFilter.FILTER_REJECT;
+        if (p.classList && p.classList.contains('search-hl')) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const targets = [];
+    let n; while ((n = walker.nextNode())) targets.push(n);
+    let any = false;
+    targets.forEach(textNode => {
+      const text = textNode.nodeValue;
+      re.lastIndex = 0;
+      if (!re.test(text)) return;
+      re.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let lastIdx = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, m.index)));
+        const mark = document.createElement('mark');
+        mark.className = 'search-hl';
+        mark.textContent = m[0];
+        frag.appendChild(mark);
+        lastIdx = m.index + m[0].length;
+        if (m[0].length === 0) re.lastIndex++; // safety
+      }
+      if (lastIdx < text.length) frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+      textNode.parentNode.replaceChild(frag, textNode);
+      any = true;
+    });
+    return any;
+  }
+
+  // ── Apply search to a single "card" element. Returns true if the card matched. ─
+  function applySearchToCard(card, term, termLower) {
+    let matched = false;
+
+    // 1. Plain-text content elements
+    const textEls = card.querySelectorAll(
+      'code, .hist-note, .url-label, .copy-hist-preview, ' +
+      '.settings-label, .settings-hint, .settings-row-title, .settings-row-sub, ' +
+      '.settings-section-title, .settings-value, ' +
+      '.copy-all-meta, .copy-all-group-url, .copy-all-group-count'
+    );
+    textEls.forEach(el => {
+      if ((el.textContent || '').toLowerCase().includes(termLower)) {
+        if (highlightTextNodes(el, term)) matched = true;
+      }
+    });
+
+    // 2. Form controls — textarea/input/select. Wrap with overlay for live highlight.
+    const fields = card.querySelectorAll('textarea, input[type="text"], input:not([type])');
+    fields.forEach(field => {
+      const v = (field.value || '').toLowerCase();
+      if (!v.includes(termLower)) return;
+      matched = true;
+      field.classList.add('search-note-match');
+      // Re-use a wrap if already there from a previous match in same panel.
+      if (!field.parentNode.classList || !field.parentNode.classList.contains('search-overlay-wrap')) {
+        wrapSearchOverlay(field);
+      } else {
+        syncSearchOverlay(field);
+      }
+    });
+
+    // 3. <select> can't host marks; just flag the row if the visible option matches.
+    card.querySelectorAll('select').forEach(sel => {
+      const opt = sel.options[sel.selectedIndex];
+      const txt = (opt && opt.textContent ? opt.textContent : '').toLowerCase();
+      if (txt.includes(termLower)) matched = true;
+    });
+
+    // 4. contenteditable nodes (none currently in popup, but supported defensively).
+    card.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach(ce => {
+      if ((ce.textContent || '').toLowerCase().includes(termLower)) {
+        if (highlightTextNodes(ce, term)) matched = true;
+      }
+    });
+
+    return matched;
   }
 
   function applySearch(term) {
@@ -1356,33 +1833,66 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const panel = getSearchTargetPanel();
 
-    panel.querySelectorAll('.item').forEach(item => {
-      const codeEl   = item.querySelector('code');
-      const codeText = codeEl ? codeEl.textContent : '';
-      const codeMatch = codeText.toLowerCase().includes(termLower);
-
-      let noteMatch = false;
-      let noteEl    = null;
-
-      if (historyVisible) {
-        noteEl = item.querySelector('.hist-note');
-        const noteText = noteEl ? noteEl.textContent : '';
-        noteMatch = noteText.toLowerCase().includes(termLower);
-      } else {
-        noteEl = item.querySelector('.item-note-edit');
-        const noteText = noteEl ? noteEl.value : '';
-        noteMatch = noteText.toLowerCase().includes(termLower);
-      }
-
-      if (codeMatch || noteMatch) {
-        item.classList.add('search-match');
-        searchMatches.push(item);
-        if (codeMatch && codeEl) highlightCodeEl(codeEl, term);
-        if (noteMatch && noteEl) noteEl.classList.add('search-note-match');
-      } else {
-        item.classList.add('search-no-match');
-      }
-    });
+    if (panel === settingsEl) {
+      // Settings: each top-level section is a "card"; do not dim non-matching
+      // sections (settings is meant to be browseable while searching).
+      panel.querySelectorAll('.settings-section').forEach(section => {
+        if (applySearchToCard(section, term, termLower)) {
+          section.classList.add('search-match');
+          searchMatches.push(section);
+        }
+      });
+    } else {
+      // List or History: use either .item or .copy-all-snapshot or .sfl-set
+      // as the unit. .copy-all-snapshot is treated as a single match group; if
+      // any nested .item inside matches, the snapshot expands and the inner
+      // .item is added to the match list instead, so navigation is precise.
+      const cards = panel.querySelectorAll(
+        '.copy-all-snapshot, .sfl-set, .item:not(.copy-all-snapshot .item)'
+      );
+      // First pass: snapshots — auto-expand if any match inside.
+      panel.querySelectorAll('.copy-all-snapshot').forEach(snap => {
+        const inner = snap.querySelectorAll('.item');
+        let anyInner = false;
+        inner.forEach(item => {
+          if (applySearchToCard(item, term, termLower)) {
+            item.classList.add('search-match');
+            searchMatches.push(item);
+            anyInner = true;
+          }
+        });
+        // Also search the snapshot's header (timestamp / count) and the
+        // collapsed summary rows (per-group URLs + counts) so collapsed boxes
+        // are still findable.
+        const head = snap.querySelector('.copy-all-header');
+        const summary = snap.querySelector('.copy-all-summary');
+        const headMatch = (head && applySearchToCard(head, term, termLower)) ||
+                          (summary && applySearchToCard(summary, term, termLower));
+        if (anyInner || headMatch) {
+          snap.classList.add('search-match');
+          if (anyInner) snap.dataset.searchAutoExpanded = 'true';
+        }
+      });
+      // Second pass: top-level .item cards (not inside any .copy-all-snapshot).
+      panel.querySelectorAll('.item').forEach(item => {
+        if (item.closest('.copy-all-snapshot')) return; // handled above
+        if (applySearchToCard(item, term, termLower)) {
+          item.classList.add('search-match');
+          searchMatches.push(item);
+        } else {
+          item.classList.add('search-no-match');
+        }
+      });
+      // Saved-for-later sets (history panel)
+      panel.querySelectorAll('.sfl-set').forEach(set => {
+        if (applySearchToCard(set, term, termLower)) {
+          set.classList.add('search-match');
+          searchMatches.push(set);
+        } else {
+          set.classList.add('search-no-match');
+        }
+      });
+    }
 
     searchCurrentIdx = 0;
     scrollToCurrentMatch();
@@ -1394,7 +1904,28 @@ document.addEventListener('DOMContentLoaded', () => {
     searchMatches.forEach((el, i) => {
       el.classList.toggle('search-current', i === searchCurrentIdx);
     });
-    searchMatches[searchCurrentIdx]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const cur = searchMatches[searchCurrentIdx];
+    if (!cur) return;
+    // If the current card lives inside a collapsed snapshot, expand the snapshot
+    // first so the match becomes visible.
+    const snap = cur.closest && cur.closest('.copy-all-snapshot');
+    if (snap && !snap.classList.contains('expanded')) {
+      snap.classList.add('expanded');
+    }
+    cur.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // For form controls, also select the first occurrence of the term so
+    // browser-native highlighting falls precisely on the matched range.
+    const term = (searchInput && searchInput.value.trim()) || '';
+    if (term) {
+      const field = cur.querySelector('textarea.search-note-match, input.search-note-match');
+      if (field && typeof field.setSelectionRange === 'function') {
+        const v = field.value || '';
+        const idx = v.toLowerCase().indexOf(term.toLowerCase());
+        if (idx >= 0) {
+          try { field.setSelectionRange(idx, idx + term.length); } catch (_) {}
+        }
+      }
+    }
   }
 
   function updateSearchCount() {
@@ -2494,13 +3025,47 @@ document.addEventListener('DOMContentLoaded', () => {
             else store[ann.id] = { ...store[ann.id], ...ann };
             store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
           });
+          const ts = new Date().toISOString();
           dedupedCopyHist.push({
-            timestamp: new Date().toISOString(),
+            timestamp: ts,
             output:    result.md,
             count:     result.count,
             annotationIds: contribIds,
           });
-          chrome.storage.local.set({ [COPY_HISTORY_KEY]: dedupedCopyHist, [ANN_STORE_KEY]: store });
+          // ── Copy-All "big box" snapshot ───────────────────────────────────
+          // Group all currently-active annotations (not just contribAnns —
+          // empty-note ones still belong to the visual group) into a single
+          // collapsed snapshot so the user can collapse/expand and act on the
+          // copied set. Annotations stay in r.annotations so future Copy All
+          // calls still pick them up.
+          chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+            const prevSnaps = (snapR[COPY_ALL_SNAPSHOTS_KEY] || []);
+            // Earlier snapshots may already cover some of these annotations.
+            // Subsume any prior snapshot whose annotation set is a subset of
+            // the new one (the new copy includes everything they did, plus
+            // any newer additions) so we don't end up with overlapping boxes.
+            const newIds = new Set(r.annotations.map(a => a.id));
+            const survivors = prevSnaps.filter(snap => {
+              const ids = Array.isArray(snap.annotationIds) ? snap.annotationIds : [];
+              return !ids.every(id => newIds.has(id));
+            });
+            const newSnap = {
+              id: `cas_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+              timestamp: ts,
+              annotationIds: r.annotations.map(a => a.id),
+              expanded: false,
+            };
+            const newSnaps = [...survivors, newSnap];
+            chrome.storage.local.set({
+              [COPY_HISTORY_KEY]: dedupedCopyHist,
+              [ANN_STORE_KEY]: store,
+              [COPY_ALL_SNAPSHOTS_KEY]: newSnaps,
+            }, () => {
+              // Re-render so the new big box appears immediately. Read the
+              // current annotations again (unchanged) and pass them to render.
+              chrome.storage.local.get({ annotations: [] }, rr => render(rr.annotations));
+            });
+          });
           if (btn) {
             const origHtml = btn.innerHTML;
             btn.innerHTML = '<span>✅ Copied!</span>';
