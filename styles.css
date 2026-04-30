@@ -118,6 +118,17 @@ body {
 .header-icon-btn.active {
   background: rgba(255,255,255,0.32);
 }
+.header-icon-btn[disabled],
+.header-icon-btn[disabled]:hover {
+  opacity: 0.4;
+  cursor: default;
+  background: rgba(255,255,255,0.18);
+}
+.header-undo-btn {
+  min-width: 28px;
+  padding: 2px 4px;
+  font-size: 16px;
+}
 
 /* All header emoji buttons share the same font-size for visual consistency */
 .header-icon-btn {
@@ -738,6 +749,28 @@ textarea.search-note-match {
   line-height: 1.5;
 }
 
+/* Raw output toggle inside the copy log entry. */
+.copy-hist-raw-btn.active {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: #93c5fd;
+  color: #2563eb;
+}
+.copy-hist-raw-body {
+  margin: 6px 0 4px;
+  font-family: 'Menlo', 'Consolas', monospace;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
 /* ── Settings panel ──────────────────────────────────────────────────────── */
 .settings-section { margin-bottom: 14px; }
 .settings-section--dev {
@@ -894,6 +927,31 @@ textarea.search-note-match {
   transition: border-color 0.12s, background 0.2s;
 }
 .shortcut-select:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+}
+.shortcut-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.shortcut-plus {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.shortcut-key-input {
+  width: 36px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font: 600 12px/1.4 system-ui, -apple-system, sans-serif;
+  color: var(--text);
+  background: var(--textarea-bg);
+  outline: none;
+  text-transform: uppercase;
+}
+.shortcut-key-input:focus {
   border-color: #2563eb;
   box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
 }
@@ -1592,11 +1650,13 @@ button {
 
 .copy-all-caret {
   display: inline-block;
-  font-size: 11px;
+  font-size: 18px;
+  line-height: 1;
   color: #2563eb;
   transition: transform 0.15s;
-  width: 10px;
+  width: 16px;
   text-align: center;
+  flex: 0 0 auto;
 }
 .copy-all-snapshot.expanded .copy-all-caret { transform: rotate(90deg); }
 
@@ -1679,14 +1739,8 @@ button {
   border-color: #6d28d9;
   background: #2e1065;
 }
-.copy-all-action.copy-all-collapse {
-  display: none;
-  padding: 3px 7px;
-  font-size: 12px;
-}
-.copy-all-snapshot.expanded .copy-all-action.copy-all-collapse {
-  display: inline-block;
-}
+/* Collapse button has been removed; the header click toggles expand/collapse. */
+.copy-all-action.copy-all-collapse { display: none !important; }
 
 /* Collapsed summary: one-line per URL group with leading count badge */
 .copy-all-summary {

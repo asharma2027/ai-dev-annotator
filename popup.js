@@ -154,6 +154,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearBtn    = document.getElementById('clear-btn');
   const historyBtn  = document.getElementById('history-btn');
   const settingsBtn = document.getElementById('settings-btn');
+  undoBtn           = document.getElementById('undo-btn');
+  redoBtn           = document.getElementById('redo-btn');
   const searchBtn     = document.getElementById('search-btn');
   const searchBar     = document.getElementById('search-bar');
   const searchInput   = document.getElementById('search-input');
@@ -208,6 +210,29 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Undo-clear state ──────────────────────────────────────────────────────
   let undoClearData   = null; // { annotations: [], deletedAt: string }
   let undoBannerTimer = null;
+
+  // ── Universal undo/redo state ────────────────────────────────────────────
+  // Tracked storage keys whose changes should be undoable/redoable.
+  const UNDO_TRACKED_KEYS = [
+    'annotations',
+    HISTORY_KEY,
+    COPY_HISTORY_KEY,
+    SAVED_LATER_KEY,
+    COPY_ALL_SNAPSHOTS_KEY,
+    ANN_STORE_KEY,
+    SETTINGS_KEY,
+  ];
+  const UNDO_STACK_LIMIT = 100;
+  let undoStack = [];
+  let redoStack = [];
+  // Pending change accumulator: coalesce changes from one storage.set call
+  // (which fires onChanged with one entry per key) into a single undo step.
+  let pendingUndoOld  = null;
+  let pendingUndoTask = null;
+  // Start >0 so init-time writes (migration, sync restore) don't pollute
+  // the undo stack. Decremented to 0 once init completes.
+  let suppressUndoCapture = 1;
+  let undoBtn = null, redoBtn = null;
 
   // ── Multi-tab DOM sync helpers ───────────────────────────────────────────
   // Annotation chip state must stay consistent across every open tab and window,
@@ -561,6 +586,9 @@ document.addEventListener('DOMContentLoaded', () => {
       copyBtn:  { left: 'copyAll',  right: 'cutAll'       },
       clearBtn: { left: 'clearAll', right: 'saveForLater' },
     },
+    // 'mod' = Ctrl on Win/Linux, Cmd on macOS.
+    undoShortcut:     { modifier: 'mod', key: 'z' },
+    redoShortcut:     { modifier: 'mod', key: 'y' },
   };
 
   function loadSettings(cb) {
@@ -1126,13 +1154,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let html = '';
     Object.entries(byUrl).forEach(([url, items]) => {
+      // Inside the big box (showGroupCount), put the blue count badge AFTER
+      // the link (truncating the link if necessary). For loose groups the
+      // count is hidden entirely.
       const countBadge = showGroupCount
         ? `<span class="count-badge copy-all-group-count" title="${items.length} annotation${items.length !== 1 ? 's' : ''}">${items.length}</span>`
         : '';
       html += `<div class="url-group">
         <div class="url-header">
-          ${countBadge}
           <div class="url-label url-label--clickable copy-all-group-url" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
+          ${countBadge}
           <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋 Copy group</button>
           <button class="url-clear-group-btn" data-url="${escHtml(url)}" title="Clear group (saves to history)">🗑</button>
         </div>`;
@@ -1171,6 +1202,18 @@ document.addEventListener('DOMContentLoaded', () => {
       const day  = d.toLocaleDateString(undefined, { weekday: 'long' });
       const date = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
       return `${time}, ${day}, ${date}`;
+    } catch { return ts; }
+  }
+
+  // "12:34 PM, 4/30" — short label used in the big-box header.
+  function formatBigBoxLabel(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      const time  = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const month = d.getMonth() + 1;
+      const day   = d.getDate();
+      return `${time}, ${month}/${day}`;
     } catch { return ts; }
   }
 
@@ -1230,17 +1273,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const expanded  = !!snap.expanded;
         const whenFull  = formatSnapshotTimestamp(snap.timestamp);
         const whenShort = formatCompactTimestamp(snap.timestamp);
+        const bigBoxLabel = formatBigBoxLabel(snap.timestamp);
         html += `
         <div class="copy-all-snapshot${expanded ? ' expanded' : ''}" data-snap-id="${escHtml(snap.id)}">
           <div class="copy-all-header" data-snap-toggle="${escHtml(snap.id)}" role="button" tabindex="0" title="Click to ${expanded ? 'collapse' : 'expand'}">
             <span class="copy-all-caret" aria-hidden="true">▸</span>
+            <span class="copy-all-meta copy-all-meta--copied" title="${escHtml(whenFull)}">✅ ${escHtml(bigBoxLabel)}</span>
             <span class="count-badge copy-all-title-count" title="${innerAnns.length} annotation${innerAnns.length !== 1 ? 's' : ''} copied">${innerAnns.length}</span>
-            <span class="copy-all-meta copy-all-meta--copied" title="${escHtml(whenFull)}">copied at ${escHtml(whenShort)}</span>
             <span class="copy-all-spacer"></span>
             <button class="copy-all-action copy-all-save copy-all-save--icon" data-snap-id="${escHtml(snap.id)}" title="Save for later — move these annotations to the Saved for Later tab" aria-label="Save for later">🕐</button>
             <button class="copy-all-action copy-all-ungroup" data-snap-ungroup="${escHtml(snap.id)}" title="Ungroup — move these annotations back into the main list">⇱ Ungroup</button>
             <button class="copy-all-action copy-all-clear copy-all-clear--icon" data-snap-id="${escHtml(snap.id)}" title="Clear (move to history)" aria-label="Clear group (move to history)">🗑</button>
-            <button class="copy-all-action copy-all-collapse" data-snap-collapse="${escHtml(snap.id)}" title="Collapse">▴</button>
           </div>
           <div class="copy-all-summary">
             ${(() => {
@@ -1585,12 +1628,165 @@ document.addEventListener('DOMContentLoaded', () => {
         || changes[SAVED_LATER_KEY] || changes[SETTINGS_KEY]) {
       backupToSync();
     }
+    // Capture undo/redo deltas across tracked keys.
+    if (suppressUndoCapture === 0) captureUndoFromChanges(changes);
+
     if (changes.annotations) {
       const newAnns = changes.annotations.newValue || [];
       if (!isWritingFromPopup && !historyVisible && !settingsVisible) {
         render(newAnns);
       }
     }
+  });
+
+  // ── Universal undo / redo ────────────────────────────────────────────────
+  // Listen for storage changes on tracked keys; coalesce them per-tick and
+  // push a single undo entry capturing the prior state. Mutations driven by
+  // applyState (undo / redo) are skipped via suppressUndoCapture.
+  function captureUndoFromChanges(changes) {
+    let touched = false;
+    UNDO_TRACKED_KEYS.forEach(key => {
+      if (!Object.prototype.hasOwnProperty.call(changes, key)) return;
+      touched = true;
+      if (!pendingUndoOld) pendingUndoOld = {};
+      // Only the first old-value seen in this coalesced batch is the real
+      // "before" state; later events for the same key in the same tick are
+      // intermediate states from chained writes.
+      if (!Object.prototype.hasOwnProperty.call(pendingUndoOld, key)) {
+        pendingUndoOld[key] = changes[key].oldValue;
+      }
+    });
+    if (!touched) return;
+    if (pendingUndoTask) return;
+    pendingUndoTask = setTimeout(() => {
+      const snap = pendingUndoOld;
+      pendingUndoOld  = null;
+      pendingUndoTask = null;
+      if (!snap) return;
+      undoStack.push(snap);
+      if (undoStack.length > UNDO_STACK_LIMIT) undoStack.shift();
+      // Any new user mutation invalidates the redo stack.
+      redoStack = [];
+      updateUndoButtons();
+    }, 0);
+  }
+
+  function readTrackedState(cb) {
+    const defaults = {};
+    UNDO_TRACKED_KEYS.forEach(k => { defaults[k] = undefined; });
+    chrome.storage.local.get(defaults, r => {
+      const out = {};
+      UNDO_TRACKED_KEYS.forEach(k => { out[k] = r[k]; });
+      cb(out);
+    });
+  }
+
+  function applyState(state, cb) {
+    if (!state) { if (cb) cb(); return; }
+    const toSet    = {};
+    const toRemove = [];
+    UNDO_TRACKED_KEYS.forEach(k => {
+      if (Object.prototype.hasOwnProperty.call(state, k)) {
+        const v = state[k];
+        if (v === undefined) toRemove.push(k);
+        else toSet[k] = v;
+      }
+    });
+    suppressUndoCapture++;
+    isWritingFromPopup = true;
+    const finishWrite = () => {
+      isWritingFromPopup = false;
+      // Decrement suppress after a small delay so any onChanged events
+      // queued for this write see the suppression flag.
+      setTimeout(() => { suppressUndoCapture = Math.max(0, suppressUndoCapture - 1); }, 50);
+      // Reload UI from authoritative storage state.
+      chrome.storage.local.get({ annotations: [], [SETTINGS_KEY]: DEFAULT_SETTINGS }, r => {
+        if (historyVisible) renderHistoryTab();
+        else if (settingsVisible) renderSettings();
+        else render(r.annotations);
+        applyDarkMode((r[SETTINGS_KEY] || {}).darkMode);
+        updateButtonLabels({ ...DEFAULT_SETTINGS, ...(r[SETTINGS_KEY] || {}) });
+      });
+      if (cb) cb();
+    };
+    const doRemove = () => {
+      if (toRemove.length === 0) return finishWrite();
+      chrome.storage.local.remove(toRemove, finishWrite);
+    };
+    if (Object.keys(toSet).length === 0) doRemove();
+    else chrome.storage.local.set(toSet, doRemove);
+  }
+
+  function doUndo() {
+    if (undoStack.length === 0) return;
+    const prev = undoStack.pop();
+    readTrackedState(curr => {
+      // Build a forward-state for redo from the *current* values of just
+      // those keys that the undo step touches.
+      const forward = {};
+      Object.keys(prev).forEach(k => { forward[k] = curr[k]; });
+      redoStack.push(forward);
+      if (redoStack.length > UNDO_STACK_LIMIT) redoStack.shift();
+      applyState(prev, updateUndoButtons);
+    });
+  }
+
+  function doRedo() {
+    if (redoStack.length === 0) return;
+    const next = redoStack.pop();
+    readTrackedState(curr => {
+      const back = {};
+      Object.keys(next).forEach(k => { back[k] = curr[k]; });
+      undoStack.push(back);
+      if (undoStack.length > UNDO_STACK_LIMIT) undoStack.shift();
+      applyState(next, updateUndoButtons);
+    });
+  }
+
+  function updateUndoButtons() {
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+  }
+
+  // Match a keyboard event against a configured shortcut.
+  // Shortcut shape: { modifier: 'mod' | 'ctrl' | 'meta' | 'alt' | 'shift', key: 'z' }
+  // 'mod' (default) accepts Ctrl on Windows/Linux and Cmd (meta) on macOS.
+  function shortcutMatches(e, sc) {
+    if (!sc || !sc.key) return false;
+    const key = (e.key || '').toLowerCase();
+    if (key !== String(sc.key).toLowerCase()) return false;
+    const mod = sc.modifier || 'mod';
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+    if (mod === 'mod')   return (isMac ? e.metaKey : e.ctrlKey) && !e.altKey;
+    if (mod === 'ctrl')  return e.ctrlKey  && !e.metaKey;
+    if (mod === 'meta')  return e.metaKey  && !e.ctrlKey;
+    if (mod === 'alt')   return e.altKey   && !e.ctrlKey && !e.metaKey;
+    if (mod === 'shift') return e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+    return false;
+  }
+
+  // Global keydown for undo/redo. Settings panel inputs still see the events
+  // first (we only act if the target isn't a text field handling its own undo).
+  document.addEventListener('keydown', e => {
+    // Don't hijack browser undo inside text fields — let the textarea/input
+    // handle its own undo/redo of typed content.
+    const tgt = e.target;
+    const inTextField = tgt && (
+      tgt.tagName === 'TEXTAREA' ||
+      (tgt.tagName === 'INPUT' && /^(text|search|url|email|password|number)$/i.test(tgt.type || 'text'))
+    );
+    if (inTextField) return;
+    loadSettings(s => {
+      const undoSc = s.undoShortcut || DEFAULT_SETTINGS.undoShortcut;
+      const redoSc = s.redoShortcut || DEFAULT_SETTINGS.redoShortcut;
+      if (shortcutMatches(e, undoSc)) {
+        e.preventDefault();
+        doUndo();
+      } else if (shortcutMatches(e, redoSc)) {
+        e.preventDefault();
+        doRedo();
+      }
+    });
   });
 
   // ── Sync restore banner ───────────────────────────────────────────────────
@@ -2041,6 +2237,10 @@ document.addEventListener('DOMContentLoaded', () => {
     else openSearch();
   });
 
+  if (undoBtn) undoBtn.addEventListener('click', () => doUndo());
+  if (redoBtn) redoBtn.addEventListener('click', () => doRedo());
+  updateUndoButtons();
+
   searchInput.addEventListener('input', () => {
     applySearch(searchInput.value.trim());
   });
@@ -2353,66 +2553,29 @@ document.addEventListener('DOMContentLoaded', () => {
           .map(id => currentById.get(id) || (store[id] ? stripRefMeta(store[id]) : null))
           .filter(Boolean);
 
-        // Group by URL so each entry can show thin blue URL separators.
-        const byUrl = {};
+        // Group resolved annotations by URL, preserving original order.
+        const groups = [];
+        const groupIdx = new Map();
         resolved.forEach(ann => {
           const u = ann.url || '';
-          (byUrl[u] = byUrl[u] || []).push(ann);
-        });
-        const urls = Object.keys(byUrl);
-
-        // Annotations from this copy that are still in the live set — these
-        // are the ones the "Remove from current" button can act on.
-        const liveAnns = resolved.filter(a => currentById.has(a.id));
-
-        // Build per-URL group HTML used in BOTH the preview list and (when
-        // applicable) the "remove from current" listing.
-        function buildGroupsHTML(annsList) {
-          const grouped = {};
-          annsList.forEach(ann => {
-            const u = ann.url || '';
-            (grouped[u] = grouped[u] || []).push(ann);
-          });
-          return Object.entries(grouped).map(([url, items]) => `
-            <div class="copy-hist-url-group">
-              <div class="copy-hist-url" title="${escHtml(url)}">${escHtml(url || '(no url)')}</div>
-              <ul class="copy-hist-ann-list">
-                ${items.map(ann => {
-                  const sels = annSelectors(ann);
-                  const fullSels = sels.join(', ');
-                  return `<li class="copy-hist-ann-row" title="${escHtml(fullSels)}">
-                    <code class="copy-hist-ann-sels">${escHtml(fullSels)}</code>
-                  </li>`;
-                }).join('')}
-              </ul>
-            </div>`).join('');
-        }
-
-        // "Remove from your current annotations" — list rows only for
-        // annotations from this copy that are still live. If none remain
-        // live, show a disabled note.
-        let removeBlock = '';
-        if (ids.length > 0) {
-          if (liveAnns.length > 0) {
-            removeBlock = `
-              <div class="copy-hist-remove-block">
-                <button class="copy-hist-remove-current-btn"
-                        data-ts="${escHtml(entry.timestamp)}"
-                        title="Remove these annotations from your current set">Remove from your current annotations:</button>
-                <div class="copy-hist-remove-list">
-                  ${buildGroupsHTML(liveAnns)}
-                </div>
-              </div>`;
-          } else {
-            removeBlock = `
-              <div class="copy-hist-remove-block">
-                <button class="copy-hist-remove-current-btn" disabled
-                        title="None of these annotations are in your current set">Remove from your current annotations:</button>
-                <div class="copy-hist-remove-list copy-hist-remove-list--empty">
-                  <em>None of these annotations are in your current set.</em>
-                </div>
-              </div>`;
+          if (!groupIdx.has(u)) {
+            groupIdx.set(u, groups.length);
+            groups.push({ url: u, items: [] });
           }
+          groups[groupIdx.get(u)].items.push(ann);
+        });
+
+        // Annotations from this copy that are still in the live set drive
+        // the "Remove from current" button.
+        const liveAnns = resolved.filter(a => currentById.has(a.id));
+        let removeBlock = '';
+        if (ids.length > 0 && liveAnns.length > 0) {
+          removeBlock = `
+            <div class="copy-hist-remove-block">
+              <button class="copy-hist-remove-current-btn"
+                      data-ts="${escHtml(entry.timestamp)}"
+                      title="Remove these annotations from your current set">Remove from current (${liveAnns.length})</button>
+            </div>`;
         }
 
         // Prepend / append: only render a chip if the captured text exists.
@@ -2430,19 +2593,34 @@ document.addEventListener('DOMContentLoaded', () => {
           fixesBlock = `<div class="copy-hist-fixes">${chips.join('')}</div>`;
         }
 
-        const whenFull  = formatTimestamp(entry.timestamp);
-        const whenShort = formatCompactTimestamp(entry.timestamp);
-        const annCount  = entry.count != null ? entry.count : resolved.length;
+        const when     = formatTimestamp(entry.timestamp);
+        const annCount = entry.count != null ? entry.count : resolved.length;
+        const hasRaw   = !!(entry.output && String(entry.output).trim());
 
+        // SFL-style layout for the copy log entry. Adds a "Raw" button to
+        // toggle the verbatim copied output.
         html += `
-        <div class="item copy-hist-item">
-          <div class="copy-hist-header">
-            <span class="count-badge copy-hist-count-badge" title="${annCount} annotation${annCount !== 1 ? 's' : ''}">${annCount}</span>
-            <span class="hist-ts copy-hist-ts" title="${escHtml(whenFull)}">copied at ${escHtml(whenShort)}</span>
-            <span class="copy-hist-spacer"></span>
-            <button class="copy-hist-perm-delete-btn" data-ts="${escHtml(entry.timestamp)}" title="Permanently delete">✕</button>
+        <div class="sfl-set copy-hist-item" data-set-id="${escHtml(entry.timestamp)}">
+          <div class="sfl-set-header">
+            <span class="sfl-set-meta">📅 ${escHtml(when)} · ${annCount} annotation${annCount !== 1 ? 's' : ''}</span>
+            <div class="sfl-set-actions">
+              ${hasRaw ? `<button class="sfl-set-btn copy-hist-raw-btn" data-ts="${escHtml(entry.timestamp)}" title="View raw output">📄 Raw</button>` : ''}
+              <button class="sfl-set-btn sfl-set-btn--danger copy-hist-perm-delete-btn" data-ts="${escHtml(entry.timestamp)}" title="Permanently delete">🗑</button>
+            </div>
           </div>
-          ${urls.length > 0 ? `<div class="copy-hist-groups">${buildGroupsHTML(resolved)}</div>` : ''}
+          ${groups.map(g => `
+            <div class="sfl-url-group">
+              <div class="sfl-url" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
+              <ul class="sfl-set-list">
+                ${g.items.map(ann => {
+                  const sels = annSelectors(ann);
+                  const fullSels = sels.join(', ');
+                  const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
+                  return `<li title="${escHtml(fullSels)}"><code>${escHtml(fullSels)}</code>${escHtml(note.slice(0, 120))}${note.length > 120 ? '…' : ''}</li>`;
+                }).join('')}
+              </ul>
+            </div>`).join('')}
+          ${hasRaw ? `<pre class="copy-hist-raw-body" data-ts="${escHtml(entry.timestamp)}" style="display:none;">${escHtml(entry.output)}</pre>` : ''}
           ${removeBlock}
           ${fixesBlock}
         </div>`;
@@ -2473,6 +2651,20 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', () => {
           const ts = btn.dataset.ts;
           removeCopyLogFromCurrent(ts);
+        });
+      });
+
+      // "📄 Raw" — toggles the verbatim copied output for that entry.
+      historyEl.querySelectorAll('.copy-hist-raw-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          const ts = btn.dataset.ts;
+          const safeTs = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(ts) : ts;
+          const body = historyEl.querySelector(`.copy-hist-raw-body[data-ts="${safeTs}"]`);
+          if (!body) return;
+          const showing = body.style.display !== 'none';
+          body.style.display = showing ? 'none' : 'block';
+          btn.classList.toggle('active', !showing);
         });
       });
 
@@ -2636,6 +2828,26 @@ document.addEventListener('DOMContentLoaded', () => {
         `<option value="${escHtml(key)}" ${selected === key ? 'selected' : ''}>${cfg.emoji} ${escHtml(cfg.label)}</option>`)
       .join('');
 
+    // Undo/redo shortcut state for this render.
+    const undoSc  = s.undoShortcut || DEFAULT_SETTINGS.undoShortcut;
+    const redoSc  = s.redoShortcut || DEFAULT_SETTINGS.redoShortcut;
+    const undoMod = undoSc.modifier || 'mod';
+    const undoKey = undoSc.key      || 'z';
+    const redoMod = redoSc.modifier || 'mod';
+    const redoKey = redoSc.key      || 'y';
+    const shortcutModOptions = (selected) => {
+      const mods = [
+        ['mod',   'Ctrl / ⌘ Cmd'],
+        ['ctrl',  'Ctrl'],
+        ['meta',  'Meta / ⌘ Cmd'],
+        ['alt',   'Alt / Option'],
+        ['shift', 'Shift'],
+      ];
+      return mods.map(([v, l]) =>
+        `<option value="${v}" ${selected === v ? 'selected' : ''}>${escHtml(l)}</option>`
+      ).join('');
+    };
+
     settingsEl.innerHTML = `
       <!-- ── Annotation Shortcut ── -->
       <div class="settings-section">
@@ -2661,6 +2873,27 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </div>
           <button id="open-popup-shortcut-btn" class="btn-secondary">Customize…</button>
+        </div>
+      </div>
+
+      <!-- ── Undo / Redo Shortcuts ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">↶ Undo / Redo</div>
+        <div class="settings-row">
+          <label class="settings-label" for="undo-mod">Undo</label>
+          <div class="shortcut-pair">
+            <select id="undo-mod" class="shortcut-select">${shortcutModOptions(undoMod)}</select>
+            <span class="shortcut-plus">+</span>
+            <input id="undo-key" class="shortcut-key-input" maxlength="1" value="${escHtml(undoKey)}" />
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="redo-mod">Redo</label>
+          <div class="shortcut-pair">
+            <select id="redo-mod" class="shortcut-select">${shortcutModOptions(redoMod)}</select>
+            <span class="shortcut-plus">+</span>
+            <input id="redo-key" class="shortcut-key-input" maxlength="1" value="${escHtml(redoKey)}" />
+          </div>
         </div>
       </div>
 
@@ -2863,6 +3096,26 @@ document.addEventListener('DOMContentLoaded', () => {
         if (preview) preview.textContent = MODIFIER_LABELS[mod] || 'Alt';
       });
     }
+
+    // ── Undo / Redo shortcut inputs ──────────────────────────────────────
+    const undoModSel = settingsEl.querySelector('#undo-mod');
+    const undoKeyIn  = settingsEl.querySelector('#undo-key');
+    const redoModSel = settingsEl.querySelector('#redo-mod');
+    const redoKeyIn  = settingsEl.querySelector('#redo-key');
+    function saveUndoShortcut() {
+      const k = (undoKeyIn.value || 'z').trim().slice(0, 1).toLowerCase() || 'z';
+      undoKeyIn.value = k;
+      saveSettings({ undoShortcut: { modifier: undoModSel.value, key: k } });
+    }
+    function saveRedoShortcut() {
+      const k = (redoKeyIn.value || 'y').trim().slice(0, 1).toLowerCase() || 'y';
+      redoKeyIn.value = k;
+      saveSettings({ redoShortcut: { modifier: redoModSel.value, key: k } });
+    }
+    if (undoModSel) undoModSel.addEventListener('change', saveUndoShortcut);
+    if (undoKeyIn)  undoKeyIn.addEventListener('change',  saveUndoShortcut);
+    if (redoModSel) redoModSel.addEventListener('change', saveRedoShortcut);
+    if (redoKeyIn)  redoKeyIn.addEventListener('change',  saveRedoShortcut);
 
     // ── Button Actions selects ────────────────────────────────────────────
     // ── Open popup shortcut button ─────────────────────────────────────────
@@ -3490,6 +3743,16 @@ document.addEventListener('DOMContentLoaded', () => {
     maybeMigrateStorage(() => {
       load();
       checkSyncRestore();
+      // Init writes are done; allow user actions to start populating the
+      // undo stack. Drain any pending coalesced capture from init.
+      setTimeout(() => {
+        pendingUndoOld = null;
+        if (pendingUndoTask) { clearTimeout(pendingUndoTask); pendingUndoTask = null; }
+        suppressUndoCapture = Math.max(0, suppressUndoCapture - 1);
+        undoStack = [];
+        redoStack = [];
+        updateUndoButtons();
+      }, 50);
     });
   });
 
