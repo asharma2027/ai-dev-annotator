@@ -332,7 +332,14 @@ body {
   gap: 6px;
   margin-bottom: 4px;
 }
-.item-sel code { flex: 1; min-width: 0; }
+.item-sel code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
 
 /* Clickable annotation code element */
 .ann-code--clickable {
@@ -343,6 +350,9 @@ body {
   opacity: 0.75;
   text-decoration: underline;
 }
+/* Multi-element annotations: include all selectors comma-separated; the
+   container truncates with an ellipsis when there isn't room for the full
+   list. The full list is available via the title tooltip. */
 
 /* Copy-annotation button: labeled, always visible */
 .item-copy-btn {
@@ -367,21 +377,24 @@ body {
 
 .item-delete-btn {
   flex: 0 0 auto;
-  background: none;
-  border: 1px solid transparent;
-  color: #9ca3af;
+  background: var(--section-bg);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
-  padding: 2px 5px;
+  padding: 2px 6px;
   border-radius: 4px;
   cursor: pointer;
-  line-height: 1;
+  line-height: 1.5;
+  white-space: nowrap;
   transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
-.item-delete-btn:hover {
+.item-delete-btn:hover,
+.item-delete-btn:focus-visible {
   color: #dc2626;
   background: #fee2e2;
   border-color: #fca5a5;
+  outline: none;
 }
 
 .item-note { color: var(--text-secondary); font-size: 12px; }
@@ -1378,7 +1391,13 @@ button {
 /* Reversible action — uses a non-destructive blue palette, mirrors sizing
    of the permanent-delete button next to it. */
 .copy-hist-remove-current-btn {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   background: var(--section-bg);
   border: 1px solid var(--border);
   color: #2563eb;
@@ -1404,6 +1423,20 @@ button {
   background: #1e3a8a;
   border-color: #3b82f6;
   color: #bfdbfe;
+}
+.copy-hist-remove-current-btn[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+/* Pink element-name list inside the "remove from current" button. */
+.copy-hist-remove-names {
+  color: var(--code-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+}
+.copy-hist-remove-current-btn:hover .copy-hist-remove-names {
+  color: var(--code-color);
 }
 
 /* ── Group-level clear button ────────────────────────────────────────────── */
@@ -1513,6 +1546,22 @@ button {
   color: #dc2626;
   border-color: #fca5a5;
   background: #fee2e2;
+}
+/* Icon-only clear button — same chip size, no text. */
+.copy-all-action.copy-all-clear--icon {
+  padding: 3px 7px;
+  font-size: 13px;
+  line-height: 1;
+}
+.copy-all-action.copy-all-ungroup:hover {
+  color: #6d28d9;
+  border-color: #c4b5fd;
+  background: #ede9fe;
+}
+[data-theme="dark"] .copy-all-action.copy-all-ungroup:hover {
+  color: #c4b5fd;
+  border-color: #6d28d9;
+  background: #2e1065;
 }
 .copy-all-action.copy-all-collapse {
   display: none;
