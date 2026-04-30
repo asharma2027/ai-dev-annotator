@@ -625,19 +625,106 @@ textarea.search-note-match {
 }
 .copy-hist-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 6px;
   margin-bottom: 6px;
+  flex-wrap: wrap;
 }
-.copy-hist-count {
+.copy-hist-spacer { flex: 1 1 auto; }
+.copy-hist-ts {
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.count-badge.copy-hist-count-badge {
+  /* Match the top-of-window count indicator (blue solid pill) */
+  background: rgba(37, 99, 235, 0.85);
+  color: #fff;
+}
+/* Per-URL group inside a copy-log entry (mirrors Saved-for-Later styling). */
+.copy-hist-groups,
+.copy-hist-remove-list {
+  margin: 0 0 4px;
+}
+.copy-hist-url-group {
+  margin: 4px 0 2px;
+}
+.copy-hist-url {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--url-color);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 0 1px;
+  border-bottom: 1px solid rgba(37, 99, 235, 0.2);
+}
+.copy-hist-ann-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.copy-hist-ann-row {
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--border);
+  word-break: break-word;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.copy-hist-ann-row:last-child { border-bottom: none; }
+.copy-hist-ann-sels {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.copy-hist-remove-block {
+  margin-top: 4px;
+  border-top: 1px dashed var(--border);
+  padding-top: 4px;
+}
+.copy-hist-remove-list--empty {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  padding: 2px 0;
+}
+/* Click-to-expand chips for the prepend / append text captured at copy time. */
+.copy-hist-fixes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.copy-hist-fix {
+  flex: 0 0 auto;
+}
+.copy-hist-fix > summary {
+  cursor: pointer;
   font-size: 10px;
   font-weight: 600;
   color: var(--text-muted);
   background: var(--section-bg);
-  border-radius: 10px;
-  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 7px;
+  list-style: none;
+  user-select: none;
 }
-.copy-hist-preview {
+.copy-hist-fix > summary::-webkit-details-marker { display: none; }
+.copy-hist-fix[open] > summary {
+  color: #2563eb;
+  border-color: #93c5fd;
+  background: rgba(37, 99, 235, 0.08);
+}
+.copy-hist-fix-body {
+  margin: 4px 0 0;
   font-family: 'Menlo', 'Consolas', monospace;
   font-size: 10.5px;
   color: var(--text-secondary);
@@ -646,10 +733,9 @@ textarea.search-note-match {
   border-radius: 4px;
   padding: 6px 8px;
   white-space: pre-wrap;
-  max-height: 100px;
+  max-height: 140px;
   overflow-y: auto;
   line-height: 1.5;
-  transition: background 0.2s;
 }
 
 /* ── Settings panel ──────────────────────────────────────────────────────── */
@@ -1289,18 +1375,43 @@ button {
   padding: 0;
   font-size: 11px;
   color: var(--text-secondary);
-  max-height: 140px;
-  overflow-y: auto;
 }
 .sfl-set-list li {
   padding: 2px 0;
   border-bottom: 1px dashed var(--border);
   word-break: break-word;
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 .sfl-set-list li:last-child { border-bottom: none; }
 .sfl-set-list li code {
   font-size: 10px;
   margin-right: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 70%;
+}
+/* Thin blue URL separator between annotation groups inside one SFL set. */
+.sfl-url-group { margin: 4px 0 2px; }
+.sfl-url {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--url-color);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 0 1px;
+  border-bottom: 1px solid rgba(37, 99, 235, 0.2);
+}
+.sfl-overflow {
+  color: var(--text-muted);
+  border-bottom: none !important;
 }
 
 /* ── Change 14: toast + confirm banner styles ─────────────────────────── */
@@ -1387,28 +1498,23 @@ button {
   border-color: #fca5a5;
 }
 
-/* ── Change 1: "Remove from current annotations" button (copy log) ─────── */
-/* Reversible action — uses a non-destructive blue palette, mirrors sizing
-   of the permanent-delete button next to it. */
+/* ── "Remove from current annotations" button (copy log) ────────────────── */
+/* Reversible action — uses a non-destructive blue palette. The button now
+   acts as a section label above a list of the affected annotations. */
 .copy-hist-remove-current-btn {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 100%;
+  display: block;
+  width: 100%;
   text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   background: var(--section-bg);
   border: 1px solid var(--border);
   color: #2563eb;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
-  padding: 2px 6px;
+  padding: 3px 8px;
   cursor: pointer;
   border-radius: 4px;
-  white-space: nowrap;
   line-height: 1.4;
-  margin-right: 4px;
+  margin-bottom: 4px;
   transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
 .copy-hist-remove-current-btn:hover {
@@ -1428,15 +1534,6 @@ button {
   opacity: 0.55;
   cursor: not-allowed;
   pointer-events: none;
-}
-/* Pink element-name list inside the "remove from current" button. */
-.copy-hist-remove-names {
-  color: var(--code-color);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-weight: 600;
-}
-.copy-hist-remove-current-btn:hover .copy-hist-remove-names {
-  color: var(--code-color);
 }
 
 /* ── Group-level clear button ────────────────────────────────────────────── */
@@ -1508,6 +1605,12 @@ button {
   color: var(--text);
   white-space: nowrap;
 }
+/* Blue solid count pill in the big-box header — matches the top counter. */
+.count-badge.copy-all-title-count {
+  background: rgba(37, 99, 235, 0.85);
+  color: #fff;
+  flex: 0 0 auto;
+}
 .copy-all-meta {
   color: var(--text-muted);
   font-size: 11px;
@@ -1516,6 +1619,13 @@ button {
   text-overflow: ellipsis;
   flex: 1;
   min-width: 0;
+}
+/* "copied at <when>" — black (default text) so it stands out next to the
+   blue count pill, while still fitting in the header row. */
+.copy-all-meta.copy-all-meta--copied {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 11px;
 }
 .copy-all-spacer { flex: 0 0 0; }
 
@@ -1541,6 +1651,12 @@ button {
   color: #16a34a;
   border-color: #86efac;
   background: #dcfce7;
+}
+/* Icon-only save (clock) — same chip size as the icon-only clear. */
+.copy-all-action.copy-all-save--icon {
+  padding: 3px 7px;
+  font-size: 13px;
+  line-height: 1;
 }
 .copy-all-action.copy-all-clear:hover {
   color: #dc2626;

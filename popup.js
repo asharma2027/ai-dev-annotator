@@ -628,6 +628,21 @@ document.addEventListener('DOMContentLoaded', () => {
     try { return new Date(ts).toLocaleString(); } catch { return ts; }
   }
 
+  // Compressed timestamp for tight UI rows (e.g. "Apr 30, 3:42p").
+  function formatCompactTimestamp(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      let h = d.getHours();
+      const m = d.getMinutes();
+      const ampm = h >= 12 ? 'p' : 'a';
+      h = h % 12; if (h === 0) h = 12;
+      const mm = m < 10 ? `0${m}` : `${m}`;
+      return `${date}, ${h}:${mm}${ampm}`;
+    } catch { return ts; }
+  }
+
   function modLabel(mod) {
     return MODIFIER_LABELS[mod] || 'Alt';
   }
@@ -1213,15 +1228,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const ids = snap.annotationIds || [];
         const innerAnns = ids.map(id => annsById.get(id)).filter(Boolean);
         const expanded  = !!snap.expanded;
-        const when      = formatSnapshotTimestamp(snap.timestamp);
+        const whenFull  = formatSnapshotTimestamp(snap.timestamp);
+        const whenShort = formatCompactTimestamp(snap.timestamp);
         html += `
         <div class="copy-all-snapshot${expanded ? ' expanded' : ''}" data-snap-id="${escHtml(snap.id)}">
           <div class="copy-all-header" data-snap-toggle="${escHtml(snap.id)}" role="button" tabindex="0" title="Click to ${expanded ? 'collapse' : 'expand'}">
             <span class="copy-all-caret" aria-hidden="true">▸</span>
-            <span class="copy-all-title">${innerAnns.length} annotation${innerAnns.length !== 1 ? 's' : ''} copied</span>
-            <span class="copy-all-meta" title="${escHtml(snap.timestamp)}">at ${escHtml(when)}</span>
+            <span class="count-badge copy-all-title-count" title="${innerAnns.length} annotation${innerAnns.length !== 1 ? 's' : ''} copied">${innerAnns.length}</span>
+            <span class="copy-all-meta copy-all-meta--copied" title="${escHtml(whenFull)}">copied at ${escHtml(whenShort)}</span>
             <span class="copy-all-spacer"></span>
-            <button class="copy-all-action copy-all-save" data-snap-id="${escHtml(snap.id)}" title="Save these annotations for later">💾 Save for later</button>
+            <button class="copy-all-action copy-all-save copy-all-save--icon" data-snap-id="${escHtml(snap.id)}" title="Save for later — move these annotations to the Saved for Later tab" aria-label="Save for later">🕐</button>
             <button class="copy-all-action copy-all-ungroup" data-snap-ungroup="${escHtml(snap.id)}" title="Ungroup — move these annotations back into the main list">⇱ Ungroup</button>
             <button class="copy-all-action copy-all-clear copy-all-clear--icon" data-snap-id="${escHtml(snap.id)}" title="Clear (move to history)" aria-label="Clear group (move to history)">🗑</button>
             <button class="copy-all-action copy-all-collapse" data-snap-collapse="${escHtml(snap.id)}" title="Collapse">▴</button>
@@ -1829,6 +1845,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. Plain-text content elements
     const textEls = card.querySelectorAll(
       'code, .hist-note, .url-label, .copy-hist-preview, ' +
+      '.copy-hist-url, .copy-hist-ann-sels, .copy-hist-fix-body, ' +
+      '.sfl-url, ' +
       '.settings-label, .settings-hint, .settings-row-title, .settings-row-sub, ' +
       '.settings-section-title, .settings-value, ' +
       '.copy-all-meta, .copy-all-group-url, .copy-all-group-count'
@@ -2119,7 +2137,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <button class="hist-restore-btn"
                 data-ann-id="${escHtml(ann.id)}"
                 data-deleted-at="${escHtml(ann.deletedAt || '')}"
-                title="Restore annotation">+</button>
+                title="Restore annotation">↺</button>
               <button class="hist-perm-delete-btn"
                 data-ann-id="${escHtml(ann.id)}"
                 data-deleted-at="${escHtml(ann.deletedAt || '')}"
@@ -2184,6 +2202,22 @@ document.addEventListener('DOMContentLoaded', () => {
           ? resolveList(set.annotationIds, store)
           : (set.annotations || []);
         const items = resolved.slice(0, 50);
+        // Group by URL so we can render thin blue URL separators between
+        // annotation groups while preserving the original order. Multi-element
+        // annotations stay as a single row (selectors joined with ellipsis).
+        const groups = [];
+        const groupIdx = new Map();
+        items.forEach(ann => {
+          const u = ann.url || '';
+          if (!groupIdx.has(u)) {
+            groupIdx.set(u, groups.length);
+            groups.push({ url: u, items: [] });
+          }
+          groups[groupIdx.get(u)].items.push(ann);
+        });
+        const overflow = resolved.length > items.length
+          ? `<li class="sfl-overflow"><em>+${resolved.length - items.length} more…</em></li>`
+          : '';
         html += `
         <div class="sfl-set" data-set-id="${escHtml(set.id)}">
           <div class="sfl-set-header">
@@ -2193,16 +2227,18 @@ document.addEventListener('DOMContentLoaded', () => {
               <button class="sfl-set-btn sfl-set-btn--danger sfl-delete" data-set-id="${escHtml(set.id)}" title="Delete this set">🗑</button>
             </div>
           </div>
-          <ul class="sfl-set-list">
-            ${items.map(ann => {
-              const sel = getSelector(ann);
-              const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
-              return `<li><code>${escHtml(sel)}</code>${escHtml(note.slice(0, 120))}${note.length > 120 ? '…' : ''}</li>`;
-            }).join('')}
-            ${resolved.length > items.length
-              ? `<li><em>+${resolved.length - items.length} more…</em></li>`
-              : ''}
-          </ul>
+          ${groups.map(g => `
+            <div class="sfl-url-group">
+              <div class="sfl-url" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
+              <ul class="sfl-set-list">
+                ${g.items.map(ann => {
+                  const sel  = getSelectorDisplay(ann);
+                  const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
+                  return `<li title="${escHtml(sel)}"><code>${escHtml(sel)}</code>${escHtml(note.slice(0, 120))}${note.length > 120 ? '…' : ''}</li>`;
+                }).join('')}
+              </ul>
+            </div>`).join('')}
+          ${overflow ? `<ul class="sfl-set-list">${overflow}</ul>` : ''}
         </div>`;
       });
 
@@ -2272,8 +2308,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderCopyHistory() {
-    chrome.storage.local.get({ [COPY_HISTORY_KEY]: [], annotations: [] }, r => {
+    chrome.storage.local.get({ [COPY_HISTORY_KEY]: [], annotations: [], [ANN_STORE_KEY]: {} }, r => {
       const copyHist = r[COPY_HISTORY_KEY];
+      const store    = r[ANN_STORE_KEY] || {};
       const currentById = new Map((r.annotations || []).map(a => [a.id, a]));
 
       if (copyHist.length === 0) {
@@ -2283,86 +2320,131 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      // Build a per-annotation list of selector pieces (main + every
+      // contextElements entry). Multi-element annotations stay as a single
+      // row but show all their selectors joined.
+      function annSelectors(ann) {
+        if (!ann) return [];
+        if (ann.pageLevel || ann.tag === 'page') return ['(whole page)'];
+        const parts = [];
+        const rawId = ann.elId !== undefined
+          ? (ann.elId ? `#${ann.elId}` : '')
+          : (ann.id && ann.id !== 'N/A' && !ann.id.startsWith('ann_') ? ann.id : '');
+        const cls = ann.classes && ann.classes !== 'N/A' ? ann.classes : '';
+        parts.push(`${ann.tag || '?'}${rawId}${cls}`);
+        if (Array.isArray(ann.contextElements)) {
+          ann.contextElements.forEach(ctx => {
+            const cId  = ctx.elId ? `#${ctx.elId}` : '';
+            const cCls = ctx.classes && ctx.classes !== 'N/A' ? ctx.classes : '';
+            parts.push(`${ctx.tag || '?'}${cId}${cCls}`);
+          });
+        }
+        return parts;
+      }
+
       let html = historyTabsHTML('copies');
       [...copyHist].reverse().forEach(entry => {
         const ids = Array.isArray(entry.annotationIds) ? entry.annotationIds : [];
-        const idCount = ids.length;
-        // Build the list of element selectors that are still present in
-        // current annotations. Each entry id maps to an annotation; we expand
-        // multi-element annotations into their individual selector pieces.
-        const matchingNames = [];
-        ids.forEach(id => {
-          const ann = currentById.get(id);
-          if (!ann) return;
-          if (ann.pageLevel || ann.tag === 'page') {
-            matchingNames.push('(whole page)');
-            return;
-          }
-          // Main element selector
-          const rawId = ann.elId !== undefined
-            ? (ann.elId ? `#${ann.elId}` : '')
-            : (ann.id && ann.id !== 'N/A' && !ann.id.startsWith('ann_') ? ann.id : '');
-          const cls = ann.classes && ann.classes !== 'N/A' ? ann.classes : '';
-          matchingNames.push(`${ann.tag}${rawId}${cls}`);
-          if (Array.isArray(ann.contextElements)) {
-            ann.contextElements.forEach(ctx => {
-              const cId  = ctx.elId ? `#${ctx.elId}` : '';
-              const cCls = ctx.classes && ctx.classes !== 'N/A' ? ctx.classes : '';
-              matchingNames.push(`${ctx.tag || '?'}${cId}${cCls}`);
-            });
-          }
-        });
-        // De-dup while preserving order so repeated selectors don't bloat.
-        const seen = new Set();
-        const uniqueNames = matchingNames.filter(n => {
-          if (seen.has(n)) return false;
-          seen.add(n); return true;
-        });
 
-        // Build the pink-text element-name segment with smart truncation.
-        // - Show up to MAX_INLINE names inline.
-        // - If more, show "first, second, +N more" but keep full list in title.
-        const MAX_INLINE = 3;
-        let pinkSegment = '';
-        let fullTitleList = '';
-        if (uniqueNames.length > 0) {
-          fullTitleList = uniqueNames.join(', ');
-          let display;
-          if (uniqueNames.length <= MAX_INLINE) {
-            display = uniqueNames.join(', ');
-          } else {
-            const head = uniqueNames.slice(0, MAX_INLINE).join(', ');
-            const more = uniqueNames.length - MAX_INLINE;
-            display = `${head} +${more} more`;
-          }
-          pinkSegment = `<span class="copy-hist-remove-names" title="${escHtml(fullTitleList)}">${escHtml(display)}</span>`;
+        // Resolve each id into its full annotation snapshot, preferring a
+        // current-set match (so any edits to the note since the copy show
+        // through), and falling back to the ref-store snapshot.
+        const resolved = ids
+          .map(id => currentById.get(id) || (store[id] ? stripRefMeta(store[id]) : null))
+          .filter(Boolean);
+
+        // Group by URL so each entry can show thin blue URL separators.
+        const byUrl = {};
+        resolved.forEach(ann => {
+          const u = ann.url || '';
+          (byUrl[u] = byUrl[u] || []).push(ann);
+        });
+        const urls = Object.keys(byUrl);
+
+        // Annotations from this copy that are still in the live set — these
+        // are the ones the "Remove from current" button can act on.
+        const liveAnns = resolved.filter(a => currentById.has(a.id));
+
+        // Build per-URL group HTML used in BOTH the preview list and (when
+        // applicable) the "remove from current" listing.
+        function buildGroupsHTML(annsList) {
+          const grouped = {};
+          annsList.forEach(ann => {
+            const u = ann.url || '';
+            (grouped[u] = grouped[u] || []).push(ann);
+          });
+          return Object.entries(grouped).map(([url, items]) => `
+            <div class="copy-hist-url-group">
+              <div class="copy-hist-url" title="${escHtml(url)}">${escHtml(url || '(no url)')}</div>
+              <ul class="copy-hist-ann-list">
+                ${items.map(ann => {
+                  const sels = annSelectors(ann);
+                  const fullSels = sels.join(', ');
+                  return `<li class="copy-hist-ann-row" title="${escHtml(fullSels)}">
+                    <code class="copy-hist-ann-sels">${escHtml(fullSels)}</code>
+                  </li>`;
+                }).join('')}
+              </ul>
+            </div>`).join('');
         }
 
-        // Change 1: "remove from current annotations" button — only useful when
-        // the entry has tracked annotation IDs (legacy entries have none).
-        // The button is only fully active when at least one of those
-        // annotations is still in the current set; otherwise we render a
-        // disabled pseudo-button to preserve existing layout & affordance.
-        let removeFromCurrentBtn = '';
-        if (idCount > 0) {
-          if (uniqueNames.length > 0) {
-            removeFromCurrentBtn = `<button class="copy-hist-remove-current-btn"
-                  data-ts="${escHtml(entry.timestamp)}"
-                  title="Remove ${escHtml(fullTitleList)} from your current annotations">remove ${pinkSegment} from current</button>`;
+        // "Remove from your current annotations" — list rows only for
+        // annotations from this copy that are still live. If none remain
+        // live, show a disabled note.
+        let removeBlock = '';
+        if (ids.length > 0) {
+          if (liveAnns.length > 0) {
+            removeBlock = `
+              <div class="copy-hist-remove-block">
+                <button class="copy-hist-remove-current-btn"
+                        data-ts="${escHtml(entry.timestamp)}"
+                        title="Remove these annotations from your current set">Remove from your current annotations:</button>
+                <div class="copy-hist-remove-list">
+                  ${buildGroupsHTML(liveAnns)}
+                </div>
+              </div>`;
           } else {
-            removeFromCurrentBtn = `<button class="copy-hist-remove-current-btn" disabled
-                  title="None of these annotations are in your current set">remove from current</button>`;
+            removeBlock = `
+              <div class="copy-hist-remove-block">
+                <button class="copy-hist-remove-current-btn" disabled
+                        title="None of these annotations are in your current set">Remove from your current annotations:</button>
+                <div class="copy-hist-remove-list copy-hist-remove-list--empty">
+                  <em>None of these annotations are in your current set.</em>
+                </div>
+              </div>`;
           }
         }
+
+        // Prepend / append: only render a chip if the captured text exists.
+        const hasPrepend = !!(entry.prependText && String(entry.prependText).trim());
+        const hasAppend  = !!(entry.appendText  && String(entry.appendText).trim());
+        let fixesBlock = '';
+        if (hasPrepend || hasAppend) {
+          const chips = [];
+          if (hasPrepend) chips.push(
+            `<details class="copy-hist-fix"><summary title="Click to expand prepend text">Prepend</summary><pre class="copy-hist-fix-body">${escHtml(entry.prependText)}</pre></details>`
+          );
+          if (hasAppend) chips.push(
+            `<details class="copy-hist-fix"><summary title="Click to expand append text">Append</summary><pre class="copy-hist-fix-body">${escHtml(entry.appendText)}</pre></details>`
+          );
+          fixesBlock = `<div class="copy-hist-fixes">${chips.join('')}</div>`;
+        }
+
+        const whenFull  = formatTimestamp(entry.timestamp);
+        const whenShort = formatCompactTimestamp(entry.timestamp);
+        const annCount  = entry.count != null ? entry.count : resolved.length;
+
         html += `
         <div class="item copy-hist-item">
           <div class="copy-hist-header">
-            <span class="hist-ts">📋 ${escHtml(formatTimestamp(entry.timestamp))}</span>
-            <span class="copy-hist-count">${entry.count} annotation${entry.count !== 1 ? 's' : ''}</span>
-            ${removeFromCurrentBtn}
+            <span class="count-badge copy-hist-count-badge" title="${annCount} annotation${annCount !== 1 ? 's' : ''}">${annCount}</span>
+            <span class="hist-ts copy-hist-ts" title="${escHtml(whenFull)}">copied at ${escHtml(whenShort)}</span>
+            <span class="copy-hist-spacer"></span>
             <button class="copy-hist-perm-delete-btn" data-ts="${escHtml(entry.timestamp)}" title="Permanently delete">✕</button>
           </div>
-          <div class="copy-hist-preview">${escHtml(entry.output)}</div>
+          ${urls.length > 0 ? `<div class="copy-hist-groups">${buildGroupsHTML(resolved)}</div>` : ''}
+          ${removeBlock}
+          ${fixesBlock}
         </div>`;
       });
 
@@ -3140,6 +3222,8 @@ document.addEventListener('DOMContentLoaded', () => {
             output:    result.md,
             count:     result.count,
             annotationIds: contribIds,
+            prependText: (s && s.prependText && s.prependText.trim()) ? s.prependText.trim() : '',
+            appendText:  (s && s.appendText  && s.appendText.trim())  ? s.appendText.trim()  : '',
           });
           // ── Copy-All "big box" snapshot ───────────────────────────────────
           // Group all currently-active annotations (not just contribAnns —
@@ -3211,6 +3295,8 @@ document.addEventListener('DOMContentLoaded', () => {
             output:    result.md,
             count:     result.count,
             annotationIds: contribIds,
+            prependText: (s && s.prependText && s.prependText.trim()) ? s.prependText.trim() : '',
+            appendText:  (s && s.appendText  && s.appendText.trim())  ? s.appendText.trim()  : '',
           });
           // Then move all annotations into history (refcount each).
           const now  = new Date().toISOString();
