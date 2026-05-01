@@ -2552,6 +2552,66 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ── Parse raw copy-log markdown output into URL-grouped element rows ───────────
+  // Used for legacy / imported entries that have no annotationIds stored.
+  // Parses the markdown format produced by buildMarkdown / formatLine.
+  function parseCopyOutput(output) {
+    if (!output || !output.trim()) return [];
+    const lines = output.split('\n');
+    const groups = [];
+    let currentGroup = null;
+    let currentItem  = null;
+    let lastField    = '';
+
+    for (const line of lines) {
+      // URL header: ## url or ### url
+      const urlMatch = line.match(/^#{2,3}\s+(.+)$/);
+      if (urlMatch) {
+        currentItem  = null;
+        lastField    = '';
+        currentGroup = { url: urlMatch[1].trim(), items: [] };
+        groups.push(currentGroup);
+        continue;
+      }
+      // Numbered item: "N. `selector`"
+      const itemMatch = line.match(/^\d+\.\s+`([^`]*)`/);
+      if (itemMatch) {
+        currentItem = { selector: itemMatch[1], note: '', timestamp: '' };
+        lastField   = '';
+        if (!currentGroup) {
+          currentGroup = { url: '', items: [] };
+          groups.push(currentGroup);
+        }
+        currentGroup.items.push(currentItem);
+        continue;
+      }
+      if (currentItem) {
+        // Sub-item: "   - content"
+        const subMatch = line.match(/^   - (.*)$/);
+        if (subMatch) {
+          const content = subMatch[1];
+          if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(content)) {
+            currentItem.timestamp = content;
+            lastField = 'ts';
+          } else if (/^https?:\/\//.test(content)) {
+            lastField = 'url';
+          } else if (content.startsWith('_"') && content.endsWith('"_')) {
+            lastField = 'text';
+          } else {
+            currentItem.note = currentItem.note
+              ? currentItem.note + '\n' + content
+              : content;
+            lastField = 'note';
+          }
+        } else if (/^     /.test(line) && lastField === 'note') {
+          // Continuation of a multi-line note
+          currentItem.note += '\n' + line.slice(5);
+        }
+      }
+    }
+    return groups.filter(g => g.items.length > 0);
+  }
+
   function renderCopyHistory() {
     chrome.storage.local.get({ [COPY_HISTORY_KEY]: [], annotations: [], [ANN_STORE_KEY]: {} }, r => {
       const copyHist = r[COPY_HISTORY_KEY];
@@ -2588,7 +2648,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       let html = historyTabsHTML('copies');
-      [...copyHist].reverse().forEach(entry => {
+      // Sort newest-first regardless of storage/import order.
+      [...copyHist]
+        .sort((a, b) => {
+          const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          return tb - ta;
+        })
+        .forEach(entry => {
         const ids = Array.isArray(entry.annotationIds) ? entry.annotationIds : [];
 
         // Resolve each id into its full annotation snapshot, preferring a
@@ -2599,37 +2666,30 @@ document.addEventListener('DOMContentLoaded', () => {
           .filter(Boolean);
 
         // Group resolved annotations by URL, preserving original order.
-        const groups = [];
+        // For legacy / imported entries with no ids, parse raw output instead.
+        let groups = [];
+        let isParsed = false;
         const groupIdx = new Map();
-        resolved.forEach(ann => {
-          const u = ann.url || '';
-          if (!groupIdx.has(u)) {
-            groupIdx.set(u, groups.length);
-            groups.push({ url: u, items: [] });
-          }
-          groups[groupIdx.get(u)].items.push(ann);
-        });
-
-        // Build a set of ids that are still live for per-row red-minus button.
-        const liveIdSet = new Set(resolved.filter(a => currentById.has(a.id)).map(a => a.id));
-
-        // Prepend / append: only render a chip if the captured text exists.
-        const hasPrepend = !!(entry.prependText && String(entry.prependText).trim());
-        const hasAppend  = !!(entry.appendText  && String(entry.appendText).trim());
-        let fixesBlock = '';
-        if (hasPrepend || hasAppend) {
-          const chips = [];
-          if (hasPrepend) chips.push(
-            `<details class="copy-hist-fix"><summary title="Click to expand prepend text">Prepend</summary><pre class="copy-hist-fix-body">${escHtml(entry.prependText)}</pre></details>`
-          );
-          if (hasAppend) chips.push(
-            `<details class="copy-hist-fix"><summary title="Click to expand append text">Append</summary><pre class="copy-hist-fix-body">${escHtml(entry.appendText)}</pre></details>`
-          );
-          fixesBlock = `<div class="copy-hist-fixes">${chips.join('')}</div>`;
+        if (resolved.length > 0) {
+          resolved.forEach(ann => {
+            const u = ann.url || '';
+            if (!groupIdx.has(u)) {
+              groupIdx.set(u, groups.length);
+              groups.push({ url: u, items: [] });
+            }
+            groups[groupIdx.get(u)].items.push(ann);
+          });
+        } else if (entry.output && entry.output.trim()) {
+          groups = parseCopyOutput(entry.output);
+          isParsed = true;
         }
 
+        // Build a set of ids that are still live for per-row red-minus/restore button.
+        const liveIdSet = new Set(resolved.filter(a => currentById.has(a.id)).map(a => a.id));
+
         const when     = formatTimestamp(entry.timestamp);
-        const annCount = entry.count != null ? entry.count : resolved.length;
+        const parsedCount = isParsed ? groups.reduce((n, g) => n + g.items.length, 0) : 0;
+        const annCount = entry.count != null ? entry.count : (resolved.length || parsedCount);
         const hasRaw   = !!(entry.output && String(entry.output).trim());
 
         // SFL-style layout for the copy log entry. Adds a "Raw" button to
@@ -2648,19 +2708,27 @@ document.addEventListener('DOMContentLoaded', () => {
               <div class="sfl-url hist-clickable-text" data-full-text="${escHtml(g.url || '')}" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
               <ul class="sfl-set-list">
                 ${g.items.map(ann => {
-                  const sels = annSelectors(ann);
+                  const sels = isParsed
+                    ? (ann.selector ? [ann.selector] : [])
+                    : annSelectors(ann);
                   const fullSels = sels.join(', ');
-                  const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
+                  const note = isParsed
+                    ? (ann.note && ann.note.trim() ? ann.note.trim() : '(no note)')
+                    : (ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)');
                   const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
-                  const minusBtn = liveIdSet.has(ann.id)
-                    ? `<button class="copy-hist-row-remove-btn" data-ann-id="${escHtml(ann.id)}" title="Remove this annotation from current">−</button>`
-                    : '';
-                  return `<li title="${escHtml(fullSels)}"><code class="hist-clickable-text" data-full-text="${escHtml(fullSels)}">${escHtml(fullSels)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span>${minusBtn}</li>`;
+                  const isLive = !isParsed && ann.id && liveIdSet.has(ann.id);
+                  const rowBtn = isParsed
+                    ? ''
+                    : (isLive
+                        ? `<button class="copy-hist-row-remove-btn" data-ann-id="${escHtml(ann.id)}" title="Remove this annotation from current">−</button>`
+                        : `<button class="copy-hist-row-restore-btn" data-ann-id="${escHtml(ann.id)}" title="Restore this annotation to current set">Restore</button>`
+                      );
+                  const rowClass = isLive ? ' copy-hist-row--live' : '';
+                  return `<li class="copy-hist-li${rowClass}" title="${escHtml(fullSels)}"><code class="hist-clickable-text" data-full-text="${escHtml(fullSels)}">${escHtml(fullSels)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span>${rowBtn}</li>`;
                 }).join('')}
               </ul>
             </div>`).join('')}
           ${hasRaw ? `<pre class="copy-hist-raw-body" data-ts="${escHtml(entry.timestamp)}" style="display:none;">${escHtml(entry.output)}</pre>` : ''}
-          ${fixesBlock}
         </div>`;
       });
 
@@ -2690,6 +2758,14 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.addEventListener('click', e => {
           e.stopPropagation();
           removeAnnotationFromCurrent(btn.dataset.annId);
+        });
+      });
+
+      // Per-row green restore: add annotation back to current set.
+      historyEl.querySelectorAll('.copy-hist-row-restore-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          restoreAnnotationFromCopyLog(btn.dataset.annId);
         });
       });
 
@@ -2730,6 +2806,32 @@ document.addEventListener('DOMContentLoaded', () => {
         isWritingFromPopup = false;
         broadcastRemove(ann.id, ann.xpath);
         // Stay on the copy log tab — re-render the active history tab.
+        renderHistoryTab();
+      });
+    });
+  }
+
+  // Restore a single annotation from the copy-log store back into the current
+  // annotation list. Used by the per-row "Restore" button in the Copy Log tab.
+  function restoreAnnotationFromCopyLog(annId) {
+    readDedupStorage(r => {
+      if (r.annotations.some(a => a.id === annId)) {
+        showToast('Annotation is already in current set.');
+        renderHistoryTab();
+        return;
+      }
+      const store = r[ANN_STORE_KEY] || {};
+      const ann = store[annId] ? stripRefMeta(store[annId]) : null;
+      if (!ann) {
+        showToast('Annotation data not available.');
+        renderHistoryTab();
+        return;
+      }
+      const newAnns = [...r.annotations, ann];
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations: newAnns }, () => {
+        isWritingFromPopup = false;
+        broadcastRestore(ann);
         renderHistoryTab();
       });
     });
@@ -2972,7 +3074,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <p class="settings-hint" style="margin-top:4px;">
           Compressed bundle of every annotation, history entry, saved-for-later set, copy log, and setting. Nothing is truncated.
         </p>
-        <input type="file" id="import-all-file" accept=".annotator,.gz,.json" style="display:none;" />
+        <input type="file" id="import-all-file" accept=".annotator,.gz,.json" style="display:none;" multiple />
         <div id="sync-truncation-warning" class="sync-truncation-warning" style="display:none;">
           ⚠ History is being truncated to fit sync storage limits. Your full history is preserved locally and in the latest export.
         </div>
@@ -3221,15 +3323,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const importAllFile = settingsEl.querySelector('#import-all-file');
     if (importAllBtn && importAllFile) {
       importAllBtn.addEventListener('click', () => importAllFile.click());
-      importAllFile.addEventListener('change', () => {
-        const file = importAllFile.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = async e => {
-          const buf = e.target.result;
-          let bundle = null;
-          let unpacked = null;
+      importAllFile.addEventListener('change', async () => {
+        const files = Array.from(importAllFile.files);
+        if (!files.length) return;
 
+        // ── Helper: read one file and return its unpacked bundle ───────────
+        async function readOneFile(file) {
+          const buf = await new Promise((res, rej) => {
+            const reader = new FileReader();
+            reader.onload = e => res(e.target.result);
+            reader.onerror = rej;
+            reader.readAsArrayBuffer(file);
+          });
+          let bundle = null;
           try {
             const json = await gunzipToString(new Uint8Array(buf));
             bundle = JSON.parse(json);
@@ -3238,107 +3344,139 @@ document.addEventListener('DOMContentLoaded', () => {
               const txt = new TextDecoder().decode(new Uint8Array(buf));
               bundle = JSON.parse(txt);
             } catch {
-              showToast('Invalid file. Please select a valid .annotator export.', { kind: 'error' });
-              importAllFile.value = '';
-              return;
+              return null; // signal invalid file
             }
           }
+          if (!bundle) return null;
+          if (bundle.v === 2) return unpackBundle(bundle);
+          return {
+            annotations:   Array.isArray(bundle.annotations)       ? bundle.annotations       : [],
+            history:       Array.isArray(bundle.annotationHistory) ? bundle.annotationHistory : [],
+            copyHistory:   Array.isArray(bundle.copyHistory)       ? bundle.copyHistory       : [],
+            savedForLater: Array.isArray(bundle.savedForLater)     ? bundle.savedForLater     : [],
+            settings:      bundle.annotatorSettings && typeof bundle.annotatorSettings === 'object'
+                             ? bundle.annotatorSettings : {},
+          };
+        }
 
-          if (bundle && bundle.v === 2) {
-            unpacked = unpackBundle(bundle);
-          } else {
-            unpacked = {
-              annotations:   Array.isArray(bundle.annotations)       ? bundle.annotations       : [],
-              history:       Array.isArray(bundle.annotationHistory) ? bundle.annotationHistory : [],
-              copyHistory:   Array.isArray(bundle.copyHistory)       ? bundle.copyHistory       : [],
-              savedForLater: Array.isArray(bundle.savedForLater)     ? bundle.savedForLater     : [],
-              settings:      bundle.annotatorSettings && typeof bundle.annotatorSettings === 'object'
-                               ? bundle.annotatorSettings : {},
-            };
-          }
+        // ── Parse all selected files ───────────────────────────────────
+        const parsedFiles = [];
+        let invalidCount  = 0;
+        for (const file of files) {
+          const unpacked = await readOneFile(file);
+          if (!unpacked) { invalidCount++; continue; }
+          parsedFiles.push(unpacked);
+        }
+        if (invalidCount > 0) {
+          showToast(`${invalidCount} file(s) were invalid and skipped.`, { kind: 'error' });
+        }
+        if (!parsedFiles.length) { importAllFile.value = ''; return; }
 
-          const ok = await showConfirm(
-            `Import this data?\n\n` +
-            `• ${unpacked.annotations.length} active annotation(s)\n` +
-            `• ${unpacked.history.length} history record(s)\n` +
-            `• ${unpacked.savedForLater.length} saved-for-later set(s)\n` +
-            `• ${unpacked.copyHistory.length} copy log(s)\n\n` +
-            `Existing items will be merged (not overwritten).`,
-            { host: settingsEl }
-          );
-          if (!ok) { importAllFile.value = ''; return; }
+        // ── Merge across all files, deduplicating entries ──────────────
+        const merged = parsedFiles.reduce((acc, u) => {
+          // Annotations: dedup by id
+          const annIds = new Set(acc.annotations.map(a => a.id));
+          u.annotations.forEach(a => { if (a && a.id && !annIds.has(a.id)) { annIds.add(a.id); acc.annotations.push(a); } });
+          // History: dedup by id+deletedAt
+          const histKeys = new Set(acc.history.map(h => h.id + '|' + (h.deletedAt || '')));
+          u.history.forEach(h => {
+            if (!h || !h.id) return;
+            const k = h.id + '|' + (h.deletedAt || '');
+            if (!histKeys.has(k)) { histKeys.add(k); acc.history.push(h); }
+          });
+          // Copy history: dedup by timestamp
+          const copyTs = new Set(acc.copyHistory.map(c => c.timestamp));
+          u.copyHistory.forEach(c => { if (c && c.timestamp && !copyTs.has(c.timestamp)) { copyTs.add(c.timestamp); acc.copyHistory.push(c); } });
+          // Saved-for-later: dedup by id
+          const slIds = new Set(acc.savedForLater.map(s => s.id));
+          u.savedForLater.forEach(s => { if (s && s.id && !slIds.has(s.id)) { slIds.add(s.id); acc.savedForLater.push(s); } });
+          // Settings: merge (later files override earlier)
+          acc.settings = { ...acc.settings, ...u.settings };
+          return acc;
+        }, { annotations: [], history: [], copyHistory: [], savedForLater: [], settings: {} });
 
-          chrome.storage.local.get({
-            annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
-            [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {}, [ANN_STORE_KEY]: {},
-          }, r => {
-            const store = { ...(r[ANN_STORE_KEY] || {}) };
-            const annIds  = new Set(r.annotations.map(a => a.id));
-            const newAnns = unpacked.annotations.filter(a => !annIds.has(a.id));
+        const fileWord = files.length === 1 ? '1 file' : `${files.length} files`;
+        const ok = await showConfirm(
+          `Import ${fileWord}?\n\n` +
+          `• ${merged.annotations.length} active annotation(s)\n` +
+          `• ${merged.history.length} history record(s)\n` +
+          `• ${merged.savedForLater.length} saved-for-later set(s)\n` +
+          `• ${merged.copyHistory.length} copy log(s)\n\n` +
+          `Existing items will be merged (not overwritten). Duplicates across files are automatically skipped.`,
+          { host: settingsEl }
+        );
+        if (!ok) { importAllFile.value = ''; return; }
 
-            // Imported history is in legacy full-data form; convert to refs.
-            const histKeys = new Set(r[HISTORY_KEY].map(a => a.id + '|' + (a.deletedAt || '')));
-            const newHistRefs = [];
-            unpacked.history.forEach(h => {
-              if (!h || !h.id) return;
-              const k = h.id + '|' + (h.deletedAt || '');
-              if (histKeys.has(k)) return;
-              if (!store[h.id]) {
-                const { deletedAt, ...rest } = h;
-                store[h.id] = { ...rest, _refCount: 0 };
-              }
-              store[h.id]._refCount = (store[h.id]._refCount || 0) + 1;
-              newHistRefs.push({ id: h.id, deletedAt: h.deletedAt });
+        chrome.storage.local.get({
+          annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
+          [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {}, [ANN_STORE_KEY]: {},
+        }, r => {
+          const store = { ...(r[ANN_STORE_KEY] || {}) };
+          // Only import annotations not already present (dedup against existing data)
+          const annIds  = new Set(r.annotations.map(a => a.id));
+          const newAnns = merged.annotations.filter(a => a && a.id && !annIds.has(a.id));
+
+          // Imported history: convert to id-refs, skip duplicates
+          const histKeys = new Set(r[HISTORY_KEY].map(a => a.id + '|' + (a.deletedAt || '')));
+          const newHistRefs = [];
+          merged.history.forEach(h => {
+            if (!h || !h.id) return;
+            const k = h.id + '|' + (h.deletedAt || '');
+            if (histKeys.has(k)) return;
+            if (!store[h.id]) {
+              const { deletedAt, ...rest } = h;
+              store[h.id] = { ...rest, _refCount: 0 };
+            }
+            store[h.id]._refCount = (store[h.id]._refCount || 0) + 1;
+            newHistRefs.push({ id: h.id, deletedAt: h.deletedAt });
+          });
+
+          // Copy history: skip already-present timestamps
+          const copyTs  = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
+          const newCopy = merged.copyHistory.filter(c => c && c.timestamp && !copyTs.has(c.timestamp))
+            .map(c => Array.isArray(c.annotationIds) ? c : { ...c, annotationIds: [] });
+
+          // Saved-for-later: convert to id-references, skip duplicates
+          const slIds   = new Set(r[SAVED_LATER_KEY].map(s => s.id));
+          const newSL = [];
+          merged.savedForLater.forEach(set => {
+            if (!set || slIds.has(set.id)) return;
+            const setAnns = Array.isArray(set.annotationIds)
+              ? resolveList(set.annotationIds, store)
+              : (set.annotations || []);
+            const ids = setAnns.map(a => a.id).filter(Boolean);
+            ids.forEach(id => {
+              const ann = setAnns.find(a => a.id === id);
+              if (!store[id]) store[id] = { ...ann, _refCount: 0 };
+              store[id]._refCount = (store[id]._refCount || 0) + 1;
             });
-
-            const copyTs  = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
-            const newCopy = unpacked.copyHistory.filter(c => !copyTs.has(c.timestamp))
-              .map(c => Array.isArray(c.annotationIds) ? c : { ...c, annotationIds: [] });
-
-            // Imported saved-for-later: convert to id-references.
-            const slIds   = new Set(r[SAVED_LATER_KEY].map(s => s.id));
-            const newSL = [];
-            unpacked.savedForLater.forEach(set => {
-              if (slIds.has(set.id)) return;
-              const setAnns = Array.isArray(set.annotationIds)
-                ? resolveList(set.annotationIds, store)
-                : (set.annotations || []);
-              const ids = setAnns.map(a => a.id).filter(Boolean);
-              ids.forEach(id => {
-                const ann = setAnns.find(a => a.id === id);
-                if (!store[id]) store[id] = { ...ann, _refCount: 0 };
-                store[id]._refCount = (store[id]._refCount || 0) + 1;
-              });
-              newSL.push({
-                id:           set.id,
-                savedAt:      set.savedAt,
-                count:        set.count || ids.length,
-                annotationIds: ids,
-              });
-            });
-
-            chrome.storage.local.set({
-              annotations:        [...r.annotations,       ...newAnns],
-              [HISTORY_KEY]:      [...r[HISTORY_KEY],      ...newHistRefs],
-              [COPY_HISTORY_KEY]: [...r[COPY_HISTORY_KEY], ...newCopy],
-              [SAVED_LATER_KEY]:  [...r[SAVED_LATER_KEY],  ...newSL],
-              [SETTINGS_KEY]:     { ...r[SETTINGS_KEY], ...unpacked.settings },
-              [ANN_STORE_KEY]:    store,
-            }, () => {
-              const newHist = newHistRefs;
-              showToast(
-                `Imported: ${newAnns.length} annotation(s) · ${newHist.length} history · ` +
-                `${newSL.length} saved-for-later · ${newCopy.length} copy log(s)`,
-                { kind: 'ok' }
-              );
-              if (unpacked.settings && unpacked.settings.darkMode !== undefined) {
-                applyDarkMode(unpacked.settings.darkMode);
-              }
+            newSL.push({
+              id:            set.id,
+              savedAt:       set.savedAt,
+              count:         set.count || ids.length,
+              annotationIds: ids,
             });
           });
-          importAllFile.value = '';
-        };
-        reader.readAsArrayBuffer(file);
+
+          chrome.storage.local.set({
+            annotations:        [...r.annotations,       ...newAnns],
+            [HISTORY_KEY]:      [...r[HISTORY_KEY],      ...newHistRefs],
+            [COPY_HISTORY_KEY]: [...r[COPY_HISTORY_KEY], ...newCopy],
+            [SAVED_LATER_KEY]:  [...r[SAVED_LATER_KEY],  ...newSL],
+            [SETTINGS_KEY]:     { ...r[SETTINGS_KEY], ...merged.settings },
+            [ANN_STORE_KEY]:    store,
+          }, () => {
+            showToast(
+              `Imported: ${newAnns.length} annotation(s) · ${newHistRefs.length} history · ` +
+              `${newSL.length} saved-for-later · ${newCopy.length} copy log(s)`,
+              { kind: 'ok' }
+            );
+            if (merged.settings && merged.settings.darkMode !== undefined) {
+              applyDarkMode(merged.settings.darkMode);
+            }
+          });
+        });
+        importAllFile.value = '';
       });
     }
 
