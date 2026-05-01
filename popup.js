@@ -154,8 +154,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearBtn    = document.getElementById('clear-btn');
   const historyBtn  = document.getElementById('history-btn');
   const settingsBtn = document.getElementById('settings-btn');
-  undoBtn           = document.getElementById('undo-btn');
-  redoBtn           = document.getElementById('redo-btn');
   const searchBtn     = document.getElementById('search-btn');
   const searchBar     = document.getElementById('search-bar');
   const searchInput   = document.getElementById('search-input');
@@ -232,7 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start >0 so init-time writes (migration, sync restore) don't pollute
   // the undo stack. Decremented to 0 once init completes.
   let suppressUndoCapture = 1;
-  let undoBtn = null, redoBtn = null;
+  let undoBtn = document.getElementById('undo-btn'), redoBtn = document.getElementById('redo-btn');
 
   // ── Multi-tab DOM sync helpers ───────────────────────────────────────────
   // Annotation chip state must stay consistent across every open tab and window,
