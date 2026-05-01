@@ -1767,6 +1767,30 @@ button {
 }
 .copy-all-snapshot.expanded .copy-all-body { display: block; }
 
+/* Per-URL-group accordion inside an expanded big-box. Each blue URL header
+   independently opens/closes its own annotation list — clicking one group
+   no longer affects siblings. */
+.url-group--accordion .url-header {
+  cursor: pointer;
+}
+.url-group--accordion .url-group-body {
+  display: none;
+}
+.url-group--accordion.open .url-group-body {
+  display: block;
+}
+.url-group-caret {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  color: #2563eb;
+  transition: transform 0.15s;
+  width: 12px;
+  text-align: center;
+  flex: 0 0 auto;
+}
+.url-group--accordion.open .url-group-caret { transform: rotate(90deg); }
+
 /* Inside the body, the per-group URL header gets a trailing count badge that
    matches the top-of-window total annotations indicator. The badge is hidden
    while the snapshot is expanded (per D4). */
@@ -1853,7 +1877,8 @@ button {
 }
 
 /* ── Per-row red minus button in Copy Log ───────────────────────────────── */
-.copy-hist-row-remove-btn {
+.copy-hist-row-remove-btn,
+.sfl-row-remove-btn {
   flex: 0 0 auto;
   margin-left: auto;
   background: none;
@@ -1867,7 +1892,8 @@ button {
   line-height: 1.2;
   transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
-.copy-hist-row-remove-btn:hover {
+.copy-hist-row-remove-btn:hover,
+.sfl-row-remove-btn:hover {
   background: #fee2e2;
   border-color: #fca5a5;
   color: #b91c1c;
@@ -1884,36 +1910,11 @@ button {
   background-color: rgba(220, 38, 38, 0.12);
 }
 
-/* Per-row green restore button in Copy Log */
+/* Per-row restore button in Copy Log — inherits .hist-restore-btn styling
+   so it matches the annotations-history restore button exactly. We only
+   override layout (right-align in the flex row). */
 .copy-hist-row-restore-btn {
-  flex: 0 0 auto;
   margin-left: auto;
-  background: none;
-  border: 1px solid #16a34a;
-  border-radius: 4px;
-  color: #16a34a;
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.2;
-  padding: 2px 6px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.copy-hist-row-restore-btn:hover {
-  background: #dcfce7;
-  border-color: #4ade80;
-  color: #166534;
-}
-[data-theme="dark"] .copy-hist-row-restore-btn {
-  border-color: #4ade80;
-  color: #4ade80;
-}
-[data-theme="dark"] .copy-hist-row-restore-btn:hover {
-  background: rgba(74, 222, 128, 0.15);
-  border-color: #86efac;
-  color: #86efac;
 }
 
 /* "Since last Copy All" divider for loose annotations */

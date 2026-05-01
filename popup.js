@@ -1193,6 +1193,13 @@ document.addEventListener('DOMContentLoaded', () => {
   function buildGroupedAnnotationsHTML(anns, opts) {
     opts = opts || {};
     const showGroupCount = !!opts.showGroupCount;
+    // Per-group accordion: when `accordion` is true, each URL group
+    // independently opens/closes. `openUrls` is the set of URLs currently
+    // expanded; `snapId` is forwarded onto each header so the click handler
+    // can persist state for the right snapshot.
+    const accordion  = !!opts.accordion;
+    const openUrls   = opts.openUrls instanceof Set ? opts.openUrls : new Set();
+    const snapId     = opts.snapId || '';
     const byUrl = {};
     anns.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
 
@@ -1204,13 +1211,24 @@ document.addEventListener('DOMContentLoaded', () => {
       const countBadge = showGroupCount
         ? `<span class="count-badge copy-all-group-count" title="${items.length} annotation${items.length !== 1 ? 's' : ''}">${items.length}</span>`
         : '';
-      html += `<div class="url-group">
-        <div class="url-header">
-          <div class="url-label url-label--clickable copy-all-group-url" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
+      const isOpen     = !accordion || openUrls.has(url);
+      const groupCls   = `url-group${accordion ? ' url-group--accordion' : ''}${accordion && isOpen ? ' open' : ''}`;
+      const headerExtra = accordion
+        ? ` data-accordion-snap="${escHtml(snapId)}" data-accordion-url="${escHtml(url)}" role="button" tabindex="0"`
+        : '';
+      const caret = accordion
+        ? `<span class="url-group-caret" aria-hidden="true">▸</span>`
+        : '';
+      html += `<div class="${groupCls}">
+        <div class="url-header"${headerExtra}>
+          ${caret}<div class="url-label url-label--clickable copy-all-group-url" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
           <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋 Copy group</button>
           <button class="url-clear-group-btn" data-url="${escHtml(url)}" title="Clear group (saves to history)">🗑</button>
           ${countBadge}
         </div>`;
+      // Wrap items in an accordion body so we can hide them per-group without
+      // affecting the URL header itself.
+      if (accordion) html += `<div class="url-group-body">`;
       items.forEach(ann => {
         const sel = getSelectorDisplay(ann);
         const isPageLevel = !!(ann.pageLevel || ann.tag === 'page');
@@ -1232,6 +1250,7 @@ document.addEventListener('DOMContentLoaded', () => {
           >${escHtml(ann.comment || '')}</textarea>
         </div>`;
       });
+      if (accordion) html += `</div>`;
       html += '</div>';
     });
     return html;
@@ -1342,7 +1361,12 @@ document.addEventListener('DOMContentLoaded', () => {
             })()}
           </div>
           <div class="copy-all-body">
-            ${buildGroupedAnnotationsHTML(innerAnns, { showGroupCount: true })}
+            ${buildGroupedAnnotationsHTML(innerAnns, {
+              showGroupCount: true,
+              accordion:      true,
+              snapId:         snap.id,
+              openUrls:       new Set(Array.isArray(snap.openUrls) ? snap.openUrls : []),
+            })}
           </div>
         </div>`;
       });
@@ -1440,6 +1464,24 @@ document.addEventListener('DOMContentLoaded', () => {
       row.addEventListener('keydown', handler);
     });
 
+    // ── Per-URL-group accordion inside expanded big-boxes ─────────────────────
+    // Clicking a URL header inside an expanded snapshot toggles ONLY that
+    // group, leaving sibling groups in their current state. Behavior is gated
+    // by the data-accordion-snap attribute so non-snapshot url-headers are
+    // unaffected.
+    listEl.querySelectorAll('.url-header[data-accordion-snap]').forEach(hdr => {
+      const handler = e => {
+        if (e.target.closest('button')) return;
+        if (e.target.closest('.url-label--clickable')) return;
+        if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+        if (e.type === 'keydown') e.preventDefault();
+        e.stopPropagation();
+        toggleSnapshotUrlGroup(hdr.dataset.accordionSnap, hdr.dataset.accordionUrl);
+      };
+      hdr.addEventListener('click',   handler);
+      hdr.addEventListener('keydown', handler);
+    });
+
     // Re-apply search highlights if search is active
     if (searchActive && searchInput && searchInput.value.trim()) {
       applySearch(searchInput.value.trim());
@@ -1464,6 +1506,30 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!el) return;
       if (typeof force === 'boolean') el.classList.toggle('expanded', force);
       else el.classList.toggle('expanded');
+    });
+  }
+
+  // Toggle a single URL group inside a snapshot's expanded body. Persists the
+  // open/closed set on the snapshot as `openUrls`. DOM-only DOM update so
+  // sibling textareas / scroll positions stay intact.
+  function toggleSnapshotUrlGroup(snapId, url, force) {
+    if (!snapId) return;
+    updateSnapshot(snapId, s => {
+      const open = new Set(Array.isArray(s.openUrls) ? s.openUrls : []);
+      const next = typeof force === 'boolean' ? force : !open.has(url);
+      if (next) open.add(url); else open.delete(url);
+      return { ...s, openUrls: [...open] };
+    }, () => {
+      const snapEl = listEl.querySelector(`.copy-all-snapshot[data-snap-id="${cssEscape(snapId)}"]`);
+      if (!snapEl) return;
+      const hdr = snapEl.querySelector(
+        `.url-header[data-accordion-snap="${cssEscape(snapId)}"][data-accordion-url="${cssEscape(url)}"]`
+      );
+      if (!hdr) return;
+      const group = hdr.closest('.url-group--accordion');
+      if (!group) return;
+      if (typeof force === 'boolean') group.classList.toggle('open', force);
+      else group.classList.toggle('open');
     });
   }
 
@@ -1594,7 +1660,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // Expand the snapshot and scroll the clicked URL group's header to the top
   // of the visible scroll area.
   function copyAllSnapshotJump(snapId, url) {
-    updateSnapshot(snapId, s => ({ ...s, expanded: true }), () => {
+    // Expand the snapshot AND open just this URL group (per-group accordion).
+    updateSnapshot(snapId, s => {
+      const open = new Set(Array.isArray(s.openUrls) ? s.openUrls : []);
+      open.add(url);
+      return { ...s, expanded: true, openUrls: [...open] };
+    }, () => {
       const snapEl = listEl.querySelector(`.copy-all-snapshot[data-snap-id="${cssEscape(snapId)}"]`);
       if (!snapEl) return;
       snapEl.classList.add('expanded');
@@ -1604,8 +1675,9 @@ document.addEventListener('DOMContentLoaded', () => {
         `.copy-all-body .url-header [data-nav-url="${safeUrl}"]`
       );
       const headerRow = target ? target.closest('.url-header') : null;
+      const groupEl   = headerRow ? headerRow.closest('.url-group--accordion') : null;
+      if (groupEl) groupEl.classList.add('open');
       const scrollEl = headerRow || snapEl;
-      // Scroll so the URL header is at the top of the viewport.
       try {
         scrollEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
       } catch (_) {
@@ -2479,7 +2551,13 @@ document.addEventListener('DOMContentLoaded', () => {
                   const sel  = getSelectorDisplay(ann);
                   const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
                   const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
-                  return `<li title="${escHtml(sel)}"><code class="hist-clickable-text" data-full-text="${escHtml(sel)}">${escHtml(sel)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span></li>`;
+                  // Per-row remove button — every item in the list must have an
+                  // action button (mirrors the rule in Annotation History and
+                  // Copy Log). Removes this single annotation from the set.
+                  const rowBtn = ann.id
+                    ? `<button class="sfl-row-remove-btn" data-set-id="${escHtml(set.id)}" data-ann-id="${escHtml(ann.id)}" title="Remove from this set">−</button>`
+                    : `<button class="sfl-row-remove-btn sfl-row-remove-btn--dom" title="Remove row">−</button>`;
+                  return `<li title="${escHtml(sel)}"><code class="hist-clickable-text" data-full-text="${escHtml(sel)}">${escHtml(sel)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span>${rowBtn}</li>`;
                 }).join('')}
               </ul>
             </div>`).join('')}
@@ -2500,6 +2578,56 @@ document.addEventListener('DOMContentLoaded', () => {
           deleteSavedForLaterSet(btn.dataset.setId);
         });
       });
+
+      // Per-row minus: remove a single annotation from a saved-for-later set.
+      // For DOM-only fallbacks (legacy items missing an id), just hide the row.
+      historyEl.querySelectorAll('.sfl-row-remove-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (btn.classList.contains('sfl-row-remove-btn--dom')) {
+            const li = btn.closest('li');
+            if (li) li.remove();
+            return;
+          }
+          removeAnnotationFromSavedForLater(btn.dataset.setId, btn.dataset.annId);
+        });
+      });
+    });
+  }
+
+  // Remove a single annotation id from a saved-for-later set without touching
+  // the others. If the set becomes empty, the set itself is removed.
+  function removeAnnotationFromSavedForLater(setId, annId) {
+    chrome.storage.local.get({ [SAVED_LATER_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+      const sets  = r[SAVED_LATER_KEY] || [];
+      const idx   = sets.findIndex(s => s.id === setId);
+      if (idx < 0) return;
+      const set   = sets[idx];
+      const store = { ...(r[ANN_STORE_KEY] || {}) };
+
+      // Modern sets carry `annotationIds`; legacy carry inline `annotations`.
+      let newSet;
+      if (Array.isArray(set.annotationIds)) {
+        const newIds = set.annotationIds.filter(id => id !== annId);
+        if (newIds.length === set.annotationIds.length) return;
+        refStoreDec(store, [annId]);
+        newSet = { ...set, annotationIds: newIds, count: newIds.length };
+      } else if (Array.isArray(set.annotations)) {
+        const newAnns = set.annotations.filter(a => a.id !== annId);
+        if (newAnns.length === set.annotations.length) return;
+        newSet = { ...set, annotations: newAnns, count: newAnns.length };
+      } else {
+        return;
+      }
+
+      const newSets = (newSet.count > 0)
+        ? sets.map((s, i) => i === idx ? newSet : s)
+        : sets.filter((_, i) => i !== idx);
+
+      chrome.storage.local.set({
+        [SAVED_LATER_KEY]: newSets,
+        [ANN_STORE_KEY]: store,
+      }, () => renderSavedForLater());
     });
   }
 
@@ -2717,11 +2845,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     : (ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)');
                   const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
                   const isLive = !isParsed && ann.id && liveIdSet.has(ann.id);
+                  // Every row must have a button. Parsed (legacy / imported)
+                  // rows have no annotation id, so we render a DOM-only minus
+                  // that just hides the row visually — keeps the rule that
+                  // every list item shows either restore or minus.
                   const rowBtn = isParsed
-                    ? ''
+                    ? `<button class="copy-hist-row-remove-btn copy-hist-row-remove-btn--dom" title="Remove row">−</button>`
                     : (isLive
                         ? `<button class="copy-hist-row-remove-btn" data-ann-id="${escHtml(ann.id)}" title="Remove this annotation from current">−</button>`
-                        : `<button class="copy-hist-row-restore-btn" data-ann-id="${escHtml(ann.id)}" title="Restore this annotation to current set">Restore</button>`
+                        : `<button class="hist-restore-btn copy-hist-row-restore-btn" data-ann-id="${escHtml(ann.id)}" title="Restore annotation">↺</button>`
                       );
                   const rowClass = isLive ? ' copy-hist-row--live' : '';
                   return `<li class="copy-hist-li${rowClass}" title="${escHtml(fullSels)}"><code class="hist-clickable-text" data-full-text="${escHtml(fullSels)}">${escHtml(fullSels)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span>${rowBtn}</li>`;
@@ -2753,10 +2885,16 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       // Per-row red minus: remove a single annotation from the current list,
-      // staying on the Copy Log tab afterwards.
+      // staying on the Copy Log tab afterwards. Parsed (legacy) rows with
+      // no annotation id only get visually hidden (no source data to mutate).
       historyEl.querySelectorAll('.copy-hist-row-remove-btn').forEach(btn => {
         btn.addEventListener('click', e => {
           e.stopPropagation();
+          if (btn.classList.contains('copy-hist-row-remove-btn--dom')) {
+            const li = btn.closest('li');
+            if (li) li.remove();
+            return;
+          }
           removeAnnotationFromCurrent(btn.dataset.annId);
         });
       });
@@ -3298,7 +3436,7 @@ document.addEventListener('DOMContentLoaded', () => {
           settings:      r[SETTINGS_KEY],
         });
         bundle._exported = new Date().toISOString();
-        bundle._version  = '1.7.0';
+        bundle._version  = '1.0.0';
         const json = JSON.stringify(bundle);
         const gz   = await gzipString(json);
         const blob = new Blob([gz], { type: 'application/gzip' });
