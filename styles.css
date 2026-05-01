@@ -1562,44 +1562,6 @@ button {
   border-color: #fca5a5;
 }
 
-/* ── "Remove from current annotations" button (copy log) ────────────────── */
-/* Reversible action — uses a non-destructive blue palette. The button now
-   acts as a section label above a list of the affected annotations. */
-.copy-hist-remove-current-btn {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: var(--section-bg);
-  border: 1px solid var(--border);
-  color: #2563eb;
-  font-size: 10.5px;
-  font-weight: 600;
-  padding: 3px 8px;
-  cursor: pointer;
-  border-radius: 4px;
-  line-height: 1.4;
-  margin-bottom: 4px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
-}
-.copy-hist-remove-current-btn:hover {
-  background: #dbeafe;
-  border-color: #93c5fd;
-  color: #1d4ed8;
-}
-[data-theme="dark"] .copy-hist-remove-current-btn {
-  color: #60a5fa;
-}
-[data-theme="dark"] .copy-hist-remove-current-btn:hover {
-  background: #1e3a8a;
-  border-color: #3b82f6;
-  color: #bfdbfe;
-}
-.copy-hist-remove-current-btn[disabled] {
-  opacity: 0.55;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
 /* ── Group-level clear button ────────────────────────────────────────────── */
 .url-clear-group-btn {
   flex: 0 0 auto;
@@ -1800,12 +1762,110 @@ button {
 }
 .copy-all-snapshot.expanded .copy-all-body { display: block; }
 
-/* Inside the body, the per-group URL header gets a leading count badge that
-   matches the top-of-window total annotations indicator. */
+/* Inside the body, the per-group URL header gets a trailing count badge that
+   matches the top-of-window total annotations indicator. The badge is hidden
+   while the snapshot is expanded (per D4). */
 .copy-all-body .url-header .count-badge.copy-all-group-count {
   background: rgba(37,99,235,0.85);
   color: #fff;
   flex: 0 0 auto;
+  margin-left: auto;
+}
+/* D4: when the snapshot is expanded, hide the per-URL count badges (both in
+   the body url-headers and in any leftover summary rows). */
+.copy-all-snapshot.expanded .url-header .count-badge.copy-all-group-count,
+.copy-all-snapshot.expanded .copy-all-summary-row .count-badge.copy-all-group-count {
+  display: none !important;
+}
+
+/* ── History tab clickable-text modal ───────────────────────────────────── */
+.hist-text-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.hist-text-modal-box {
+  position: relative;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 8px;
+  padding: 28px 12px 12px;
+  width: min(440px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.hist-text-modal-area {
+  width: 100%;
+  flex: 1;
+  min-height: 120px;
+  max-height: 60vh;
+  resize: none;
+  font: 12px/1.5 system-ui, -apple-system, sans-serif;
+  color: var(--text, #111);
+  background: var(--section-bg, #f9fafb);
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 4px;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+.hist-text-modal-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: none;
+  border: 1px solid transparent;
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.hist-text-modal-close:hover {
+  color: #dc2626;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+/* ── Clickable-text affordance in history tabs ──────────────────────────── */
+.hist-clickable-text {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.hist-clickable-text:hover {
+  background: rgba(37, 99, 235, 0.10);
+  border-radius: 3px;
+}
+
+/* ── Per-row red minus button in Copy Log ───────────────────────────────── */
+.copy-hist-row-remove-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  background: none;
+  border: 1px solid transparent;
+  color: #dc2626;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1.2;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.copy-hist-row-remove-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
 }
 
 /* "Since last Copy All" divider for loose annotations */

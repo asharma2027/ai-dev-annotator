@@ -162,6 +162,42 @@ document.addEventListener('DOMContentLoaded', () => {
   const clearUndoBanner = document.getElementById('clear-undo-banner');
   const footer        = document.querySelector('.footer');
 
+  // ── History tab clickable-text modal ──────────────────────────────────────
+  // Clicking element names, URLs, or annotation text inside a history tab
+  // opens a small read-only popover with the full text, so the user can
+  // select/copy it. Only active inside historyEl.
+  function showTextSelectModal(text) {
+    const existing = document.getElementById('hist-text-modal');
+    if (existing) existing.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'hist-text-modal';
+    overlay.className = 'hist-text-modal';
+    overlay.innerHTML = `
+      <div class="hist-text-modal-box" role="dialog" aria-label="Selectable text">
+        <button class="hist-text-modal-close" title="Close (Esc)" aria-label="Close">✕</button>
+        <textarea readonly class="hist-text-modal-area"></textarea>
+      </div>`;
+    const ta = overlay.querySelector('.hist-text-modal-area');
+    ta.value = text || '';
+    const closeBtn = overlay.querySelector('.hist-text-modal-close');
+    const close = () => { try { overlay.remove(); } catch(_){} document.removeEventListener('keydown', onKey, true); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    closeBtn.addEventListener('click', close);
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(overlay);
+    setTimeout(() => { ta.focus(); ta.select(); }, 0);
+  }
+
+  // Single delegated click handler on the history panel.
+  document.getElementById('history-panel').addEventListener('click', e => {
+    if (e.target.closest('button')) return;
+    const tgt = e.target.closest('.hist-clickable-text');
+    if (!tgt) return;
+    const text = tgt.dataset.fullText != null ? tgt.dataset.fullText : tgt.textContent;
+    showTextSelectModal(text);
+  });
+
   const HISTORY_KEY      = 'annotationHistory';
   const COPY_HISTORY_KEY = 'copyHistory';
   const SETTINGS_KEY     = 'annotatorSettings';
@@ -651,7 +687,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function formatTimestamp(ts) {
     if (!ts) return '';
-    try { return new Date(ts).toLocaleString(); } catch { return ts; }
+    try {
+      // Round to the nearest whole minute (drop seconds), and show only the
+      // last 2 digits of the year (e.g. 2026 → 26).
+      const d = new Date(ts);
+      const rounded = new Date(d.getTime());
+      if (rounded.getSeconds() >= 30) rounded.setMinutes(rounded.getMinutes() + 1);
+      rounded.setSeconds(0, 0);
+      const date = rounded.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', year: '2-digit' });
+      const time = rounded.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      return `${date}, ${time}`;
+    } catch { return ts; }
   }
 
   // Compressed timestamp for tight UI rows (e.g. "Apr 30, 3:42p").
@@ -1161,9 +1207,9 @@ document.addEventListener('DOMContentLoaded', () => {
       html += `<div class="url-group">
         <div class="url-header">
           <div class="url-label url-label--clickable copy-all-group-url" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
-          ${countBadge}
           <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋 Copy group</button>
           <button class="url-clear-group-btn" data-url="${escHtml(url)}" title="Clear group (saves to history)">🗑</button>
+          ${countBadge}
         </div>`;
       items.forEach(ann => {
         const sel = getSelectorDisplay(ann);
@@ -1276,11 +1322,11 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="copy-all-snapshot${expanded ? ' expanded' : ''}" data-snap-id="${escHtml(snap.id)}">
           <div class="copy-all-header" data-snap-toggle="${escHtml(snap.id)}" role="button" tabindex="0" title="Click to ${expanded ? 'collapse' : 'expand'}">
             <span class="copy-all-caret" aria-hidden="true">▸</span>
-            <span class="copy-all-meta copy-all-meta--copied" title="${escHtml(whenFull)}">✅ ${escHtml(bigBoxLabel)}</span>
             <span class="count-badge copy-all-title-count" title="${innerAnns.length} annotation${innerAnns.length !== 1 ? 's' : ''} copied">${innerAnns.length}</span>
+            <span class="copy-all-meta copy-all-meta--copied" title="${escHtml(whenFull)}">${escHtml(bigBoxLabel)}</span>
             <span class="copy-all-spacer"></span>
             <button class="copy-all-action copy-all-save copy-all-save--icon" data-snap-id="${escHtml(snap.id)}" title="Save for later — move these annotations to the Saved for Later tab" aria-label="Save for later">🕐</button>
-            <button class="copy-all-action copy-all-ungroup" data-snap-ungroup="${escHtml(snap.id)}" title="Ungroup — move these annotations back into the main list">⇱ Ungroup</button>
+            <button class="copy-all-action copy-all-ungroup" data-snap-ungroup="${escHtml(snap.id)}" title="Unpack — move these annotations back into the main list">⇱ Unpack</button>
             <button class="copy-all-action copy-all-clear copy-all-clear--icon" data-snap-id="${escHtml(snap.id)}" title="Clear (move to history)" aria-label="Clear group (move to history)">🗑</button>
           </div>
           <div class="copy-all-summary">
@@ -1290,8 +1336,8 @@ document.addEventListener('DOMContentLoaded', () => {
               innerAnns.forEach(a => (byUrl[a.url] = byUrl[a.url] || []).push(a));
               return Object.entries(byUrl).map(([url, items]) => `
                 <div class="copy-all-summary-row" data-snap-jump="${escHtml(snap.id)}" data-jump-url="${escHtml(url)}" role="button" tabindex="0" title="Click to expand and jump to this group">
-                  <span class="count-badge copy-all-group-count">${items.length}</span>
                   <span class="copy-all-group-url" title="${escHtml(url)}">${escHtml(url)}</span>
+                  <span class="count-badge copy-all-group-count">${items.length}</span>
                 </div>`).join('');
             })()}
           </div>
@@ -2324,14 +2370,14 @@ document.addEventListener('DOMContentLoaded', () => {
       Object.entries(byUrl).forEach(([url, items]) => {
         html += `<div class="url-group">
           <div class="url-header">
-            <div class="url-label" title="${escHtml(url)}">${escHtml(url)}</div>
+            <div class="url-label hist-clickable-text" data-full-text="${escHtml(url)}" title="${escHtml(url)}">${escHtml(url)}</div>
           </div>`;
         items.forEach(ann => {
           const sel = getSelector(ann);
           html += `
           <div class="item hist-item">
             <div class="item-sel">
-              <code>${escHtml(sel)}</code>
+              <code class="hist-clickable-text" data-full-text="${escHtml(sel)}">${escHtml(sel)}</code>
               <button class="hist-restore-btn"
                 data-ann-id="${escHtml(ann.id)}"
                 data-deleted-at="${escHtml(ann.deletedAt || '')}"
@@ -2346,7 +2392,7 @@ document.addEventListener('DOMContentLoaded', () => {
               <span class="hist-ts hist-deleted">🗑 ${escHtml(formatTimestamp(ann.deletedAt))}</span>
             </div>
             ${ann.comment
-              ? `<div class="hist-note">${escHtml(ann.comment)}</div>`
+              ? `<div class="hist-note hist-clickable-text" data-full-text="${escHtml(ann.comment)}">${escHtml(ann.comment)}</div>`
               : `<div class="hist-note empty-note">(no note)</div>`}
           </div>`;
         });
@@ -2422,17 +2468,18 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="sfl-set-meta">📅 ${escHtml(when)} · ${set.count || items.length} annotation${(set.count || items.length) !== 1 ? 's' : ''}</span>
             <div class="sfl-set-actions">
               <button class="hist-restore-btn sfl-restore" data-set-id="${escHtml(set.id)}" title="Restore these annotations">↺</button>
-              <button class="sfl-set-btn sfl-set-btn--danger sfl-delete" data-set-id="${escHtml(set.id)}" title="Delete this set">🗑</button>
+              <button class="hist-perm-delete-btn sfl-delete" data-set-id="${escHtml(set.id)}" title="Delete this set">✕</button>
             </div>
           </div>
           ${groups.map(g => `
             <div class="sfl-url-group">
-              <div class="sfl-url" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
+              <div class="sfl-url hist-clickable-text" data-full-text="${escHtml(g.url || '')}" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
               <ul class="sfl-set-list">
                 ${g.items.map(ann => {
                   const sel  = getSelectorDisplay(ann);
                   const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
-                  return `<li title="${escHtml(sel)}"><code>${escHtml(sel)}</code>${escHtml(note.slice(0, 120))}${note.length > 120 ? '…' : ''}</li>`;
+                  const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
+                  return `<li title="${escHtml(sel)}"><code class="hist-clickable-text" data-full-text="${escHtml(sel)}">${escHtml(sel)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span></li>`;
                 }).join('')}
               </ul>
             </div>`).join('')}
@@ -2563,18 +2610,8 @@ document.addEventListener('DOMContentLoaded', () => {
           groups[groupIdx.get(u)].items.push(ann);
         });
 
-        // Annotations from this copy that are still in the live set drive
-        // the "Remove from current" button.
-        const liveAnns = resolved.filter(a => currentById.has(a.id));
-        let removeBlock = '';
-        if (ids.length > 0 && liveAnns.length > 0) {
-          removeBlock = `
-            <div class="copy-hist-remove-block">
-              <button class="copy-hist-remove-current-btn"
-                      data-ts="${escHtml(entry.timestamp)}"
-                      title="Remove these annotations from your current set">Remove from current (${liveAnns.length})</button>
-            </div>`;
-        }
+        // Build a set of ids that are still live for per-row red-minus button.
+        const liveIdSet = new Set(resolved.filter(a => currentById.has(a.id)).map(a => a.id));
 
         // Prepend / append: only render a chip if the captured text exists.
         const hasPrepend = !!(entry.prependText && String(entry.prependText).trim());
@@ -2603,23 +2640,26 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="sfl-set-meta">📅 ${escHtml(when)} · ${annCount} annotation${annCount !== 1 ? 's' : ''}</span>
             <div class="sfl-set-actions">
               ${hasRaw ? `<button class="sfl-set-btn copy-hist-raw-btn" data-ts="${escHtml(entry.timestamp)}" title="View raw output">📄 Raw</button>` : ''}
-              <button class="sfl-set-btn sfl-set-btn--danger copy-hist-perm-delete-btn" data-ts="${escHtml(entry.timestamp)}" title="Permanently delete">🗑</button>
+              <button class="copy-hist-perm-delete-btn" data-ts="${escHtml(entry.timestamp)}" title="Permanently delete">✕</button>
             </div>
           </div>
           ${groups.map(g => `
             <div class="sfl-url-group">
-              <div class="sfl-url" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
+              <div class="sfl-url hist-clickable-text" data-full-text="${escHtml(g.url || '')}" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
               <ul class="sfl-set-list">
                 ${g.items.map(ann => {
                   const sels = annSelectors(ann);
                   const fullSels = sels.join(', ');
                   const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
-                  return `<li title="${escHtml(fullSels)}"><code>${escHtml(fullSels)}</code>${escHtml(note.slice(0, 120))}${note.length > 120 ? '…' : ''}</li>`;
+                  const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
+                  const minusBtn = liveIdSet.has(ann.id)
+                    ? `<button class="copy-hist-row-remove-btn" data-ann-id="${escHtml(ann.id)}" title="Remove this annotation from current">−</button>`
+                    : '';
+                  return `<li title="${escHtml(fullSels)}"><code class="hist-clickable-text" data-full-text="${escHtml(fullSels)}">${escHtml(fullSels)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span>${minusBtn}</li>`;
                 }).join('')}
               </ul>
             </div>`).join('')}
           ${hasRaw ? `<pre class="copy-hist-raw-body" data-ts="${escHtml(entry.timestamp)}" style="display:none;">${escHtml(entry.output)}</pre>` : ''}
-          ${removeBlock}
           ${fixesBlock}
         </div>`;
       });
@@ -2644,11 +2684,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
       });
 
-      // Change 1: "Remove from current annotations" button handlers.
-      historyEl.querySelectorAll('.copy-hist-remove-current-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const ts = btn.dataset.ts;
-          removeCopyLogFromCurrent(ts);
+      // Per-row red minus: remove a single annotation from the current list,
+      // staying on the Copy Log tab afterwards.
+      historyEl.querySelectorAll('.copy-hist-row-remove-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          removeAnnotationFromCurrent(btn.dataset.annId);
         });
       });
 
@@ -2673,77 +2714,25 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Change 1: remove all annotations from the current set that came from
-  //    a particular copy log. Returns to the main annotations view and shows
-  //    the existing undo banner template so the action is reversible.
-  function removeCopyLogFromCurrent(timestamp) {
+  // Remove a single annotation from the current set without leaving the
+  // history view. Used by the per-row red minus button in the Copy Log tab.
+  function removeAnnotationFromCurrent(annId) {
     readDedupStorage(r => {
-      const entry = r[COPY_HISTORY_KEY].find(c => c.timestamp === timestamp);
-      if (!entry) { showToast('Copy log entry not found.', { kind: 'error' }); return; }
-      const targetIds = Array.isArray(entry.annotationIds) ? entry.annotationIds : [];
-      if (targetIds.length === 0) {
-        showToast('This copy log has no linked annotations to remove.');
+      const ann = r.annotations.find(a => a.id === annId);
+      if (!ann) {
+        showToast('Annotation not in current set.');
+        renderHistoryTab();
         return;
       }
-      const targetSet = new Set(targetIds);
-      const removed   = r.annotations.filter(a => targetSet.has(a.id));
-      const remaining = r.annotations.filter(a => !targetSet.has(a.id));
-
-      if (removed.length === 0) {
-        showToast('None of those annotations are in your current set.');
-        // Still close history view so the user lands on annotations.
-        hideHistory();
-        return;
-      }
-
-      // Snapshot copies of the removed annotations so undo can put them back
-      // exactly as-is, then clear them from the active set. Don't bump the
-      // ref store — the undo banner restores from the closure.
+      const remaining = r.annotations.filter(a => a.id !== annId);
       isWritingFromPopup = true;
       chrome.storage.local.set({ annotations: remaining }, () => {
         isWritingFromPopup = false;
-        removed.forEach(ann => broadcastRemove(ann.id, ann.xpath));
-        // Switch back to the main annotations view first.
-        hideHistory();
-        // Show undo banner using the existing template.
-        showCopyLogRemoveUndoBanner(removed, entry);
+        broadcastRemove(ann.id, ann.xpath);
+        // Stay on the copy log tab — re-render the active history tab.
+        renderHistoryTab();
       });
     });
-  }
-
-  // Reuses the existing undo banner element + styling. Restoring puts the
-  // removed annotations back into the active set verbatim.
-  function showCopyLogRemoveUndoBanner(removedAnns, copyLogEntry) {
-    undoClearData = null; // cancel any in-flight clear-undo state
-    clearTimeout(undoBannerTimer);
-
-    const count = removedAnns.length;
-    const when  = formatTimestamp(copyLogEntry.timestamp);
-    const text  = `Removed ${count} annotation${count !== 1 ? 's' : ''} from copy log (${when}) from your current annotations`;
-
-    clearUndoBanner.innerHTML = `
-      <span class="undo-banner-text">${escHtml(text)}</span>
-      <button id="undo-clear-btn" class="undo-clear-btn">Undo</button>
-    `;
-    clearUndoBanner.style.display = 'flex';
-
-    const btn = document.getElementById('undo-clear-btn');
-    btn.addEventListener('click', () => {
-      hideClearUndoBanner();
-      readDedupStorage(r => {
-        const existingIds = new Set(r.annotations.map(a => a.id));
-        const toAdd = removedAnns.filter(a => !existingIds.has(a.id));
-        const merged = [...r.annotations, ...toAdd];
-        isWritingFromPopup = true;
-        chrome.storage.local.set({ annotations: merged }, () => {
-          isWritingFromPopup = false;
-          render(merged);
-          toAdd.forEach(ann => broadcastRestore(ann));
-        });
-      });
-    });
-
-    undoBannerTimer = setTimeout(hideClearUndoBanner, 5000);
   }
 
   function hideHistory() {
