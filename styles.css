@@ -1917,6 +1917,13 @@ button {
   margin-left: auto;
 }
 
+/* Per-row clear (🗑) button in Saved for Later — reuses the .item-delete-btn
+   styling from the Current Annotations tab so it looks identical. The only
+   override is layout: right-align inside the SFL flex row. */
+.sfl-row-clear-btn {
+  margin-left: auto;
+}
+
 /* "Since last Copy All" divider for loose annotations */
 .loose-anns-divider {
   font-size: 10px;
