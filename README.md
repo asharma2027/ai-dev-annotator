@@ -119,15 +119,23 @@ cookies, or storage.
 ```
 ai-dev-annotator/
 ├── manifest.json   : Extension config (Manifest V3)
-├── content.js      : Injected into pages; handles Alt + Right-Click
+├── content.js      : Injected into pages; handles Alt + Right-Click (minified on prod)
 ├── popup.html      : Extension popup UI
-├── popup.js        : Popup logic (annotations, copy, history, settings, premium)
+├── popup.js        : Popup logic (annotations, copy, history, settings, premium) (minified on prod)
+├── background.js   : Service worker for auto-backup and alarms (minified on prod)
 ├── styles.css      : Popup styles (light + dark theme)
 └── icons/
     ├── icon16.png
     ├── icon48.png
     └── icon128.png
 ```
+
+## Branches
+
+- `main` : development source. Premium features may be unlocked here for testing.
+- `prod` : the branch shipped to the Chrome Web Store. Premium is gated behind a
+  Gumroad license that is verified live against Gumroad's API on every popup
+  open. Scripts are minified and IIFE-wrapped to discourage casual tampering.
 ---
 
 ## Storage keys
