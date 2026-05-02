@@ -31,8 +31,8 @@ Typical flow:
 - Per-row delete button : moves annotation to history rather than erasing it
 - **✂ Cut All** : one-click export + clear of all notes in a clean, AI-ready format
   - *Right-click Cut All* to copy only (without clearing)
-- **🕐 History view** : last 30 deleted annotations with timestamps, including restore
-- **Copy Log** : last 10 copy events with full output preview
+- **🕐 History view** : deleted annotations with timestamps, including restore
+- **Copy Log** : copy events with full output preview
 - **Search** (⌘/Ctrl+F) : works over both the main annotation list and the history panel
 - Click any annotation selector (pink text) or URL group (blue text) to navigate directly to the annotated element on the page
 - **Clear All** shows an undo banner instead of a confirmation dialog — click Undo within 5 seconds to restore
@@ -43,7 +43,6 @@ Typical flow:
 ### Premium : $9.99 one-time
 - 🌙 **Dark mode** : a polished dark theme for the popup
 - 📝 **Custom prepend & append text** : automatically wrap every Markdown export with your own headers, footers, or AI system prompts
-- 📋 **Unlimited history** : full copy log and annotation history, no cap
 - 🚀 **All future premium features**
 
 [**→ Get Premium on Gumroad**](https://arjunsharma10.gumroad.com/l/websiteDevAnnotator)
