@@ -371,6 +371,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (c.timestamp) o.s = c.timestamp;
       if (c.output)    o.o = c.output;
       if (c.count)     o.n = c.count;
+      // Preserve annotation IDs and snapshot objects so restore buttons
+      // survive export → import round-trips.
+      if (Array.isArray(c.annotationIds) && c.annotationIds.length) o.a = c.annotationIds;
+      if (Array.isArray(c.annotations)   && c.annotations.length)   o.x = groupByUrl(c.annotations);
       return o;
     });
     if (savedForLater.length) bundle.sl = savedForLater.map(set => ({
@@ -389,9 +393,11 @@ document.addEventListener('DOMContentLoaded', () => {
       annotations:   bundle.a  ? ungroupByUrl(bundle.a)  : [],
       history:       bundle.h  ? ungroupByUrl(bundle.h)  : [],
       copyHistory:   Array.isArray(bundle.c) ? bundle.c.map(o => ({
-        timestamp: o.s || o.timestamp,
-        output:    o.o || o.output,
-        count:     o.n || o.count || 0,
+        timestamp:     o.s || o.timestamp,
+        output:        o.o || o.output,
+        count:         o.n || o.count || 0,
+        annotationIds: Array.isArray(o.a) ? o.a : [],
+        annotations:   o.x ? ungroupByUrl(o.x) : [],
       })) : [],
       savedForLater: Array.isArray(bundle.sl) ? bundle.sl.map(s => ({
         id:          s.i || s.id,
@@ -1388,9 +1394,45 @@ document.addEventListener('DOMContentLoaded', () => {
     autoResizeAll(listEl);
 
     listEl.querySelectorAll('.item-note-edit').forEach(ta => {
+      let _dirtyInSnap = false;
       ta.addEventListener('input', () => {
         saveComment(ta.dataset.annId, ta.value);
         autoResizeTextarea(ta);
+        // Track whether this note was edited while inside a Copy-All snapshot
+        if (!_dirtyInSnap && ta.closest('.copy-all-snapshot')) _dirtyInSnap = true;
+      });
+      // When the user finishes editing a note that lives inside a big box,
+      // atomically flush the save and move the annotation to the loose list.
+      ta.addEventListener('blur', () => {
+        if (!_dirtyInSnap) return;
+        _dirtyInSnap = false;
+        // Guard: annotation may already have been ungrouped between input and blur
+        const snapEl = ta.closest('.copy-all-snapshot');
+        if (!snapEl) return;
+        const annId = ta.dataset.annId;
+        const currentValue = ta.value;
+        // Cancel any pending debounced save — we'll write it atomically below
+        clearTimeout(saveTimers[annId]);
+        delete saveTimers[annId];
+        // Atomically save the updated comment + remove from snapshot
+        isWritingFromPopup = true;
+        chrome.storage.local.get({ annotations: [], [COPY_ALL_SNAPSHOTS_KEY]: [] }, r => {
+          const anns  = r.annotations.slice();
+          const snaps = r[COPY_ALL_SNAPSHOTS_KEY] || [];
+          const ann   = anns.find(a => a.id === annId);
+          const newSnaps = snaps
+            .map(s => ({ ...s, annotationIds: (s.annotationIds || []).filter(id => id !== annId) }))
+            .filter(s => (s.annotationIds || []).length > 0);
+          const toStore = { [COPY_ALL_SNAPSHOTS_KEY]: newSnaps };
+          if (ann) {
+            ann.comment = currentValue;
+            toStore.annotations = anns;
+          }
+          chrome.storage.local.set(toStore, () => {
+            isWritingFromPopup = false;
+            load();
+          });
+        });
       });
     });
     listEl.querySelectorAll('.item-delete-btn').forEach(btn => {
@@ -3424,9 +3466,15 @@ document.addEventListener('DOMContentLoaded', () => {
           };
         });
         const exportedCopyHist = (r[COPY_HISTORY_KEY] || []).map(c => {
-          // strip annotationIds — exported format mirrors legacy schema
-          const { annotationIds, ...rest } = c;
-          return rest;
+          // Resolve annotation objects so the export is self-contained:
+          // restore buttons will work correctly after import.
+          const anns = Array.isArray(c.annotationIds)
+            ? c.annotationIds.map(id =>
+                (r.annotations || []).find(a => a.id === id)
+                || (store[id] ? stripRefMeta(store[id]) : null)
+              ).filter(Boolean)
+            : [];
+          return { ...c, annotations: anns };
         });
         const bundle = buildBundle({
           annotations:   r.annotations,
@@ -3571,8 +3619,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
           // Copy history: skip already-present timestamps
           const copyTs  = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
-          const newCopy = merged.copyHistory.filter(c => c && c.timestamp && !copyTs.has(c.timestamp))
-            .map(c => Array.isArray(c.annotationIds) ? c : { ...c, annotationIds: [] });
+          const newCopy = merged.copyHistory
+            .filter(c => c && c.timestamp && !copyTs.has(c.timestamp))
+            .map(c => {
+              const withIds = Array.isArray(c.annotationIds) ? c : { ...c, annotationIds: [] };
+              // Populate _annStore from annotation snapshots bundled in the export
+              // so that restore buttons work correctly after import.
+              if (withIds.annotationIds.length && Array.isArray(c.annotations)) {
+                withIds.annotationIds.forEach(id => {
+                  const ann = c.annotations.find(a => a && a.id === id);
+                  if (!ann) return;
+                  if (!store[id]) store[id] = { ...ann, _refCount: 0 };
+                  else store[id] = { ...store[id], ...ann };
+                  store[id]._refCount = (store[id]._refCount || 0) + 1;
+                });
+              }
+              // Drop the inline `annotations` array — data now lives in _annStore via IDs
+              const { annotations: _snap, ...rest } = withIds;
+              return rest;
+            });
 
           // Saved-for-later: convert to id-references, skip duplicates
           const slIds   = new Set(r[SAVED_LATER_KEY].map(s => s.id));
