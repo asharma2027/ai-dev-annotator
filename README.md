@@ -16,8 +16,8 @@ model has enough context to find and fix the issue without a screenshot.
 
 Typical flow:
 1. Open the site you’re reviewing.
-2. Click an element, type a note, repeat.
-3. Hit “Copy as Markdown” and paste into your AI assistant.
+2. Alt + Right-Click an element, type an annotation, repeat.
+3. Hit “Copy All” and paste into your AI assistant.
 4. The agent ships a PR.
 
 ---
@@ -45,7 +45,7 @@ Typical flow:
 - 📝 **Custom prepend & append text** : automatically wrap every Markdown export with your own headers, footers, or AI system prompts
 - 🚀 **All future premium features**
 
-[**→ Get Premium ($9.99 one-time)**](https://buy.stripe.com/REPLACE_WITH_PREMIUM_PAYMENT_LINK)
+[**→ Get Premium ($9.99 one-time)**](https://buy.stripe.com/6oU9AS4Kjc9h6x1bxocfK01)
 
 ---
 
@@ -76,7 +76,7 @@ Paste directly into Cursor's chat, Claude, or any AI tool : it already knows whi
 
 ## Activating Premium
 
-1. [Purchase Premium on Stripe ($9.99 one-time)](https://buy.stripe.com/REPLACE_WITH_PREMIUM_PAYMENT_LINK)
+1. [Purchase Premium on Stripe ($9.99 one-time)](https://buy.stripe.com/6oU9AS4Kjc9h6x1bxocfK01)
 2. After paying, Stripe redirects you to a success page that shows your license key with a copy button. Your key is also included in the Stripe receipt email under "License key:"
 3. Open the extension popup → click ⚙️ (Settings) → paste your key in the **Premium** section → click **Activate**
 4. Your license is verified locally with an Ed25519 signature — no network call, works fully offline
@@ -143,7 +143,7 @@ ai-dev-annotator/
 
 ## Support & contact
 
-- 🤝 **Tip Me:** [https://buy.stripe.com/REPLACE_WITH_TIP_PAYMENT_LINK](https://buy.stripe.com/REPLACE_WITH_TIP_PAYMENT_LINK) : Leave an optional tip. Choose any amount you like (min $0.50). Tips are completely voluntary and do not unlock any extra features. The free tier already includes everything most developers need.
+- 🤝 **Tip Me:** [https://buy.stripe.com/6oU5kCa4D4GPaNhatkcfK00](https://buy.stripe.com/6oU5kCa4D4GPaNhatkcfK00) : Leave an optional tip. Choose any amount you like (min $0.50). Tips are completely voluntary and do not unlock any extra features. The free tier already includes everything most developers need.
 
 
 - 💼 **Hire me:** [linkedin.com/in/asharma2027](https://www.linkedin.com/in/asharma2027/) : available for freelance and full-time opportunities
