@@ -3,9 +3,7 @@ main = "src/index.js"
 compatibility_date = "2025-01-01"
 
 # Secrets are NOT defined here — set them with `wrangler secret put`:
-#   STRIPE_WEBHOOK_SECRET   — from Stripe dashboard, the webhook signing secret
+#   STRIPE_SECRET_KEY       — sk_live_... (or sk_test_... while testing)
+#   STRIPE_WEBHOOK_SECRET   — whsec_... from the webhook you create in Stripe
 #   LICENSE_PRIVATE_KEY     — Ed25519 private key, base64url, no padding
-#   RESEND_API_KEY          — from resend.com, an API key with send permission
-#   SENDER_EMAIL            — e.g. "AI Dev Annotator <licenses@yourdomain.com>"
-#   PREMIUM_PRICE_ID        — Stripe Price ID for the $9.99 Premium SKU (optional;
-#                             used to distinguish Premium purchases from tips)
+#                             (from LICENSE_KEYPAIR_DO_NOT_COMMIT.txt)

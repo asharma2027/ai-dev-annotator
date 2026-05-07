@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Thanks for your purchase — AI Website Dev Annotator</title>
+<meta name="description" content="Your AI Website Dev Annotator Premium license key." />
+<meta name="robots" content="noindex" />
+<link rel="icon" type="image/png" sizes="48x48" href="../icons/icon48.png" />
+<link rel="icon" type="image/png" sizes="128x128" href="../icons/icon128.png" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  /* Page-specific styles for the success page. */
+  .success-wrap {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 64px 24px 80px;
+  }
+  .success-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 32px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+  }
+  .success-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #d1fae5;
+    color: #047857;
+    display: grid;
+    place-items: center;
+    font-size: 28px;
+    margin-bottom: 16px;
+  }
+  .license-box {
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    word-break: break-all;
+    white-space: pre-wrap;
+    line-height: 1.6;
+  }
+  .license-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    margin: 16px 0 8px;
+  }
+  .license-row .license-box { flex: 1; }
+  .copy-btn {
+    background: #0f172a;
+    color: #fff;
+    border: 0;
+    border-radius: 10px;
+    padding: 0 16px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .copy-btn.copied { background: #047857; }
+  .copy-btn:disabled { opacity: 0.6; cursor: default; }
+  .save-warning {
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+  .next-steps ol { padding-left: 20px; }
+  .next-steps li { margin: 6px 0; }
+  .status-line { color: #64748b; font-size: 14px; }
+  .error-line { color: #b91c1c; font-size: 14px; margin-top: 8px; }
+  .small-link { font-size: 13px; color: #2563eb; text-decoration: none; }
+  .small-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="container header-row">
+    <a class="brand" href="./">
+      <img src="../icons/icon48.png" alt="AI Website Dev Annotator logo" width="32" height="32" />
+      <span>AI Website Dev Annotator</span>
+    </a>
+  </div>
+</header>
+
+<main class="success-wrap">
+  <div class="success-card">
+    <div class="success-icon" aria-hidden="true">✓</div>
+    <h1 style="margin:0 0 8px;">Thanks for going Premium</h1>
+    <p class="status-line" id="status">Looking up your license key…</p>
+
+    <div id="license-section" style="display:none;">
+      <p style="margin:20px 0 0;">Your license key:</p>
+      <div class="license-row">
+        <div class="license-box" id="license-key"></div>
+        <button class="copy-btn" id="copy-btn" type="button">Copy</button>
+      </div>
+      <div class="save-warning">
+        <strong>Save this key now.</strong> It is also included in your Stripe receipt email (look for "License key:" in the description). If you lose both, reply to that receipt email and we can help recover it.
+      </div>
+
+      <div class="next-steps" style="margin-top:28px;">
+        <h2 style="font-size:18px;margin:0 0 8px;">Activate your key</h2>
+        <ol>
+          <li>Open the AI Website Dev Annotator extension popup in Chrome.</li>
+          <li>Click the gear icon (⚙️) to open Settings.</li>
+          <li>Scroll to the <strong>Premium</strong> section, paste your license key, and click <strong>Activate</strong>.</li>
+          <li>Dark mode and custom Markdown prepend/append are now unlocked.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div id="error-section" style="display:none;">
+      <p class="error-line" id="error-text"></p>
+      <p style="margin-top:12px;font-size:14px;">
+        Your payment went through fine — this is just a key-lookup glitch. Your key is also in your Stripe receipt email under "License key:". If it isn't, reply to that email or reach out via the
+        <a class="small-link" href="https://github.com/asharma2027/ai-dev-annotator/issues" rel="noopener">GitHub issues page</a>
+        and you'll be sorted out within a day.
+      </p>
+    </div>
+  </div>
+
+  <p style="text-align:center;margin-top:24px;">
+    <a class="small-link" href="./">← Back to AI Website Dev Annotator</a>
+  </p>
+</main>
+
+<script>
+  // Hard-coded Worker URL. Replace with your real deployed Worker URL after
+  // running `npx wrangler deploy` in infra/worker/. Leave the
+  // `/license` path; only swap the hostname.
+  const LICENSE_LOOKUP_URL = 'https://ai-dev-annotator-licenses.REPLACE_WITH_YOUR_WORKER_SUBDOMAIN.workers.dev/license';
+
+  function qs(name) {
+    const m = new URLSearchParams(window.location.search).get(name);
+    return m || '';
+  }
+
+  function showError(msg) {
+    document.getElementById('status').style.display = 'none';
+    document.getElementById('error-section').style.display = 'block';
+    document.getElementById('error-text').textContent = msg;
+  }
+
+  async function lookup() {
+    const sessionId = qs('session_id');
+    if (!sessionId) {
+      showError('No checkout session was found in the URL. If you just paid, check your Stripe receipt email — your license key is in the description.');
+      return;
+    }
+    if (LICENSE_LOOKUP_URL.includes('REPLACE_WITH_YOUR_WORKER_SUBDOMAIN')) {
+      showError('This success page has not been wired up yet. Replace LICENSE_LOOKUP_URL in success.html with your deployed Cloudflare Worker URL.');
+      return;
+    }
+    try {
+      // Stripe routes the buyer here immediately on payment confirmation,
+      // sometimes a few seconds before the webhook fires. Retry briefly.
+      let resp, data;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        resp = await fetch(`${LICENSE_LOOKUP_URL}?session_id=${encodeURIComponent(sessionId)}`);
+        data = await resp.json().catch(() => ({}));
+        if (resp.ok && data.license) break;
+        if (resp.status === 402) {
+          // not_paid yet — wait and retry
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
+        break;
+      }
+      if (!resp.ok || !data.license) {
+        showError(data.message || 'We could not look up your license key right now.');
+        return;
+      }
+      document.getElementById('status').style.display = 'none';
+      document.getElementById('license-section').style.display = 'block';
+      document.getElementById('license-key').textContent = data.license;
+
+      const btn = document.getElementById('copy-btn');
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(data.license);
+          btn.textContent = 'Copied';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+        } catch {
+          btn.textContent = 'Press Ctrl+C';
+        }
+      });
+    } catch (err) {
+      showError('We could not reach the license server. Your key is also in your Stripe receipt email under "License key:".');
+    }
+  }
+  lookup();
+</script>
+
+</body>
+</html>

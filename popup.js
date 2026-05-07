@@ -14,13 +14,17 @@ const DEV_MODE = false;
 // Flow:
 //   1. User clicks "Get Premium ($9.99)" on the landing page or in the
 //      extension popup → Stripe Payment Link → Stripe checkout.
-//   2. Stripe sends checkout.session.completed to our Cloudflare Worker.
-//   3. The Worker generates an Ed25519-signed license key tied to the
-//      buyer's email + Stripe session ID, then emails it via Resend.
-//   4. The user pastes the key in Settings → Premium → Activate.
-//   5. The extension verifies the signature locally with the public key
+//   2. After payment Stripe redirects the buyer to docs/success.html with
+//      ?session_id=cs_xxx. The page calls our Cloudflare Worker's
+//      /license endpoint and shows the license key with a copy button.
+//      The same key is also stamped into the PaymentIntent description
+//      so it appears in Stripe's automatic receipt email.
+//   3. The user pastes the key in Settings → Premium → Activate.
+//   4. The extension verifies the signature locally with the public key
 //      embedded below — no network call, no allow-list lookup, no
 //      runtime dependency on any third party. Works fully offline.
+//
+// No email service, no DB — just Stripe + Cloudflare Worker + GitHub Pages.
 //
 // Security model: same as any signed-license system (1Password, Tana,
 // Sublime Text, etc.). The private key never leaves the Worker.
@@ -35,7 +39,7 @@ const DEV_MODE = false;
 const PREMIUM_PURCHASE_URL = 'https://buy.stripe.com/REPLACE_WITH_PREMIUM_PAYMENT_LINK';
 
 // Stripe Payment Link for the optional "Leave a tip" flow (custom amount,
-// minimum $1). Used only by the meta-footer Stripe button.
+// minimum $0.50). Used only by the meta-footer Stripe button.
 const TIP_URL = 'https://buy.stripe.com/REPLACE_WITH_TIP_PAYMENT_LINK';
 
 // Ed25519 public key, base64url, no padding. Matches the private key held
@@ -3434,7 +3438,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const premium = isPremium();
     loadSettings(s => {
       let licenseSection;
-      if (premium) {
+      if (DEV_MODE) {
+        // DEV_MODE bypasses the license system entirely. This branch is
+        // active on the dev-facing `main` branch so contributors get
+        // every feature unlocked without paying or pasting a key.
+        licenseSection = `
+          <div class="settings-section">
+            <div class="settings-section-title">⭐ Features</div>
+            <div class="settings-row">
+              <span class="settings-label">Status</span>
+              <span class="settings-value premium-active-badge">✅ All Features Enabled (DEV_MODE)</span>
+            </div>
+            <p class="settings-hint">DEV_MODE is on in this build. Set <code>DEV_MODE = false</code> in popup.js to test the real Stripe + license flow.</p>
+          </div>`;
+        buildAndInjectSettings(s, licenseSection, premium);
+      } else if (premium) {
         chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
           const lic = r[LICENSE_STORAGE_KEY] || {};
           const emailLine = lic.email

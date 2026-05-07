@@ -78,7 +78,7 @@ Paste directly into Cursor's chat, Claude, or any AI tool : it already knows whi
 ## Activating Premium
 
 1. [Purchase Premium on Stripe ($9.99 one-time)](https://buy.stripe.com/REPLACE_WITH_PREMIUM_PAYMENT_LINK)
-2. Your license key is emailed to you automatically once Stripe confirms the payment
+2. After paying, Stripe redirects you to a success page that shows your license key with a copy button. Your key is also included in the Stripe receipt email under "License key:"
 3. Open the extension popup → click ⚙️ (Settings) → paste your key in the **Premium** section → click **Activate**
 4. Your license is verified locally with an Ed25519 signature — no network call, works fully offline
 
