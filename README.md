@@ -129,14 +129,6 @@ ai-dev-annotator/
     └── icon128.png
 ```
 
-## Branches
-
-- `main` : development source. Premium features may be unlocked here for testing.
-- `prod` : the branch shipped to the Chrome Web Store. Premium is gated behind a
-  Gumroad license that is verified live against Gumroad's API on every popup
-  open. Scripts are minified and IIFE-wrapped to discourage casual tampering.
----
-
 ## Storage keys
 
 | Key | Contents |
