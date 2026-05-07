@@ -30,11 +30,11 @@
 // Stripe Payment Link for the fixed-price $9.99 Premium SKU. Set this to
 // your live Stripe Payment Link URL after creating it (Stripe dashboard →
 // Payment Links → Create payment link → fixed price $9.99).
-const PREMIUM_PURCHASE_URL = 'https://buy.stripe.com/REPLACE_WITH_PREMIUM_PAYMENT_LINK';
+const PREMIUM_PURCHASE_URL = 'https://buy.stripe.com/6oU9AS4Kjc9h6x1bxocfK01';
 
 // Stripe Payment Link for the optional "Leave a tip" flow (custom amount,
 // minimum $0.50). Used only by the meta-footer Stripe button.
-const TIP_URL = 'https://buy.stripe.com/REPLACE_WITH_TIP_PAYMENT_LINK';
+const TIP_URL = 'https://buy.stripe.com/6oU5kCa4D4GPaNhatkcfK00';
 
 // Ed25519 public key, base64url, no padding. Matches the private key held
 // only by the Cloudflare Worker. SAFE to commit — public keys can verify
