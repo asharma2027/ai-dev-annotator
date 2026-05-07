@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Website Dev Annotator: Annotate Any Web Element, Export Markdown for AI</title>
+<meta name="description" content="A Chrome extension for developers using AI coding assistants. Alt + Right-Click any web element to annotate, then export clean Markdown for Cursor, Claude, ChatGPT, and Copilot." />
+<link rel="icon" type="image/png" sizes="48x48" href="../icons/icon48.png" />
+<link rel="icon" type="image/png" sizes="128x128" href="../icons/icon128.png" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="site-header">
+  <div class="container header-row">
+    <a class="brand" href="#top">
+      <img src="../icons/icon48.png" alt="AI Website Dev Annotator logo" width="32" height="32" />
+      <span>AI Website Dev Annotator</span>
+    </a>
+    <nav class="nav">
+      <a href="#features">Features</a>
+      <a href="#how-it-works">How it works</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#tip">Tip</a>
+      <a href="#faq">FAQ</a>
+      <a class="nav-cta" href="https://arjunsharma10.gumroad.com/l/websiteDevAnnotator">Get Premium</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="container hero-grid">
+      <div class="hero-text">
+        <span class="eyebrow">Chrome Extension for Developers</span>
+        <h1>Annotate any web element. Export clean Markdown for your AI agent.</h1>
+        <p class="lede">Alt + Right-Click any element on any website to leave a note. Export every note as a clean, structured Markdown payload that pastes straight into Cursor, Claude, ChatGPT, Copilot, or v0. Your AI agent gets a stable selector, the element text, your note, and the URL, no screenshots required.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/ai-website-dev-annotator/" rel="noopener">Install on Chrome</a>
+          <a class="btn btn-secondary" href="#pricing">See pricing</a>
+        </div>
+        <ul class="badges">
+          <li>No telemetry</li>
+          <li>Manifest V3</li>
+          <li>Works offline</li>
+          <li>MIT licensed</li>
+        </ul>
+      </div>
+      <div class="hero-card">
+        <div class="card-head">
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
+          <span class="card-title">cut-as-markdown.md</span>
+        </div>
+        <pre class="code"><code>## https://example.com/dashboard
+
+1. `button#submit-btn`
+   Make this button larger and change color to green
+
+2. `div.sidebar` | `body/div[2]/div[1]`
+   Reduce width to 200px and add a top border
+
+3. `header nav a[href="/pricing"]`
+   Wrong active state on this link</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="strip">
+    <div class="container strip-row">
+      <div class="strip-item">
+        <strong>Alt + Right-Click</strong>
+        <span>annotate any element</span>
+      </div>
+      <div class="strip-item">
+        <strong>Cut as Markdown</strong>
+        <span>one click export</span>
+      </div>
+      <div class="strip-item">
+        <strong>History &amp; Undo</strong>
+        <span>nothing is ever lost</span>
+      </div>
+      <div class="strip-item">
+        <strong>Local first</strong>
+        <span>no server, no analytics</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" class="section">
+    <div class="container">
+      <h2>Built for the AI coding workflow</h2>
+      <p class="section-lede">Stop screenshotting. Stop copying CSS selectors by hand. Click elements, type notes, paste a clean payload into your AI agent, ship the PR.</p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <h3>Stable selectors</h3>
+          <p>Every annotation captures tag, ID, classes, XPath, the URL, and a snippet of the clicked element's text, so your AI tool can locate the element without ambiguity.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Unlimited annotations</h3>
+          <p>Annotations are grouped by page URL in the popup. Add as many as you want. Free tier has no limits on the number of notes you can take.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Inline editing</h3>
+          <p>Edit any note directly in the popup. Auto-expanding textboxes save as you type. Per-row delete moves notes to History instead of erasing them.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Cut as Markdown</h3>
+          <p>Hit Cut All to copy a clean Markdown bundle and clear the list. Right-click Cut All to copy without clearing. The format is tuned for paste-into-AI use.</p>
+        </div>
+        <div class="feature-card">
+          <h3>History view</h3>
+          <p>Deleted annotations are kept with timestamps. Restore any entry with one click. Search works across both the live list and the history panel.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Search everything</h3>
+          <p>Hit Cmd or Ctrl + F inside the popup to search both your active annotations and your history at the same time.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Click to navigate</h3>
+          <p>Click a pink selector or a blue URL group to jump straight to the annotated element on the page. The annotation panel opens automatically.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Undo, not confirm</h3>
+          <p>Clear All shows a 5 second undo banner instead of a confirmation dialog. Recover from mistakes without breaking flow.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Auto backup</h3>
+          <p>Optional backup to chrome.storage.sync plus a local in-browser snapshot every 15 minutes. No download prompts, no servers, fully opt-in.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how-it-works" class="section section-alt">
+    <div class="container">
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li>
+          <span class="step-num">1</span>
+          <div>
+            <h3>Open the page you are reviewing</h3>
+            <p>Click the toolbar icon or press Alt + Shift + A and pick Annotate.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <div>
+            <h3>Alt + Right-Click any element</h3>
+            <p>Type a note, press Esc or click outside to save. Empty notes are auto-discarded.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <div>
+            <h3>Review and edit in the popup</h3>
+            <p>Annotations are grouped by page URL. Edit notes inline, delete or restore from History, and search across everything.</p>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">4</span>
+          <div>
+            <h3>Cut as Markdown, paste into your AI tool</h3>
+            <p>Hit Cut All. A clean Markdown payload lands on your clipboard. Paste it into Cursor, Claude, ChatGPT, Copilot, or v0. The agent ships the PR.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="pricing" class="section">
+    <div class="container">
+      <h2>Pricing</h2>
+      <p class="section-lede">Free forever for the core workflow. One-time Premium unlocks a polished dark theme and custom export wrappers.</p>
+
+      <div class="pricing-grid">
+        <div class="price-card">
+          <div class="price-head">
+            <h3>Free</h3>
+            <div class="price"><span class="amount">$0</span></div>
+            <p class="price-sub">All the essentials, forever</p>
+          </div>
+          <ul class="price-list">
+            <li>Alt + Right-Click annotation gesture</li>
+            <li>Unlimited annotations grouped by URL</li>
+            <li>Cut as Markdown, formatted for AI tools</li>
+            <li>Inline editing with auto-save</li>
+            <li>History view with restore</li>
+            <li>Copy log of every export event</li>
+            <li>Search across notes and history</li>
+            <li>Undo banner on Clear All</li>
+            <li>Auto backup to chrome.storage.sync (optional)</li>
+          </ul>
+          <a class="btn btn-secondary btn-block" href="https://chromewebstore.google.com/detail/ai-website-dev-annotator/" rel="noopener">Install free</a>
+        </div>
+
+        <div class="price-card price-card-featured">
+          <div class="badge-featured">Most popular</div>
+          <div class="price-head">
+            <h3>Premium</h3>
+            <div class="price">
+              <span class="amount">$9.99</span>
+              <span class="cadence">one-time</span>
+            </div>
+            <p class="price-sub">Everything in Free, plus:</p>
+          </div>
+          <ul class="price-list">
+            <li>Polished dark mode for the popup</li>
+            <li>Custom prepend and append text on every Markdown export</li>
+            <li>Wrap exports with your own AI system prompts, headers, or footers</li>
+            <li>All future Premium features included</li>
+            <li>License key, no subscription, no recurring charges</li>
+          </ul>
+          <a class="btn btn-primary btn-block" href="https://arjunsharma10.gumroad.com/l/websiteDevAnnotator" rel="noopener">Buy Premium for $9.99</a>
+          <p class="fineprint">One-time payment. Lifetime license. Activate inside the extension popup under Settings.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tip" class="section section-alt">
+    <div class="container tip-block">
+      <h2>Leave a tip</h2>
+      <p>If the free version saves you time and you want to say thanks, you can leave an optional tip. Tips are completely voluntary and do not unlock any extra features. The free tier already includes everything most developers need.</p>
+      <a class="btn btn-tip" href="https://ko-fi.com/asharma2027" rel="noopener">Leave a tip on Ko-fi</a>
+    </div>
+  </section>
+
+  <section id="faq" class="section">
+    <div class="container">
+      <h2>Frequently asked questions</h2>
+      <div class="faq-grid">
+        <div class="faq-item">
+          <h3>Does the extension send my data anywhere?</h3>
+          <p>No. There is no server, no analytics, and no telemetry. Annotations live in chrome.storage.local on your device. The optional Auto Backup mirrors a compressed bundle into chrome.storage.sync, which Google encrypts in transit and at rest.</p>
+        </div>
+        <div class="faq-item">
+          <h3>What does it read from the page?</h3>
+          <p>Only when you actively annotate. It computes a stable CSS selector and captures up to 240 characters of the clicked element's text. It does not read passwords, form values, cookies, or storage.</p>
+        </div>
+        <div class="faq-item">
+          <h3>Is Premium a subscription?</h3>
+          <p>No. Premium is a one-time $9.99 purchase. Your license key works forever and is validated locally against the Gumroad API.</p>
+        </div>
+        <div class="faq-item">
+          <h3>How do I activate Premium?</h3>
+          <p>Buy a license on Gumroad, open the extension popup, click the gear icon, paste your key in the Premium section, and click Activate.</p>
+        </div>
+        <div class="faq-item">
+          <h3>Which AI tools does it work with?</h3>
+          <p>Any AI tool that reads Markdown. The export format is tuned for Cursor, Claude, ChatGPT, GitHub Copilot Chat, and v0, but works with any model.</p>
+        </div>
+        <div class="faq-item">
+          <h3>Are there any limitations?</h3>
+          <p>Yes. Annotations live in the top frame, so elements inside iframes attach to the iframe container. Closed shadow roots cannot be pierced. The extension runs on http and https URLs only, not file:// or chrome:// pages.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <div class="container cta-band-inner">
+      <h2>Stop screenshotting. Start shipping.</h2>
+      <p>Install the free extension, or unlock Premium for $9.99.</p>
+      <div class="cta-row cta-row-center">
+        <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/ai-website-dev-annotator/" rel="noopener">Install on Chrome</a>
+        <a class="btn btn-secondary" href="https://arjunsharma10.gumroad.com/l/websiteDevAnnotator" rel="noopener">Get Premium for $9.99</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-grid">
+    <div>
+      <div class="brand">
+        <img src="../icons/icon48.png" alt="" width="24" height="24" />
+        <span>AI Website Dev Annotator</span>
+      </div>
+      <p class="footer-note">A Chrome extension for developers who use AI coding assistants. Built and maintained by Arjun Sharma.</p>
+    </div>
+    <div>
+      <h4>Product</h4>
+      <ul>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#how-it-works">How it works</a></li>
+        <li><a href="#pricing">Pricing</a></li>
+        <li><a href="#tip">Tip</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Resources</h4>
+      <ul>
+        <li><a href="https://github.com/asharma2027/ai-dev-annotator" rel="noopener">GitHub repo</a></li>
+        <li><a href="https://github.com/asharma2027/ai-dev-annotator/blob/prod/PRIVACY.md" rel="noopener">Privacy policy</a></li>
+        <li><a href="https://github.com/asharma2027/ai-dev-annotator/blob/prod/LICENSE" rel="noopener">MIT License</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Contact</h4>
+      <ul>
+        <li><a href="https://www.linkedin.com/in/asharma2027/" rel="noopener">LinkedIn</a></li>
+        <li><a href="https://ko-fi.com/asharma2027" rel="noopener">Ko-fi (tip)</a></li>
+        <li><a href="https://arjunsharma10.gumroad.com/l/websiteDevAnnotator" rel="noopener">Gumroad</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="container footer-bottom">
+    <span>&copy; 2026 Arjun Sharma. MIT licensed.</span>
+    <span>Made for developers who paste a lot into AI agents.</span>
+  </div>
+</footer>
+
+</body>
+</html>
