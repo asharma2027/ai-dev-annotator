@@ -51,8 +51,7 @@ Typical flow:
 
 ## How it works
 
-1. Click the toolbar icon (or press `Alt+Shift+A`) and pick “Annotate”.
-   Click any element on the page, type a note, and press Esc or click
+1. **Annotate** :Alt + Right-Click any element on the page, type a note, and press Esc or click
    outside to save. Empty notes are auto-discarded.
 2. **Review** : Click the extension icon in the toolbar to see all saved annotations grouped by page URL. Notes are editable inline.
 3. **Navigate** : Click any pink annotation selector or blue URL group label to jump directly to that element on the page — the annotation panel opens automatically.
