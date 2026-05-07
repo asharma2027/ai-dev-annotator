@@ -46,7 +46,7 @@
     </button>
   </div>
 
-  <!-- Non-intrusive meta-footer: star rating, Ko-fi, Hire Me -->
+  <!-- Non-intrusive meta-footer: star rating, Stripe, Hire Me -->
   <div class="meta-footer">
     <div class="star-rating" id="star-rating" title="Enjoying AI Website Dev Annotator? Leave a review!">
       <span class="star" data-star="1">★</span>
@@ -58,7 +58,47 @@
     </div>
     <span class="meta-version">v1.0.0</span>
     <div class="meta-links">
-      <a href="#" class="meta-link" data-url="https://ko-fi.com/asharma2027" title="Support development on Ko-fi">☕ Ko-fi</a>
+      <a href="#" class="meta-link stripe-link" id="stripe-tip-link" data-url="https://buy.stripe.com/REPLACE_WITH_TIP_PAYMENT_LINK" title="Leave a tip via Stripe"><span class="stripe-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="14" height="14" style="vertical-align:middle;margin-right:3px">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F172A"/> <stop offset="100%" stop-color="#020617"/> </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="1.5"/>
+    </pattern>
+    <linearGradient id="bubbleGrad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ca3b76" />
+      <stop offset="50%" stop-color="#3762e3" />
+      <stop offset="100%" stop-color="#ff" />
+    </linearGradient>
+    <linearGradient id="sparkleGrad" x1="300" y1="50" x2="480" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FEF08A" />
+      <stop offset="100%" stop-color="#F59E0B" />
+    </linearGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <rect width="512" height="512" rx="112" fill="url(#grid)" />
+  <g filter="url(#dropShadow)">
+    <path d="M 160 320 L 120 400 L 220 330 Z" fill="url(#bubbleGrad)" />
+    <rect x="96" y="128" width="320" height="210" rx="64" fill="url(#bubbleGrad)" />
+  </g>
+  <g fill="none" stroke="#FFFFFF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="206,193 166,233 206,273" />
+    <polyline points="306,193 346,233 306,273" />
+    <line x1="276" y1="183" x2="236" y2="283" stroke-width="24" />
+  </g>
+  <path d="M 396 78 C 396 100, 414 118, 436 118 C 414 118, 396 136, 396 158 C 396 136, 378 118, 356 118 C 378 118, 396 100, 396 78 Z" fill="url(#sparkleGrad)" filter="url(#glow)"/>
+  <path d="M 456 48 C 456 59, 465 68, 476 68 C 465 68, 456 77, 456 88 C 456 77, 447 68, 436 68 C 447 68, 456 59, 456 48 Z" fill="url(#sparkleGrad)" filter="url(#glow)"/>
+</svg></span> Stripe</a>
       <span class="meta-sep">·</span>
       <a href="#" class="meta-link" data-url="https://www.linkedin.com/in/asharma2027/" title="Hire the developer">💼 Hire Me</a>
     </div>

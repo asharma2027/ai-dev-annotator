@@ -1,3697 +1,4647 @@
-!(function () {
-  const t = "license",
-    e = {
-      copyAll: { emoji: "📋", label: "Copy All" },
-      cutAll: { emoji: "✂", label: "Cut All" },
-      clearAll: { emoji: "🗑", label: "Clear All" },
-      saveForLater: { emoji: "💾", label: "Save for Later" },
-    },
-    n = { alt: "Alt", ctrl: "Ctrl", shift: "Shift", meta: "Meta / ⌘ Cmd" };
-  let o = !1;
-  function a() {
-    return !0 === o;
+// popup.js : AI Website Dev Annotator
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEV MODE
+// Set DEV_MODE = true in your *local* copy to unlock all premium features
+// during development. Never commit with DEV_MODE = true : it bypasses all
+// license checks and exposes the dev-only UI.
+// ─────────────────────────────────────────────────────────────────────────────
+const DEV_MODE = false;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREMIUM / LICENSE SYSTEM (Stripe + offline Ed25519)
+//
+// Flow:
+//   1. User clicks "Get Premium ($9.99)" on the landing page or in the
+//      extension popup → Stripe Payment Link → Stripe checkout.
+//   2. Stripe sends checkout.session.completed to our Cloudflare Worker.
+//   3. The Worker generates an Ed25519-signed license key tied to the
+//      buyer's email + Stripe session ID, then emails it via Resend.
+//   4. The user pastes the key in Settings → Premium → Activate.
+//   5. The extension verifies the signature locally with the public key
+//      embedded below — no network call, no allow-list lookup, no
+//      runtime dependency on any third party. Works fully offline.
+//
+// Security model: same as any signed-license system (1Password, Tana,
+// Sublime Text, etc.). The private key never leaves the Worker.
+// If it ever leaks, rotate the keypair, ship a new extension version
+// with the new public key, and optionally include the old key for a
+// transition window.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Stripe Payment Link for the fixed-price $9.99 Premium SKU. Set this to
+// your live Stripe Payment Link URL after creating it (Stripe dashboard →
+// Payment Links → Create payment link → fixed price $9.99).
+const PREMIUM_PURCHASE_URL = 'https://buy.stripe.com/REPLACE_WITH_PREMIUM_PAYMENT_LINK';
+
+// Stripe Payment Link for the optional "Leave a tip" flow (custom amount,
+// minimum $1). Used only by the meta-footer Stripe button.
+const TIP_URL = 'https://buy.stripe.com/REPLACE_WITH_TIP_PAYMENT_LINK';
+
+// Ed25519 public key, base64url, no padding. Matches the private key held
+// only by the Cloudflare Worker. SAFE to commit — public keys can verify
+// signatures but cannot create them.
+const LICENSE_PUBLIC_KEY = '9fUNyAhaRFDGxX3sN3uMjfG49Wj4LGEnGiLpYjAamy0';
+
+const LICENSE_STORAGE_KEY = 'license';
+
+// Button action definitions — values used in settings storage
+const BUTTON_ACTIONS = {
+  copyAll:      { emoji: '📋', label: 'Copy All'       },
+  cutAll:       { emoji: '✂',  label: 'Cut All'        },
+  clearAll:     { emoji: '🗑', label: 'Clear All'      },
+  saveForLater: { emoji: '💾', label: 'Save for Later' },
+};
+
+// Human-readable labels for each modifier key
+const MODIFIER_LABELS = {
+  alt:   'Alt',
+  ctrl:  'Ctrl',
+  shift: 'Shift',
+  meta:  'Meta / ⌘ Cmd',
+};
+
+// ─── Cached premium status ────────────────────────────────────────────────────
+let _premium = false;
+
+function isPremium() {
+  return DEV_MODE || _premium;
+}
+
+async function refreshPremiumStatus() {
+  if (DEV_MODE) { _premium = true; return; }
+  const stored = await new Promise(resolve =>
+    chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r =>
+      resolve(r[LICENSE_STORAGE_KEY])));
+  if (!stored || !stored.key) { _premium = false; return; }
+  // Re-verify the stored key on every popup open. This is cheap (pure
+  // crypto) and prevents tampering with chrome.storage.local from
+  // unlocking premium without a valid signature.
+  const verified = await verifyLicenseSignature(stored.key);
+  _premium = !!verified.valid;
+}
+
+// ─── base64url helpers (no padding) ──────────────────────────────────────────
+function _b64uDecode(s) {
+  s = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function _utf8(s) { return new TextEncoder().encode(s); }
+function _bytesToString(bytes) { return new TextDecoder().decode(bytes); }
+
+// Convert a raw 32-byte Ed25519 public key into the SPKI DER format that
+// WebCrypto's importKey expects. Per RFC 8410, the SPKI prefix for
+// Ed25519 is the fixed 12-byte header below.
+function _ed25519RawPubToSpki(raw32) {
+  if (raw32.length !== 32) throw new Error(`Ed25519 public key must be 32 bytes, got ${raw32.length}`);
+  const prefix = new Uint8Array([
+    0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65,
+    0x70, 0x03, 0x21, 0x00,
+  ]);
+  const out = new Uint8Array(prefix.length + raw32.length);
+  out.set(prefix, 0);
+  out.set(raw32, prefix.length);
+  return out;
+}
+
+let _publicKeyPromise = null;
+function _getPublicKey() {
+  if (!_publicKeyPromise) {
+    const spki = _ed25519RawPubToSpki(_b64uDecode(LICENSE_PUBLIC_KEY));
+    _publicKeyPromise = crypto.subtle.importKey(
+      'spki', spki, { name: 'Ed25519' }, false, ['verify'],
+    );
   }
-  async function s() {
-    return new Promise((e) => {
-      chrome.storage.local.get({ [t]: null }, async (n) => {
-        const a = n[t];
-        if (!a || !a.key) return ((o = !1), void e(!1));
-        try {
-          const n = await r(a.key);
-          n.valid
-            ? ((o = !0),
-              chrome.storage.local.set(
-                {
-                  [t]: {
-                    valid: !0,
-                    key: a.key,
-                    email: n.email || a.email || "",
-                    activatedAt: a.activatedAt || new Date().toISOString(),
-                    lastVerified: new Date().toISOString(),
-                  },
-                },
-                () => e(!0),
-              ))
-            : ((o = !1), chrome.storage.local.remove(t, () => e(!1)));
-        } catch {
-          ((o = !1), e(!1));
-        }
-      });
+  return _publicKeyPromise;
+}
+
+// License key format produced by the Worker:
+//   v1.<b64u(email)>.<b64u(sessionId)>.<b64u(issuedAtUnix)>.<b64u(signature)>
+// We verify the signature over the joined first four parts.
+async function verifyLicenseSignature(key) {
+  try {
+    const trimmed = String(key || '').trim();
+    const parts = trimmed.split('.');
+    if (parts.length !== 5) {
+      return { valid: false, error: 'License key format looks invalid.' };
+    }
+    if (parts[0] !== 'v1') {
+      return { valid: false, error: 'Unsupported license version.' };
+    }
+    const payload   = parts.slice(0, 4).join('.');
+    const sigBytes  = _b64uDecode(parts[4]);
+    const pubKey    = await _getPublicKey();
+    const ok = await crypto.subtle.verify(
+      { name: 'Ed25519' }, pubKey, sigBytes, _utf8(payload),
+    );
+    if (!ok) return { valid: false, error: 'Invalid license key.' };
+    const email = _bytesToString(_b64uDecode(parts[1]));
+    return { valid: true, email };
+  } catch (e) {
+    return { valid: false, error: 'Invalid license key.' };
+  }
+}
+
+async function activateLicense(key) {
+  const result = await verifyLicenseSignature(key);
+  if (result.valid) {
+    await new Promise(resolve => {
+      chrome.storage.local.set({
+        [LICENSE_STORAGE_KEY]: {
+          valid:       true,
+          key:         String(key).trim(),
+          email:       result.email,
+          activatedAt: new Date().toISOString(),
+        },
+      }, resolve);
+    });
+    _premium = true;
+  }
+  return result;
+}
+
+async function deactivateLicense() {
+  await new Promise(resolve => chrome.storage.local.remove(LICENSE_STORAGE_KEY, resolve));
+  _premium = false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+  // ── Change 13: inline toast + confirm helpers (replaces native alert/confirm) ─
+  function showToast(msg, opts) {
+    opts = opts || {};
+    const t = document.createElement('div');
+    t.className = 'ann-toast' + (opts.kind ? ' ann-toast--' + opts.kind : '');
+    t.textContent = msg;
+    document.body.appendChild(t);
+    void t.offsetWidth;
+    t.classList.add('ann-toast--in');
+    setTimeout(() => {
+      t.classList.remove('ann-toast--in');
+      setTimeout(() => { try { t.remove(); } catch(_){} }, 200);
+    }, opts.duration || 2200);
+  }
+
+  // Returns Promise<boolean>. Renders an inline confirm banner inside `host`
+  // (or document.body if none given).
+  function showConfirm(msg, opts) {
+    opts = opts || {};
+    return new Promise((resolve) => {
+      const host = opts.host || document.body;
+      const wrap = document.createElement('div');
+      wrap.className = 'ann-confirm-banner';
+      wrap.innerHTML = `
+        <div class="ann-confirm-msg"></div>
+        <div class="ann-confirm-actions">
+          <button class="ann-confirm-cancel">Cancel</button>
+          <button class="ann-confirm-ok">${opts.okLabel || 'OK'}</button>
+        </div>`;
+      wrap.querySelector('.ann-confirm-msg').textContent = msg;
+      const cleanup = (val) => { try { wrap.remove(); } catch(_){} resolve(val); };
+      wrap.querySelector('.ann-confirm-ok').addEventListener('click',     () => cleanup(true));
+      wrap.querySelector('.ann-confirm-cancel').addEventListener('click', () => cleanup(false));
+      host.appendChild(wrap);
+      setTimeout(() => wrap.querySelector('.ann-confirm-ok').focus(), 0);
     });
   }
-  async function r(t) {
-    try {
-      const e = await fetch("https://api.gumroad.com/v2/licenses/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          product_permalink: "websiteDevAnnotator",
-          license_key: t.trim(),
-          increment_uses_count: "false",
-        }),
-      });
-      if (!e.ok) throw new Error(`HTTP ${e.status}`);
-      const n = await e.json();
-      return n.success && !n.purchase?.refunded
-        ? { valid: !0, email: n.purchase?.email || "" }
-        : { valid: !1, email: "", error: n.message || "Invalid license key." };
-    } catch {
-      return {
-        valid: !1,
-        email: "",
-        error:
-          "Could not reach the license server. Check your internet and try again.",
-      };
-    }
+
+  const listEl      = document.getElementById('annotations-list');
+  const historyEl   = document.getElementById('history-panel');
+  const settingsEl  = document.getElementById('settings-panel');
+  const badge       = document.getElementById('count-badge');
+  const copyBtn     = document.getElementById('copy-btn');
+  const clearBtn    = document.getElementById('clear-btn');
+  const historyBtn  = document.getElementById('history-btn');
+  const settingsBtn = document.getElementById('settings-btn');
+  const searchBtn     = document.getElementById('search-btn');
+  const searchBar     = document.getElementById('search-bar');
+  const searchInput   = document.getElementById('search-input');
+  const searchCount   = document.getElementById('search-count');
+  const restoreBanner = document.getElementById('restore-banner');
+  const clearUndoBanner = document.getElementById('clear-undo-banner');
+  const footer        = document.querySelector('.footer');
+
+  // ── History tab clickable-text modal ──────────────────────────────────────
+  // Clicking element names, URLs, or annotation text inside a history tab
+  // opens a small read-only popover with the full text, so the user can
+  // select/copy it. Only active inside historyEl.
+  function showTextSelectModal(text) {
+    const existing = document.getElementById('hist-text-modal');
+    if (existing) existing.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'hist-text-modal';
+    overlay.className = 'hist-text-modal';
+    overlay.innerHTML = `
+      <div class="hist-text-modal-box" role="dialog" aria-label="Selectable text">
+        <button class="hist-text-modal-close" title="Close (Esc)" aria-label="Close">✕</button>
+        <textarea readonly class="hist-text-modal-area"></textarea>
+      </div>`;
+    const ta = overlay.querySelector('.hist-text-modal-area');
+    ta.value = text || '';
+    const closeBtn = overlay.querySelector('.hist-text-modal-close');
+    const close = () => { try { overlay.remove(); } catch(_){} document.removeEventListener('keydown', onKey, true); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    closeBtn.addEventListener('click', close);
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(overlay);
+    setTimeout(() => { ta.focus(); ta.select(); }, 0);
   }
-  document.addEventListener("DOMContentLoaded", () => {
-    function i(t, e) {
-      e = e || {};
-      const n = document.createElement("div");
-      ((n.className = "ann-toast" + (e.kind ? " ann-toast--" + e.kind : "")),
-        (n.textContent = t),
-        document.body.appendChild(n),
-        n.offsetWidth,
-        n.classList.add("ann-toast--in"),
-        setTimeout(() => {
-          (n.classList.remove("ann-toast--in"),
-            setTimeout(() => {
-              try {
-                n.remove();
-              } catch (t) {}
-            }, 200));
-        }, e.duration || 2200));
-    }
-    function l(t, e) {
-      return (
-        (e = e || {}),
-        new Promise((n) => {
-          const o = e.host || document.body,
-            a = document.createElement("div");
-          ((a.className = "ann-confirm-banner"),
-            (a.innerHTML = `\n        <div class="ann-confirm-msg"></div>\n        <div class="ann-confirm-actions">\n          <button class="ann-confirm-cancel">Cancel</button>\n          <button class="ann-confirm-ok">${e.okLabel || "OK"}</button>\n        </div>`),
-            (a.querySelector(".ann-confirm-msg").textContent = t));
-          const s = (t) => {
-            try {
-              a.remove();
-            } catch (t) {}
-            n(t);
-          };
-          (a
-            .querySelector(".ann-confirm-ok")
-            .addEventListener("click", () => s(!0)),
-            a
-              .querySelector(".ann-confirm-cancel")
-              .addEventListener("click", () => s(!1)),
-            o.appendChild(a),
-            setTimeout(() => a.querySelector(".ann-confirm-ok").focus(), 0));
+
+  // Single delegated click handler on the history panel.
+  document.getElementById('history-panel').addEventListener('click', e => {
+    if (e.target.closest('button')) return;
+    const tgt = e.target.closest('.hist-clickable-text');
+    if (!tgt) return;
+    const text = tgt.dataset.fullText != null ? tgt.dataset.fullText : tgt.textContent;
+    showTextSelectModal(text);
+  });
+
+  const HISTORY_KEY      = 'annotationHistory';
+  const COPY_HISTORY_KEY = 'copyHistory';
+  const SETTINGS_KEY     = 'annotatorSettings';
+  const SAVED_LATER_KEY  = 'savedForLater';
+  // ── Copy-All snapshots ────────────────────────────────────────────────────
+  // Each Copy All click writes a "snapshot" record here that groups the
+  // annotations that were copied. The annotations themselves remain in the
+  // main `annotations` list (so future Copy All actions still include them);
+  // the snapshot is purely a UI grouping layer over the main list.
+  // Schema: { id, timestamp, annotationIds: string[], expanded: boolean }
+  const COPY_ALL_SNAPSHOTS_KEY = 'copyAllSnapshots';
+  // ── Change 2: storage dedup ────────────────────────────────────────────────
+  // Central reference store: history, copy logs, and saved-for-later sets all
+  // store annotation IDs that point into _annStore instead of duplicating the
+  // full annotation objects. Each entry is { ...ann, _refCount }. When refCount
+  // reaches 0 the entry is removed.
+  //
+  // Estimated reduction: average annotation ~200 chars × ~3.2x duplication
+  // (history + at most one saved-for-later set + one copy-log) → ~68% storage
+  // savings on heavily-used datasets, ~50% on typical sessions.
+  const ANN_STORE_KEY    = '_annStore';
+  const MIGRATION_FLAG   = '_storageMigratedV2';
+  // One-time backfill flag: recover annotationIds for legacy copy-log entries
+  // that were stored as raw markdown only.
+  const COPY_LOG_BACKFILL_FLAG = '_copyLogIdsBackfilledV1';
+  // v2 sync: single compressed bundle, chunked. Old keys (ann_sync_*) are still read for back-compat.
+  const SYNC_PREFIX      = 'ann_sync_';
+  const SYNC_V2_PREFIX   = 'annv2_';
+  const SYNC_CHUNK_SIZE  = 7000;
+  // chrome.storage.sync limits: 102_400 bytes total, 8_192 bytes per item.
+  // Reserve overhead for metadata keys and base64 expansion (~4/3).
+  const SYNC_MAX_BYTES   = 95000;
+
+  let historyVisible  = false;
+  let settingsVisible = false;
+  let historyTab      = 'annotations'; // 'annotations' | 'copies' | 'saved'
+  let isWritingFromPopup = false;
+
+  // ── Search state ──────────────────────────────────────────────────────────
+  let searchActive     = false;
+  let searchMatches    = [];
+  let searchCurrentIdx = 0;
+
+  // ── Sync backup state ─────────────────────────────────────────────────────
+  let syncBackupTimer = null;
+
+  // ── Undo-clear state ──────────────────────────────────────────────────────
+  let undoClearData   = null; // { annotations: [], deletedAt: string }
+  let undoBannerTimer = null;
+
+  // ── Universal undo/redo state ────────────────────────────────────────────
+  // Tracked storage keys whose changes should be undoable/redoable.
+  const UNDO_TRACKED_KEYS = [
+    'annotations',
+    HISTORY_KEY,
+    COPY_HISTORY_KEY,
+    SAVED_LATER_KEY,
+    COPY_ALL_SNAPSHOTS_KEY,
+    ANN_STORE_KEY,
+    SETTINGS_KEY,
+  ];
+  const UNDO_STACK_LIMIT = 100;
+  let undoStack = [];
+  let redoStack = [];
+  // Pending change accumulator: coalesce changes from one storage.set call
+  // (which fires onChanged with one entry per key) into a single undo step.
+  let pendingUndoOld  = null;
+  let pendingUndoTask = null;
+  // Start >0 so init-time writes (migration, sync restore) don't pollute
+  // the undo stack. Decremented to 0 once init completes.
+  let suppressUndoCapture = 1;
+  let undoBtn = document.getElementById('undo-btn'), redoBtn = document.getElementById('redo-btn');
+
+  // ── Multi-tab DOM sync helpers ───────────────────────────────────────────
+  // Annotation chip state must stay consistent across every open tab and window,
+  // not just the tab that happens to be active when the popup is open.
+  //
+  // broadcastRemove: safe to send to ALL tabs — the content script ignores the
+  //   message when it finds no matching chip, so non-matching pages are no-ops.
+  // broadcastRestore: scoped to the annotation's own URL — we only want to
+  //   inject a chip on pages that are actually showing that URL.
+
+  function broadcastRemove(annId, xpath) {
+    chrome.tabs.query({}, tabs => {
+      tabs.forEach(tab =>
+        chrome.tabs.sendMessage(tab.id, { type: 'removeAnnotation', annId, xpath }).catch(() => {})
+      );
+    });
+  }
+
+  function broadcastRestore(ann) {
+    const normUrl = (() => {
+      try { const u = new URL(ann.url || ''); return u.origin + u.pathname; } catch { return ann.url || ''; }
+    })();
+    chrome.tabs.query({}, tabs => {
+      tabs
+        .filter(tab => {
+          try { const u = new URL(tab.url || ''); return (u.origin + u.pathname) === normUrl; } catch { return tab.url === ann.url; }
         })
-      );
-    }
-    const c = document.getElementById("annotations-list"),
-      d = document.getElementById("history-panel"),
-      u = document.getElementById("settings-panel"),
-      p = document.getElementById("count-badge"),
-      h = document.getElementById("copy-btn"),
-      m = document.getElementById("clear-btn"),
-      y = document.getElementById("history-btn"),
-      g = document.getElementById("settings-btn"),
-      f = document.getElementById("search-btn"),
-      v = document.getElementById("search-bar"),
-      b = document.getElementById("search-input"),
-      w = document.getElementById("search-count"),
-      k = document.getElementById("restore-banner"),
-      E = document.getElementById("clear-undo-banner"),
-      A = document.querySelector(".footer");
-    document.getElementById("history-panel").addEventListener("click", (t) => {
-      if (t.target.closest("button")) return;
-      const e = t.target.closest(".hist-clickable-text");
-      e &&
-        (function (t) {
-          const e = document.getElementById("hist-text-modal");
-          e && e.remove();
-          const n = document.createElement("div");
-          ((n.id = "hist-text-modal"),
-            (n.className = "hist-text-modal"),
-            (n.innerHTML =
-              '\n      <div class="hist-text-modal-box" role="dialog" aria-label="Selectable text">\n        <button class="hist-text-modal-close" title="Close (Esc)" aria-label="Close">✕</button>\n        <textarea readonly class="hist-text-modal-area"></textarea>\n      </div>'));
-          const o = n.querySelector(".hist-text-modal-area");
-          o.value = t || "";
-          const a = n.querySelector(".hist-text-modal-close"),
-            s = () => {
-              try {
-                n.remove();
-              } catch (t) {}
-              document.removeEventListener("keydown", r, !0);
-            },
-            r = (t) => {
-              "Escape" === t.key && (t.preventDefault(), s());
-            };
-          (n.addEventListener("click", (t) => {
-            t.target === n && s();
-          }),
-            a.addEventListener("click", s),
-            document.addEventListener("keydown", r, !0),
-            document.body.appendChild(n),
-            setTimeout(() => {
-              (o.focus(), o.select());
-            }, 0));
-        })(null != e.dataset.fullText ? e.dataset.fullText : e.textContent);
+        .forEach(tab =>
+          chrome.tabs.sendMessage(tab.id, { type: 'restoreAnnotation', ann }).catch(() => {})
+        );
     });
-    const x = "annotationHistory",
-      S = "copyHistory",
-      $ = "annotatorSettings",
-      L = "savedForLater",
-      C = "copyAllSnapshots",
-      I = "_annStore",
-      T = "_storageMigratedV2",
-      Bk = "_copyLogIdsBackfilledV1",
-      _ = "ann_sync_",
-      q = "annv2_";
-    let B = !1,
-      M = !1,
-      H = "annotations",
-      D = !1,
-      N = !1,
-      O = [],
-      j = 0,
-      P = null,
-      F = null,
-      R = null;
-    const U = ["annotations", x, S, L, C, I, $];
-    let K = [],
-      V = [],
-      W = null,
-      z = null,
-      G = 1,
-      J = document.getElementById("undo-btn"),
-      X = document.getElementById("redo-btn");
-    function Y(t, e) {
-      chrome.tabs.query({}, (n) => {
-        n.forEach((n) =>
-          chrome.tabs
-            .sendMessage(n.id, { type: "removeAnnotation", annId: t, xpath: e })
-            .catch(() => {}),
-        );
+  }
+
+  // ─── Compression / serialization helpers ─────────────────────────────────
+  // Pre-process a payload to make it as small as possible BEFORE compression:
+  //   - drop null/undefined/empty fields
+  //   - rename annotation keys to single-letter equivalents
+  //   - group annotations by URL so the URL string isn't repeated per item
+  // Then gzip with maximum compression via the CompressionStream API and
+  // base64-encode so it can be stored as a string in chrome.storage.sync.
+  //
+  // File format: a single object {v, a, h, c, sl, s} → gzip → base64.
+  const ANN_SHORT_KEYS = {
+    id: 'i', url: 'u', tag: 'g', elId: 'e', classes: 'c',
+    xpath: 'x', comment: 't', timestamp: 's', pageLevel: 'p', deletedAt: 'd',
+    text: 'tx',
+  };
+  const ANN_LONG_KEYS = Object.fromEntries(
+    Object.entries(ANN_SHORT_KEYS).map(([l, s]) => [s, l])
+  );
+
+  function shortenAnn(ann) {
+    const out = {};
+    for (const [k, v] of Object.entries(ann)) {
+      if (v === null || v === undefined || v === '') continue;
+      const sk = ANN_SHORT_KEYS[k] || k;
+      out[sk] = v;
+    }
+    return out;
+  }
+
+  function expandAnn(short) {
+    const out = {};
+    for (const [k, v] of Object.entries(short)) {
+      const lk = ANN_LONG_KEYS[k] || k;
+      out[lk] = v;
+    }
+    return out;
+  }
+
+  // Group annotations by URL into [[url, [shortAnnWithoutUrl, ...]], ...]
+  function groupByUrl(anns) {
+    const map = new Map();
+    anns.forEach(ann => {
+      const url = ann.url || '';
+      const short = shortenAnn(ann);
+      delete short.u; // url moved to group key
+      if (!map.has(url)) map.set(url, []);
+      map.get(url).push(short);
+    });
+    return Array.from(map.entries());
+  }
+
+  function ungroupByUrl(grouped) {
+    const out = [];
+    grouped.forEach(([url, items]) => {
+      items.forEach(s => {
+        const ann = expandAnn(s);
+        ann.url = url;
+        out.push(ann);
       });
-    }
-    function Q(t) {
-      const e = (() => {
-        try {
-          const e = new URL(t.url || "");
-          return e.origin + e.pathname;
-        } catch {
-          return t.url || "";
-        }
-      })();
-      chrome.tabs.query({}, (n) => {
-        n.filter((n) => {
-          try {
-            const t = new URL(n.url || "");
-            return t.origin + t.pathname === e;
-          } catch {
-            return n.url === t.url;
-          }
-        }).forEach((e) =>
-          chrome.tabs
-            .sendMessage(e.id, { type: "restoreAnnotation", ann: t })
-            .catch(() => {}),
-        );
-      });
-    }
-    const Z = {
-        id: "i",
-        url: "u",
-        tag: "g",
-        elId: "e",
-        classes: "c",
-        xpath: "x",
-        comment: "t",
-        timestamp: "s",
-        pageLevel: "p",
-        deletedAt: "d",
-        text: "tx",
-      },
-      tt = Object.fromEntries(Object.entries(Z).map(([t, e]) => [e, t]));
-    function et(t) {
-      const e = new Map();
-      return (
-        t.forEach((t) => {
-          const n = t.url || "",
-            o = (function (t) {
-              const e = {};
-              for (const [n, o] of Object.entries(t))
-                null != o && "" !== o && (e[Z[n] || n] = o);
-              return e;
-            })(t);
-          (delete o.u, e.has(n) || e.set(n, []), e.get(n).push(o));
-        }),
-        Array.from(e.entries())
-      );
-    }
-    function nt(t) {
-      const e = [];
-      return (
-        t.forEach(([t, n]) => {
-          n.forEach((n) => {
-            const o = (function (t) {
-              const e = {};
-              for (const [n, o] of Object.entries(t)) e[tt[n] || n] = o;
-              return e;
-            })(n);
-            ((o.url = t), e.push(o));
-          });
-        }),
-        e
-      );
-    }
-    function ot({
-      annotations: t = [],
-      history: e = [],
-      copyHistory: n = [],
-      savedForLater: o = [],
-      settings: a = {},
-    } = {}) {
-      const s = { v: 2 };
-      return (
-        t.length && (s.a = et(t)),
-        e.length && (s.h = et(e)),
-        n.length &&
-          (s.c = n.map((t) => {
-            const e = {};
-            return (
-              t.timestamp && (e.s = t.timestamp),
-              t.output && (e.o = t.output),
-              t.count && (e.n = t.count),
-              Array.isArray(t.annotationIds) &&
-                t.annotationIds.length &&
-                (e.a = t.annotationIds),
-              Array.isArray(t.annotations) &&
-                t.annotations.length &&
-                (e.x = et(t.annotations)),
-              e
-            );
-          })),
-        o.length &&
-          (s.sl = o.map((t) => ({
-            i: t.id,
-            s: t.savedAt,
-            n: t.count,
-            a: et(t.annotations || []),
-          }))),
-        a && Object.keys(a).length && (s.s = a),
-        s
-      );
-    }
-    function at(t) {
-      return t && "object" == typeof t
-        ? {
-            annotations: t.a ? nt(t.a) : [],
-            history: t.h ? nt(t.h) : [],
-            copyHistory: Array.isArray(t.c)
-              ? t.c.map((t) => ({
-                  timestamp: t.s || t.timestamp,
-                  output: t.o || t.output,
-                  count: t.n || t.count || 0,
-                  annotationIds: Array.isArray(t.a) ? t.a : [],
-                  annotations: t.x ? nt(t.x) : [],
-                }))
-              : [],
-            savedForLater: Array.isArray(t.sl)
-              ? t.sl.map((t) => ({
-                  id: t.i || t.id,
-                  savedAt: t.s || t.savedAt,
-                  count: t.n || t.count || 0,
-                  annotations: t.a ? nt(t.a) : t.annotations || [],
-                }))
-              : [],
-            settings: t.s || {},
-          }
-        : {};
-    }
-    function st(t, e) {
-      const n = yt(e),
-        o = (e.comment || "").trim(),
-        a = (e.text || "").trim(),
-        s = (e.url || "").trim(),
-        r = e.timestamp ? new Date(e.timestamp).toISOString() : "";
-      return `${t}. \`${n.replace(/`/g, "\\`")}\`${o ? `\n   - ${o.replace(/\n/g, "\n     ")}` : ""}${a ? `\n   - _"${a.replace(/\n/g, " ").slice(0, 240)}"_` : ""}${s ? `\n   - ${s}` : ""}${r ? `\n   - ${r}` : ""}\n`;
-    }
-    async function rt(t) {
-      const e = new CompressionStream("gzip"),
-        n = e.writable.getWriter();
-      (n.write(new TextEncoder().encode(t)), n.close());
-      const o = await new Response(e.readable).arrayBuffer();
-      return new Uint8Array(o);
-    }
-    async function it(t) {
-      const e = new DecompressionStream("gzip"),
-        n = e.writable.getWriter();
-      (n.write(t).catch(() => {}), n.close().catch(() => {}));
-      const o = await new Response(e.readable).arrayBuffer();
-      return new TextDecoder().decode(o);
-    }
-    async function lt(t) {
-      const e = JSON.stringify(t);
-      return (function (t) {
-        let e = "";
-        for (let n = 0; n < t.length; n += 32768)
-          e += String.fromCharCode.apply(null, t.subarray(n, n + 32768));
-        return btoa(e);
-      })(await rt(e));
-    }
-    async function ct(t) {
-      const e = (function (t) {
-          const e = atob(t),
-            n = new Uint8Array(e.length);
-          for (let t = 0; t < e.length; t++) n[t] = e.charCodeAt(t);
-          return n;
-        })(t),
-        n = await it(e);
-      return JSON.parse(n);
-    }
-    const dt = {
-      shortcut: { modifier: "alt" },
-      prependText: "",
-      appendText: "",
-      darkMode: !1,
-      maxHistoryLength: 200,
-      historyLimits: { annotations: 200, saved: 20, copies: 50 },
-      backupEnabled: !0,
-      buttonActions: {
-        copyBtn: { left: "copyAll", right: "cutAll" },
-        clearBtn: { left: "clearAll", right: "saveForLater" },
-      },
-      undoShortcut: { modifier: "mod", key: "z" },
-      redoShortcut: { modifier: "mod", key: "y" },
+    });
+    return out;
+  }
+
+  function buildBundle({ annotations = [], history = [], copyHistory = [], savedForLater = [], settings = {} } = {}) {
+    const bundle = { v: 2 };
+    if (annotations.length) bundle.a = groupByUrl(annotations);
+    if (history.length)     bundle.h = groupByUrl(history);
+    if (copyHistory.length) bundle.c = copyHistory.map(c => {
+      const o = {};
+      if (c.timestamp) o.s = c.timestamp;
+      if (c.output)    o.o = c.output;
+      if (c.count)     o.n = c.count;
+      // Preserve annotation IDs and snapshot objects so restore buttons
+      // survive export → import round-trips.
+      if (Array.isArray(c.annotationIds) && c.annotationIds.length) o.a = c.annotationIds;
+      if (Array.isArray(c.annotations)   && c.annotations.length)   o.x = groupByUrl(c.annotations);
+      return o;
+    });
+    if (savedForLater.length) bundle.sl = savedForLater.map(set => ({
+      i: set.id,
+      s: set.savedAt,
+      n: set.count,
+      a: groupByUrl(set.annotations || []),
+    }));
+    if (settings && Object.keys(settings).length) bundle.s = settings;
+    return bundle;
+  }
+
+  function unpackBundle(bundle) {
+    if (!bundle || typeof bundle !== 'object') return {};
+    return {
+      annotations:   bundle.a  ? ungroupByUrl(bundle.a)  : [],
+      history:       bundle.h  ? ungroupByUrl(bundle.h)  : [],
+      copyHistory:   Array.isArray(bundle.c) ? bundle.c.map(o => ({
+        timestamp:     o.s || o.timestamp,
+        output:        o.o || o.output,
+        count:         o.n || o.count || 0,
+        annotationIds: Array.isArray(o.a) ? o.a : [],
+        annotations:   o.x ? ungroupByUrl(o.x) : [],
+      })) : [],
+      savedForLater: Array.isArray(bundle.sl) ? bundle.sl.map(s => ({
+        id:          s.i || s.id,
+        savedAt:     s.s || s.savedAt,
+        count:       s.n || s.count || 0,
+        annotations: s.a ? ungroupByUrl(s.a) : (s.annotations || []),
+      })) : [],
+      settings:      bundle.s || {},
     };
-    function ut(t) {
-      chrome.storage.local.get({ [$]: dt }, (e) => {
-        const n = e[$] || {},
-          o = { ...dt, ...n };
-        ((o.historyLimits = {
-          ...dt.historyLimits,
-          ...(n.historyLimits || {}),
-        }),
-          t(o));
+  }
+
+  // ── Change 1: formatLine — format a single annotation as a Markdown bullet ─
+  // Used by copy-all, cut-all, copy-by-url, and export flows.
+  function formatLine(index, ann) {
+    const sel  = getSelector(ann);   // uses existing getSelector helper
+    const note = (ann.comment || '').trim();
+    const text = (ann.text    || '').trim();
+    const url  = (ann.url     || '').trim();
+    const ts   = ann.timestamp ? new Date(ann.timestamp).toISOString() : '';
+
+    // Escape pipes and backticks for inline code spans.
+    const safeSel   = sel.replace(/`/g, '\\`');
+    const noteBlock = note ? `\n   - ${note.replace(/\n/g, '\n     ')}` : '';
+    const textBlock = text ? `\n   - _"${text.replace(/\n/g, ' ').slice(0, 240)}"_` : '';
+    const urlBlock  = url  ? `\n   - ${url}` : '';
+    const tsBlock   = ts   ? `\n   - ${ts}` : '';
+
+    return `${index}. \`${safeSel}\`${noteBlock}${textBlock}${urlBlock}${tsBlock}\n`;
+  }
+
+  async function gzipString(str) {
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    writer.write(new TextEncoder().encode(str));
+    writer.close();
+    const buf = await new Response(cs.readable).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  async function gunzipToString(bytes) {
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    // Suppress unhandled rejections from write/close — the error surfaces
+    // through the readable side and is caught by the caller's try/catch.
+    writer.write(bytes).catch(() => {});
+    writer.close().catch(() => {});
+    const buf = await new Response(ds.readable).arrayBuffer();
+    return new TextDecoder().decode(buf);
+  }
+
+  function bytesToBase64(bytes) {
+    let s = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(s);
+  }
+
+  function base64ToBytes(b64) {
+    const s = atob(b64);
+    const bytes = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+    return bytes;
+  }
+
+  async function compressBundle(bundle) {
+    const json = JSON.stringify(bundle);
+    const gz   = await gzipString(json);
+    return bytesToBase64(gz);
+  }
+
+  async function decompressBundle(b64) {
+    const gz   = base64ToBytes(b64);
+    const json = await gunzipToString(gz);
+    return JSON.parse(json);
+  }
+
+  // ── Sync backup ─────────────────────────────────────────────────────────
+  // Compresses the FULL dataset (annotations + history + saved-for-later +
+  // copy log + settings) and writes it to chrome.storage.sync in chunks. If
+  // the compressed payload doesn't fit, history is truncated oldest-first
+  // until it does. Truncation is signaled via _syncTruncated for the UI.
+  function backupToSync() {
+    loadSettings(s => {
+      if (s.backupEnabled === false) return;
+      clearTimeout(syncBackupTimer);
+      syncBackupTimer = setTimeout(() => { performSyncBackup(); }, 1500);
+    });
+  }
+
+  async function performSyncBackup() {
+    try {
+      const local = await new Promise(res => chrome.storage.local.get({
+        annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
+        [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {}, [ANN_STORE_KEY]: {},
+      }, res));
+
+      const annotations   = local.annotations || [];
+      const store         = local[ANN_STORE_KEY] || {};
+      // Resolve refs to full data for the backup payload (consumers expect
+      // the bundle to be self-describing). Skip orphans gracefully.
+      let   history       = (local[HISTORY_KEY] || []).map(h => {
+        const ann = resolveRef(h, store);
+        return ann ? { ...ann, deletedAt: h.deletedAt || ann.deletedAt } : null;
+      }).filter(Boolean);
+      const copyHistory   = (local[COPY_HISTORY_KEY] || []).map(c => {
+        const { annotationIds, ...rest } = c; return rest;
       });
-    }
-    function HL_get(t, e) {
-      const n = (t && t.historyLimits) || {};
-      if (Object.prototype.hasOwnProperty.call(n, e) && null != n[e])
-        return Math.max(0, parseInt(n[e], 10) || 0);
-      if ("annotations" === e && t && null != t.maxHistoryLength)
-        return Math.max(0, parseInt(t.maxHistoryLength, 10) || 0);
-      return dt.historyLimits[e];
-    }
-    function pt(t, e) {
-      ut((n) => {
-        const o = { ...n, ...t };
-        (t &&
-          t.historyLimits &&
-          (o.historyLimits = {
-            ...(n.historyLimits || dt.historyLimits),
-            ...t.historyLimits,
-          }),
-          a() || ((o.darkMode = !1), (o.prependText = ""), (o.appendText = "")),
-          chrome.storage.local.set({ [$]: o }, () => {
-            e && e(o);
-          }));
+      const savedForLater = (local[SAVED_LATER_KEY] || []).map(set => {
+        const anns = Array.isArray(set.annotationIds)
+          ? resolveList(set.annotationIds, store)
+          : (set.annotations || []);
+        return {
+          id:          set.id,
+          savedAt:     set.savedAt,
+          count:       set.count || anns.length,
+          annotations: anns,
+        };
       });
-    }
-    function ht(t) {
-      document.body.dataset.theme = a() && t ? "dark" : "light";
-    }
-    function mt(t) {
-      return String(t ?? "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-    }
-    function yt(t) {
-      if (t.pageLevel || "page" === t.tag) return "(whole page)";
-      const e =
-          void 0 !== t.elId
-            ? t.elId
-              ? `#${t.elId}`
-              : ""
-            : t.id && "N/A" !== t.id && !t.id.startsWith("ann_")
-              ? t.id
-              : "",
-        n = t.classes && "N/A" !== t.classes ? t.classes : "";
-      return `${t.tag}${e}${n}`;
-    }
-    function gt(t) {
-      const e = yt(t);
-      return !t || t.pageLevel || "page" === t.tag
-        ? e
-        : Array.isArray(t.contextElements) && 0 !== t.contextElements.length
-          ? [
-              e,
-              ...t.contextElements.map((t) => {
-                const e = t.elId ? `#${t.elId}` : "",
-                  n = t.classes && "N/A" !== t.classes ? t.classes : "";
-                return `${t.tag || "?"}${e}${n}`;
-              }),
-            ].join(", ")
-          : e;
-    }
-    function ft(t) {
-      if (!t) return "";
+      const settings      = local[SETTINGS_KEY] || {};
+
+      let truncated = false;
+      let payload   = '';
+
+      // Try compressing; if too large, drop oldest history entries until it fits.
+      while (true) {
+        const bundle = buildBundle({ annotations, history, copyHistory, savedForLater, settings });
+        payload = await compressBundle(bundle);
+        if (payload.length <= SYNC_MAX_BYTES) break;
+        if (history.length === 0) break; // nothing more we can shed
+        // Drop oldest 10% (at least 1) — newer entries are at the end
+        const drop = Math.max(1, Math.floor(history.length * 0.1));
+        history = history.slice(drop);
+        truncated = true;
+      }
+
+      if (payload.length > SYNC_MAX_BYTES) {
+        chrome.storage.local.set({
+          _syncBackupError: 'Data still exceeds sync storage limit even after truncation.',
+          _syncTruncated:   truncated,
+        });
+        return;
+      }
+
+      // Chunk and write
+      const chunks = [];
+      for (let i = 0; i < payload.length; i += SYNC_CHUNK_SIZE) {
+        chunks.push(payload.slice(i, i + SYNC_CHUNK_SIZE));
+      }
+
+      const existing  = await new Promise(res => chrome.storage.sync.get(null, res));
+      const staleKeys = Object.keys(existing).filter(k => k.startsWith(SYNC_PREFIX) || k.startsWith(SYNC_V2_PREFIX));
+      if (staleKeys.length) {
+        await new Promise(res => chrome.storage.sync.remove(staleKeys, res));
+      }
+
+      const data = {
+        [`${SYNC_V2_PREFIX}count`]: chunks.length,
+        [`${SYNC_V2_PREFIX}ts`]:    new Date().toISOString(),
+        [`${SYNC_V2_PREFIX}ver`]:   2,
+      };
+      chunks.forEach((c, i) => { data[`${SYNC_V2_PREFIX}${i}`] = c; });
+
       try {
-        const e = new Date(t),
-          n = new Date(e.getTime());
-        return (
-          n.getSeconds() >= 30 && n.setMinutes(n.getMinutes() + 1),
-          n.setSeconds(0, 0),
-          `${n.toLocaleDateString(void 0, { month: "numeric", day: "numeric", year: "2-digit" })}, ${n.toLocaleTimeString(void 0, { hour: "numeric", minute: "2-digit" })}`
-        );
-      } catch {
-        return t;
+        await chrome.storage.sync.set(data);
+        chrome.storage.local.set({
+          _lastSyncBackup:  new Date().toISOString(),
+          _syncBackupError: null,
+          _syncTruncated:   truncated,
+        });
+      } catch (err) {
+        chrome.storage.local.set({
+          _syncBackupError: 'Sync write failed: ' + (err?.message || err),
+          _syncTruncated:   truncated,
+        });
+        console.warn('[Annotator] Sync write failed:', err);
+      }
+    } catch (e) {
+      console.warn('[Annotator] Sync backup error:', e);
+    }
+  }
+
+  // Read sync. Returns the unpacked bundle (annotations, history, copyHistory,
+  // savedForLater, settings) plus the timestamp. Falls back to the legacy
+  // (annotations-only) sync format if v2 isn't present.
+  async function readFromSync() {
+    const sync = await new Promise(res => chrome.storage.sync.get(null, res));
+    const v2Count = sync[`${SYNC_V2_PREFIX}count`];
+    const v2Ts    = sync[`${SYNC_V2_PREFIX}ts`];
+    if (v2Count && v2Count > 0) {
+      let payload = '';
+      for (let i = 0; i < v2Count; i++) payload += sync[`${SYNC_V2_PREFIX}${i}`] || '';
+      try {
+        const bundle = await decompressBundle(payload);
+        return { ...unpackBundle(bundle), ts: v2Ts, format: 'v2' };
+      } catch (e) {
+        console.warn('[Annotator] v2 sync parse error:', e);
       }
     }
-    function vt(t) {
-      ut((e) => {
-        const n = HL_get(e, "annotations"),
-          o = HL_get(e, "saved"),
-          a = HL_get(e, "copies");
-        chrome.storage.local.get(
-          { [x]: [], [L]: [], [S]: [], [I]: {} },
-          (s) => {
-            const r = { ...(s[I] || {}) },
-              i = {};
-            if (n > 0) {
-              const t = s[x] || [];
-              if (t.length > n) {
-                const e = t.slice(0, t.length - n),
-                  o = t.slice(-n);
-                (Et(r, e.map((t) => t && t.id).filter(Boolean)), (i[x] = o));
-              }
-            }
-            if (o > 0) {
-              const t = s[L] || [];
-              if (t.length > o) {
-                const e = [...t].sort((t, e) => {
-                    const n =
-                        t && t.savedAt ? new Date(t.savedAt).getTime() : 0,
-                      o = e && e.savedAt ? new Date(e.savedAt).getTime() : 0;
-                    return n - o;
-                  }),
-                  n = e.slice(0, e.length - o),
-                  a = new Set(e.slice(-o).map((t) => t && t.id)),
-                  s = t.filter((t) => t && a.has(t.id));
-                (n.forEach((t) => {
-                  if (!t) return;
-                  const e = Array.isArray(t.annotationIds)
-                    ? t.annotationIds
-                    : (t.annotations || []).map((t) => t && t.id);
-                  Et(r, (e || []).filter(Boolean));
-                }),
-                  (i[L] = s));
-              }
-            }
-            if (a > 0) {
-              const t = s[S] || [];
-              if (t.length > a) {
-                const e = [...t].sort((t, e) => {
-                    const n =
-                        t && t.timestamp ? new Date(t.timestamp).getTime() : 0,
-                      o =
-                        e && e.timestamp ? new Date(e.timestamp).getTime() : 0;
-                    return n - o;
-                  }),
-                  n = e.slice(0, e.length - a),
-                  o = new Set(e.slice(-a).map((t) => t && t.timestamp)),
-                  s = t.filter((t) => t && o.has(t.timestamp));
-                (n.forEach((t) => Et(r, At2_ids(t && t.annotationIds))),
-                  (i[S] = s));
-              }
-            }
-            const l = Object.keys(i);
-            if (0 === l.length) return void (t && t());
-            ((i[I] = r), chrome.storage.local.set(i, t));
-          },
-        );
+    // Legacy fallback (annotations only, plain chunks)
+    const count = sync[`${SYNC_PREFIX}count`];
+    const ts    = sync[`${SYNC_PREFIX}ts`];
+    if (!count || count === 0) return null;
+    let json = '';
+    for (let i = 0; i < count; i++) json += sync[`${SYNC_PREFIX}${i}`] || '';
+    try {
+      const anns = JSON.parse(json);
+      return {
+        annotations:   Array.isArray(anns) ? anns : [],
+        history:       [], copyHistory: [], savedForLater: [], settings: {},
+        ts, format: 'v1',
+      };
+    } catch { return null; }
+  }
+
+  // ── Settings defaults ────────────────────────────────────────────────────
+  // Per-tab history limits (0 = indefinite for that tab). These are sized to
+  // be "generous by default" so typical users never hit them, while still
+  // keeping storage bounded.
+  const DEFAULT_HISTORY_LIMITS = {
+    annotations: 200,   // Annotation History tab (deleted annotations)
+    saved:       20,    // Saved for Later tab (sets)
+    copies:      50,    // Copy Log tab (copy snapshots)
+  };
+  const DEFAULT_SETTINGS = {
+    shortcut:         { modifier: 'alt' }, // customizable annotation trigger
+    prependText:      '',                  // prepended to markdown output
+    appendText:       '',                  // appended to markdown output
+    darkMode:         false,               // dark / light theme toggle
+    maxHistoryLength: 200,                 // legacy key, kept for back-compat / fallback
+    historyLimits:    { ...DEFAULT_HISTORY_LIMITS }, // per-tab limits, 0 = indefinite
+    backupEnabled:    true,               // enable/disable auto-backup to sync
+    buttonActions: {
+      copyBtn:  { left: 'copyAll',  right: 'cutAll'       },
+      clearBtn: { left: 'clearAll', right: 'saveForLater' },
+    },
+    // 'mod' = Ctrl on Win/Linux, Cmd on macOS.
+    undoShortcut:     { modifier: 'mod', key: 'z' },
+    redoShortcut:     { modifier: 'mod', key: 'y' },
+  };
+
+  // Resolve per-tab limit from a settings object, falling back to legacy
+  // maxHistoryLength for the annotation tab only (so existing installs keep
+  // their old preference for that tab).
+  function getHistoryLimit(s, tab) {
+    const limits = (s && s.historyLimits) || {};
+    if (Object.prototype.hasOwnProperty.call(limits, tab)
+        && limits[tab] !== undefined && limits[tab] !== null) {
+      return Math.max(0, parseInt(limits[tab], 10) || 0);
+    }
+    if (tab === 'annotations'
+        && s && s.maxHistoryLength !== undefined && s.maxHistoryLength !== null) {
+      return Math.max(0, parseInt(s.maxHistoryLength, 10) || 0);
+    }
+    return DEFAULT_HISTORY_LIMITS[tab];
+  }
+
+  function loadSettings(cb) {
+    chrome.storage.local.get({ [SETTINGS_KEY]: DEFAULT_SETTINGS }, r => {
+      const stored = r[SETTINGS_KEY] || {};
+      const merged = { ...DEFAULT_SETTINGS, ...stored };
+      // Deep-merge historyLimits so a partial stored object doesn't wipe
+      // defaults for other tabs.
+      merged.historyLimits = {
+        ...DEFAULT_HISTORY_LIMITS,
+        ...(stored.historyLimits || {}),
+      };
+      cb(merged);
+    });
+  }
+
+  function saveSettings(patch, cb) {
+    loadSettings(current => {
+      const updated = { ...current, ...patch };
+      // Deep-merge historyLimits so partial patches don't wipe other tabs.
+      if (patch && patch.historyLimits) {
+        updated.historyLimits = {
+          ...(current.historyLimits || DEFAULT_HISTORY_LIMITS),
+          ...patch.historyLimits,
+        };
+      }
+      chrome.storage.local.set({ [SETTINGS_KEY]: updated }, () => {
+        if (cb) cb(updated);
       });
-    }
-    function At2_ids(t) {
-      return Array.isArray(t)
-        ? t.map((t) => ("string" == typeof t ? t : t && t.id)).filter(Boolean)
-        : [];
-    }
-    function bt(t) {
-      chrome.storage.local.get(
-        { annotations: [], [x]: [], [S]: [], [L]: [], [I]: {} },
-        (e) => t(e),
-      );
-    }
-    function wt(t, e) {
-      return t
-        ? "string" == typeof t
-          ? e[t]
-            ? kt(e[t])
-            : null
-          : t.id && e[t.id]
-            ? { ...kt(e[t.id]), ...t }
-            : void 0 !== t.tag || void 0 !== t.url
-              ? t
-              : t.id && e[t.id]
-                ? kt(e[t.id])
-                : null
-        : null;
-    }
-    function kt(t) {
-      const { _refCount: e, ...n } = t || {};
-      return n;
-    }
-    function Et(t, e) {
-      e.forEach((e) => {
-        e &&
-          t[e] &&
-          ((t[e]._refCount = (t[e]._refCount || 1) - 1),
-          t[e]._refCount <= 0 && delete t[e]);
-      });
-    }
-    function At(t, e) {
-      if (!Array.isArray(t)) return [];
-      const n = [];
-      return (
-        t.forEach((t) => {
-          const o = wt(t, e);
-          o && n.push(o);
-        }),
-        n
-      );
-    }
-    function xt(t) {
-      return Array.isArray(t)
-        ? t.map((t) => ("string" == typeof t ? t : t && t.id)).filter(Boolean)
-        : [];
-    }
-    function St(t) {
-      chrome.storage.local.get({ [T]: !1 }, (e) => {
-        e[T]
-          ? t && t()
-          : bt((e) => {
-              try {
-                const n = { ...(e[I] || {}) },
-                  o = {};
-                (e.annotations || []).forEach((t) => {
-                  t && t.id && (o[t.id] = t);
-                });
-                const a = (e[x] || []).map((t) => {
-                    if (!t || !t.id) return t;
-                    if (
-                      void 0 !== t.tag ||
-                      void 0 !== t.url ||
-                      void 0 !== t.xpath
-                    ) {
-                      const { id: e, deletedAt: o, ...a } = t,
-                        s = { id: e, ...a };
-                      return (
-                        n[e]
-                          ? (n[e] = {
-                              ...s,
-                              ...n[e],
-                              _refCount: n[e]._refCount,
-                            })
-                          : (n[e] = { ...s, _refCount: 0 }),
-                        (n[e]._refCount = (n[e]._refCount || 0) + 1),
-                        { id: e, deletedAt: o }
-                      );
-                    }
-                    return (t.id && n[t.id], t);
-                  }),
-                  s = (e[L] || []).map((t) => {
-                    if (!t) return t;
-                    if (Array.isArray(t.annotationIds)) return t;
-                    const e = Array.isArray(t.annotations) ? t.annotations : [],
-                      o = [];
-                    return (
-                      e.forEach((t) => {
-                        t &&
-                          t.id &&
-                          (o.push(t.id),
-                          n[t.id] || (n[t.id] = { ...t, _refCount: 0 }),
-                          (n[t.id]._refCount = (n[t.id]._refCount || 0) + 1));
-                      }),
-                      {
-                        id: t.id,
-                        savedAt: t.savedAt,
-                        count: t.count || o.length,
-                        annotationIds: o,
-                      }
-                    );
-                  }),
-                  r = (e[S] || []).map((t) =>
-                    t
-                      ? Array.isArray(t.annotationIds)
-                        ? t
-                        : { ...t, annotationIds: [] }
-                      : t,
-                  );
-                chrome.storage.local.set(
-                  { [x]: a, [L]: s, [S]: r, [I]: n, [T]: !0 },
-                  () => {
-                    t && t();
-                  },
-                );
-              } catch (e) {
-                (console.warn(
-                  "[Annotator] Storage migration failed; keeping legacy format.",
-                  e,
-                ),
-                  t && t());
-              }
+    });
+  }
+
+  // ── Dark mode ─────────────────────────────────────────────────────────────
+  function applyDarkMode(enabled) {
+    // Dark mode is a Premium feature. If the user isn't premium, ignore
+    // any stored darkMode value (including ones set while previously
+    // licensed) and stay on the light theme.
+    const effective = !!enabled && isPremium();
+    document.body.dataset.theme = effective ? 'dark' : 'light';
+  }
+
+  loadSettings(s => {
+    applyDarkMode(s.darkMode);
+    updateButtonLabels(s);
+  });
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function escHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g,  '&amp;')
+      .replace(/</g,  '&lt;')
+      .replace(/>/g,  '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function getSelector(ann) {
+    // Page-level annotation
+    if (ann.pageLevel || ann.tag === 'page') return '(whole page)';
+    const rawId = ann.elId !== undefined
+      ? (ann.elId ? `#${ann.elId}` : '')
+      : (ann.id && ann.id !== 'N/A' && !ann.id.startsWith('ann_') ? ann.id : '');
+    const cls = ann.classes && ann.classes !== 'N/A' ? ann.classes : '';
+    return `${ann.tag}${rawId}${cls}`;
+  }
+  // Display-only variant of getSelector: appends every contextElements
+  // selector after the main one, comma-separated. Used in current-annotation
+  // listings so multi-element (Alt+click) annotations show all their picks.
+  // Markdown output (formatLine) intentionally keeps using getSelector so
+  // copy/cut output is unchanged.
+  function getSelectorDisplay(ann) {
+    const main = getSelector(ann);
+    if (!ann || ann.pageLevel || ann.tag === 'page') return main;
+    if (!Array.isArray(ann.contextElements) || ann.contextElements.length === 0) return main;
+    const ctxParts = ann.contextElements.map(ctx => {
+      const cId  = ctx.elId ? `#${ctx.elId}` : '';
+      const cCls = ctx.classes && ctx.classes !== 'N/A' ? ctx.classes : '';
+      return `${ctx.tag || '?'}${cId}${cCls}`;
+    });
+    return [main, ...ctxParts].join(', ');
+  }
+
+  function formatTimestamp(ts) {
+    if (!ts) return '';
+    try {
+      // Round to the nearest whole minute (drop seconds), and show only the
+      // last 2 digits of the year (e.g. 2026 → 26).
+      const d = new Date(ts);
+      const rounded = new Date(d.getTime());
+      if (rounded.getSeconds() >= 30) rounded.setMinutes(rounded.getMinutes() + 1);
+      rounded.setSeconds(0, 0);
+      const date = rounded.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', year: '2-digit' });
+      const time = rounded.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      return `${date}, ${time}`;
+    } catch { return ts; }
+  }
+
+  // Compressed timestamp for tight UI rows (e.g. "Apr 30, 3:42p").
+  function formatCompactTimestamp(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      let h = d.getHours();
+      const m = d.getMinutes();
+      const ampm = h >= 12 ? 'p' : 'a';
+      h = h % 12; if (h === 0) h = 12;
+      const mm = m < 10 ? `0${m}` : `${m}`;
+      return `${date}, ${h}:${mm}${ampm}`;
+    } catch { return ts; }
+  }
+
+  function modLabel(mod) {
+    return MODIFIER_LABELS[mod] || 'Alt';
+  }
+
+  // ── Enforce history length limit ──────────────────────────────────────────
+  function enforceHistoryLimitInStorage(cb) {
+    loadSettings(s => {
+      const annLimit   = getHistoryLimit(s, 'annotations');
+      const savedLimit = getHistoryLimit(s, 'saved');
+      const copyLimit  = getHistoryLimit(s, 'copies');
+
+      chrome.storage.local.get({
+        [HISTORY_KEY]:      [],
+        [SAVED_LATER_KEY]:  [],
+        [COPY_HISTORY_KEY]: [],
+        [ANN_STORE_KEY]:    {},
+      }, r => {
+        const store = { ...(r[ANN_STORE_KEY] || {}) };
+        const toSet = {};
+
+        // Annotation History — newest stay (slice from the tail).
+        if (annLimit > 0) {
+          const hist = r[HISTORY_KEY] || [];
+          if (hist.length > annLimit) {
+            const dropped = hist.slice(0, hist.length - annLimit);
+            const trimmed = hist.slice(-annLimit);
+            refStoreDec(store, dropped.map(h => h && h.id).filter(Boolean));
+            toSet[HISTORY_KEY] = trimmed;
+          }
+        }
+
+        // Saved-for-Later sets — newest by savedAt stay. Decrement ref counts
+        // for annotations that belonged only to dropped sets.
+        if (savedLimit > 0) {
+          const sets = r[SAVED_LATER_KEY] || [];
+          if (sets.length > savedLimit) {
+            const sorted = [...sets].sort((a, b) => {
+              const ta = a && a.savedAt ? new Date(a.savedAt).getTime() : 0;
+              const tb = b && b.savedAt ? new Date(b.savedAt).getTime() : 0;
+              return ta - tb;
             });
+            const dropped = sorted.slice(0, sorted.length - savedLimit);
+            const keepIds = new Set(sorted.slice(-savedLimit).map(s => s && s.id));
+            const trimmed = sets.filter(s => s && keepIds.has(s.id));
+            dropped.forEach(set => {
+              if (!set) return;
+              const ids = Array.isArray(set.annotationIds)
+                ? set.annotationIds
+                : (set.annotations || []).map(a => a && a.id);
+              refStoreDec(store, (ids || []).filter(Boolean));
+            });
+            toSet[SAVED_LATER_KEY] = trimmed;
+          }
+        }
+
+        // Copy Log — newest by timestamp stay; decrement refs for dropped rows.
+        if (copyLimit > 0) {
+          const copyHist = r[COPY_HISTORY_KEY] || [];
+          if (copyHist.length > copyLimit) {
+            const sorted = [...copyHist].sort((a, b) => {
+              const ta = a && a.timestamp ? new Date(a.timestamp).getTime() : 0;
+              const tb = b && b.timestamp ? new Date(b.timestamp).getTime() : 0;
+              return ta - tb;
+            });
+            const dropped = sorted.slice(0, sorted.length - copyLimit);
+            const keepTs  = new Set(sorted.slice(-copyLimit).map(c => c && c.timestamp));
+            const trimmed = copyHist.filter(c => c && keepTs.has(c.timestamp));
+            dropped.forEach(c => refStoreDec(store, refIds(c && c.annotationIds)));
+            toSet[COPY_HISTORY_KEY] = trimmed;
+          }
+        }
+
+        const keys = Object.keys(toSet);
+        if (keys.length === 0) { if (cb) cb(); return; }
+        toSet[ANN_STORE_KEY] = store;
+        chrome.storage.local.set(toSet, cb);
       });
+    });
+  }
+
+  // ── Change 2: storage dedup helpers ──────────────────────────────────────
+  // Read raw storage with all dedup-related keys.
+  function readDedupStorage(cb) {
+    chrome.storage.local.get({
+      annotations: [],
+      [HISTORY_KEY]: [],
+      [COPY_HISTORY_KEY]: [],
+      [SAVED_LATER_KEY]: [],
+      [ANN_STORE_KEY]: {},
+    }, r => cb(r));
+  }
+  // Look up full annotation data given a reference (id) or a legacy full object.
+  // Returns null if the reference is orphaned and no fallback data exists.
+  function resolveRef(ref, store) {
+    if (!ref) return null;
+    if (typeof ref === 'string') return store[ref] ? stripRefMeta(store[ref]) : null;
+    // Legacy object form — already has full data.
+    if (ref.id && store[ref.id]) {
+      const merged = { ...stripRefMeta(store[ref.id]), ...ref };
+      return merged;
     }
-    (ut((t) => {
-      (ht(t.darkMode), Nt(t));
-    }),
-      s().then(() => {
-        ut((t) => ht(t.darkMode));
-      }));
-    const $t = {};
-    function Lt(t) {
-      if (!t || !t.isConnected) return;
-      t.style.height = "auto";
-      const e = t.scrollHeight;
-      if (e > 0) {
-        t.style.height = Math.max(46, e) + "px";
+    if (ref.tag !== undefined || ref.url !== undefined) return ref; // legacy full obj
+    if (ref.id) return store[ref.id] ? stripRefMeta(store[ref.id]) : null;
+    return null;
+  }
+  function stripRefMeta(entry) {
+    const { _refCount, ...rest } = entry || {};
+    return rest;
+  }
+  // Increment refcount for ids; create entries from snapshots if not present.
+  function refStoreInc(store, ids, snapshotFn) {
+    ids.forEach(id => {
+      if (!id) return;
+      if (!store[id]) {
+        const snap = snapshotFn ? snapshotFn(id) : null;
+        if (!snap) return; // can't materialize — skip rather than crash
+        store[id] = { ...snap, _refCount: 0 };
+      }
+      store[id]._refCount = (store[id]._refCount || 0) + 1;
+    });
+  }
+  function refStoreDec(store, ids) {
+    ids.forEach(id => {
+      if (!id || !store[id]) return;
+      store[id]._refCount = (store[id]._refCount || 1) - 1;
+      if (store[id]._refCount <= 0) delete store[id];
+    });
+  }
+  // Resolve a list of references (history entries / saved set ann lists / copy
+  // log id lists) into full annotation objects. Skips orphans gracefully.
+  function resolveList(refs, store) {
+    if (!Array.isArray(refs)) return [];
+    const out = [];
+    refs.forEach(r => {
+      const full = resolveRef(r, store);
+      if (full) out.push(full);
+    });
+    return out;
+  }
+  // Extract the annotation IDs out of a list of refs (whether new-format strings
+  // or legacy full objects).
+  function refIds(refs) {
+    if (!Array.isArray(refs)) return [];
+    return refs.map(r => (typeof r === 'string' ? r : r && r.id)).filter(Boolean);
+  }
+
+  // One-shot migration: convert legacy in-place full-data history/copy/saved
+  // into the dedup format. Idempotent — checks MIGRATION_FLAG.
+  function maybeMigrateStorage(cb) {
+    chrome.storage.local.get({ [MIGRATION_FLAG]: false }, flag => {
+      if (flag[MIGRATION_FLAG]) { if (cb) cb(); return; }
+      readDedupStorage(r => {
+        try {
+          const store = { ...(r[ANN_STORE_KEY] || {}) };
+          // Build snapshot lookup for live annotations (so refs in history that
+          // share an id with a live annotation can recover full data if needed).
+          const liveById = {};
+          (r.annotations || []).forEach(a => { if (a && a.id) liveById[a.id] = a; });
+
+          // History: convert legacy full annotations into id-only refs.
+          const history = (r[HISTORY_KEY] || []).map(h => {
+            if (!h || !h.id) return h;
+            // Already migrated entry — keys are just {id, deletedAt}
+            const isLegacyFull = h.tag !== undefined || h.url !== undefined || h.xpath !== undefined;
+            if (isLegacyFull) {
+              const { id, deletedAt, ...rest } = h;
+              const snap = { id, ...rest };
+              if (!store[id]) store[id] = { ...snap, _refCount: 0 };
+              else store[id] = { ...snap, ...store[id], _refCount: store[id]._refCount };
+              store[id]._refCount = (store[id]._refCount || 0) + 1;
+              return { id, deletedAt };
+            }
+            // Already a ref — bump refcount if entry exists; otherwise leave as-is
+            if (h.id && store[h.id]) {
+              // count assumed already correct
+            }
+            return h;
+          });
+
+          // Saved-for-later: convert each set's annotations array.
+          const savedForLater = (r[SAVED_LATER_KEY] || []).map(set => {
+            if (!set) return set;
+            if (Array.isArray(set.annotationIds)) return set; // already migrated
+            const anns = Array.isArray(set.annotations) ? set.annotations : [];
+            const ids = [];
+            anns.forEach(a => {
+              if (!a || !a.id) return;
+              ids.push(a.id);
+              if (!store[a.id]) store[a.id] = { ...a, _refCount: 0 };
+              store[a.id]._refCount = (store[a.id]._refCount || 0) + 1;
+            });
+            return {
+              id:           set.id,
+              savedAt:      set.savedAt,
+              count:        set.count || ids.length,
+              annotationIds: ids,
+            };
+          });
+
+          // Copy logs: legacy entries had no annotation id linkage. Leave
+          // annotationIds empty for legacy entries — Change 1's button will
+          // simply find nothing to remove for those, which is correct.
+          const copyHistory = (r[COPY_HISTORY_KEY] || []).map(c => {
+            if (!c) return c;
+            if (Array.isArray(c.annotationIds)) return c;
+            return { ...c, annotationIds: [] };
+          });
+
+          // Write everything back atomically. On failure, leave old data alone.
+          chrome.storage.local.set({
+            [HISTORY_KEY]:      history,
+            [SAVED_LATER_KEY]:  savedForLater,
+            [COPY_HISTORY_KEY]: copyHistory,
+            [ANN_STORE_KEY]:    store,
+            [MIGRATION_FLAG]:   true,
+          }, () => { if (cb) cb(); });
+        } catch (err) {
+          console.warn('[Annotator] Storage migration failed; keeping legacy format.', err);
+          if (cb) cb();
+        }
+      });
+    });
+  }
+
+  // ── Save a single annotation's comment ────────────────────────────────────
+  const saveTimers = {};
+  function saveComment(annId, value) {
+    clearTimeout(saveTimers[annId]);
+    saveTimers[annId] = setTimeout(() => {
+      isWritingFromPopup = true;
+      chrome.storage.local.get({ annotations: [] }, r => {
+        const anns = r.annotations;
+        const ann  = anns.find(a => a.id === annId);
+        if (ann) {
+          ann.comment = value;
+          chrome.storage.local.set({ annotations: anns }, () => { isWritingFromPopup = false; });
+        } else {
+          isWritingFromPopup = false;
+        }
+      });
+    }, 350);
+  }
+
+  // ── Delete a single annotation ────────────────────────────────────────────
+  function deleteAnnotation(annId) {
+    isWritingFromPopup = true;
+    readDedupStorage(r => {
+      const anns  = r.annotations;
+      const hist  = r[HISTORY_KEY];
+      const store = { ...(r[ANN_STORE_KEY] || {}) };
+      const ann   = anns.find(a => a.id === annId);
+      let newHist = hist;
+      if (ann) {
+        // Remove any existing history entries for the same id (refcount drop) and
+        // re-add a fresh deletion record. The store entry is keyed off the live ann.
+        const oldRefs = hist.filter(h => h.id === ann.id);
+        if (oldRefs.length) refStoreDec(store, oldRefs.map(h => h.id));
+        newHist = hist.filter(h => h.id !== ann.id);
+        if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+        store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+        newHist.push({ id: ann.id, deletedAt: new Date().toISOString() });
+      }
+      const remaining = anns.filter(a => a.id !== annId);
+      chrome.storage.local.set({
+        annotations:  remaining,
+        [HISTORY_KEY]: newHist,
+        [ANN_STORE_KEY]: store,
+      }, () => {
+        enforceHistoryLimitInStorage(() => {
+          isWritingFromPopup = false;
+          render(remaining);
+          if (ann) broadcastRemove(annId, ann.xpath);
+        });
+      });
+    });
+  }
+
+  // ── Copy a single group's annotations as Markdown ─────────────────────────
+  function copyGroup(url) {
+    chrome.storage.local.get({ annotations: [] }, r => {
+      const anns = r.annotations.filter(a => a.url === url && a.comment && a.comment.trim());
+      if (anns.length === 0) {
+        showToast('No annotations with notes in this group.');
         return;
       }
-      if (
-        "function" != typeof IntersectionObserver ||
-        "1" === t.dataset._autosizeObs
-      )
+      let md = `## ${url}\n`;
+      anns.forEach((ann, i) => { md += formatLine(i + 1, ann); });
+      navigator.clipboard.writeText(md.trim()).then(() => {
+        // Escape URL for use in querySelector attribute selector
+        const safeUrl = url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const btn = listEl.querySelector(`.url-copy-btn[data-url="${safeUrl}"]`);
+        if (btn) {
+          const orig = btn.innerHTML;
+          btn.innerHTML = '✅ Copied!';
+          setTimeout(() => (btn.innerHTML = orig), 1500);
+        }
+      }).catch(() => showToast('Clipboard write failed.', { kind: 'error' }));
+    });
+  }
+
+  // ── Copy a single annotation as Markdown ──────────────────────────────────
+  function copyAnnotation(annId) {
+    chrome.storage.local.get({ annotations: [] }, r => {
+      const ann = r.annotations.find(a => a.id === annId);
+      if (!ann) return;
+      const line = formatLine(1, ann).trim();
+      navigator.clipboard.writeText(line).then(() => {
+        const btn = listEl.querySelector(`.item-copy-btn[data-ann-id="${annId}"]`);
+        if (btn) {
+          const orig = btn.innerHTML;
+          btn.innerHTML = '✅';
+          setTimeout(() => (btn.innerHTML = orig), 1500);
+        }
+      }).catch(() => showToast('Clipboard write failed.', { kind: 'error' }));
+    });
+  }
+
+  // ── Clear a URL group (saves to history) ───────────────────────────────────
+  function clearGroup(url) {
+    readDedupStorage(r => {
+      const groupAnns = r.annotations.filter(a => a.url === url);
+      if (groupAnns.length === 0) return;
+      const remaining = r.annotations.filter(a => a.url !== url);
+      let   hist  = r[HISTORY_KEY];
+      const store = { ...(r[ANN_STORE_KEY] || {}) };
+      const now   = new Date().toISOString();
+      groupAnns.forEach(ann => {
+        // Drop any prior history ref for this id (decrement) before re-adding.
+        const oldRefs = hist.filter(h => h.id === ann.id);
+        if (oldRefs.length) refStoreDec(store, oldRefs.map(h => h.id));
+        hist = hist.filter(h => h.id !== ann.id);
+        if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+        store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+        hist.push({ id: ann.id, deletedAt: now });
+      });
+      isWritingFromPopup = true;
+      chrome.storage.local.set({
+        annotations: remaining,
+        [HISTORY_KEY]: hist,
+        [ANN_STORE_KEY]: store,
+      }, () => {
+        enforceHistoryLimitInStorage(() => {
+          isWritingFromPopup = false;
+          render(remaining);
+          groupAnns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+        });
+      });
+    });
+  }
+
+  // ── Restore a history entry ────────────────────────────────────────────────
+  function restoreAnnotation(annId, deletedAt) {
+    readDedupStorage(r => {
+      const anns    = r.annotations;
+      const hist    = r[HISTORY_KEY];
+      const store   = { ...(r[ANN_STORE_KEY] || {}) };
+      const histIdx = hist.findIndex(a => a.id === annId && a.deletedAt === deletedAt);
+      if (histIdx === -1) return;
+
+      // Resolve via store; fall back to legacy inline data on the history entry.
+      const ann = resolveRef(hist[histIdx], store) || { ...hist[histIdx] };
+      delete ann.deletedAt;
+      if (!ann || !ann.id) return;
+
+      if (ann.url) {
+        try {
+          const u = new URL(ann.url);
+          ann.url = u.origin + u.pathname;
+        } catch (_) {}
+      }
+
+      if (anns.some(a => a.id === ann.id)) { showHistory(); return; }
+
+      const newAnns = [...anns, ann];
+      const newHist = hist.filter((_, i) => i !== histIdx);
+      refStoreDec(store, [ann.id]);
+
+      chrome.storage.local.set({
+        annotations: newAnns,
+        [HISTORY_KEY]: newHist,
+        [ANN_STORE_KEY]: store,
+      }, () => {
+        showHistory();
+        broadcastRestore(ann);
+      });
+    });
+  }
+
+  // ── Auto-resize a textarea to fit its content ─────────────────────────────
+  // Always sizes the textarea to fully fit the complete textual contents of
+  // the annotation. If the textarea is currently hidden (e.g. inside a
+  // collapsed accordion) its scrollHeight reads as 0 — in that case we defer
+  // the measurement until it becomes visible so the height is still correct
+  // when the user expands the section.
+  function autoResizeTextarea(ta) {
+    if (!ta || !ta.isConnected) return;
+    ta.style.height = 'auto';
+    const sh = ta.scrollHeight;
+    if (sh > 0) {
+      ta.style.height = Math.max(46, sh) + 'px';
+      return;
+    }
+    // Hidden / not yet laid out — wait for it to become visible, then size.
+    if (typeof IntersectionObserver !== 'function' || ta.dataset._autosizeObs === '1') return;
+    ta.dataset._autosizeObs = '1';
+    const io = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && entry.target.scrollHeight > 0) {
+          io.disconnect();
+          delete entry.target.dataset._autosizeObs;
+          entry.target.style.height = 'auto';
+          entry.target.style.height = Math.max(46, entry.target.scrollHeight) + 'px';
+          return;
+        }
+      }
+    });
+    io.observe(ta);
+  }
+
+  function autoResizeAll(container) {
+    container.querySelectorAll('.item-note-edit').forEach(ta => autoResizeTextarea(ta));
+  }
+
+  // ── Navigation intent helpers ─────────────────────────────────────────────
+  // Stash the desired post-navigation action into chrome.storage.local so the
+  // content script can pick it up after the page loads. Each intent expires
+  // after 30 s so stale intents don't trigger on unrelated future loads.
+  function setNavIntent(intent) {
+    const payload = { ...intent, expiresAt: Date.now() + 30_000 };
+    return new Promise(res => chrome.storage.local.set({ _navIntent: payload }, res));
+  }
+
+  // ── Navigate to a specific annotation: redirect current tab to its URL,
+  //    then have the content script open the panel + focus the textarea.
+  async function navigateToAnnotation(annId, itemEl) {
+    if (itemEl) {
+      itemEl.classList.add('item-nav-flash');
+      setTimeout(() => itemEl.classList.remove('item-nav-flash'), 700);
+    }
+
+    chrome.storage.local.get({ annotations: [] }, async r => {
+      const ann = r.annotations.find(a => a.id === annId);
+      if (!ann) return;
+
+      await setNavIntent({ type: 'focusAnnotation', annId, url: ann.url });
+
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab  = tabs[0];
+      if (!tab) return;
+
+      if (tab.url === ann.url) {
+        // Already on the page — just send the focus message
+        try { await chrome.tabs.sendMessage(tab.id, { type: 'focusAnnotation', annId }); } catch {}
+      } else {
+        await chrome.tabs.update(tab.id, { url: ann.url });
+      }
+      window.close(); // popup closes so the user sees the page
+    });
+  }
+
+  // ── Navigate to a URL group: redirect current tab, then open ALL chips on
+  //    that page (equivalent to clicking every amber chip).
+  async function navigateToUrl(url) {
+    await setNavIntent({ type: 'openAllForUrl', url });
+
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab  = tabs[0];
+    if (!tab) return;
+
+    if (tab.url === url) {
+      try { await chrome.tabs.sendMessage(tab.id, { type: 'openAllAnnotations', url }); } catch {}
+    } else {
+      await chrome.tabs.update(tab.id, { url });
+    }
+    window.close();
+  }
+
+  // ── Undo-clear banner ─────────────────────────────────────────────────────
+  // action: 'cleared' (default — moved to history) | 'saved' (saved-for-later set)
+  function showClearUndoBanner(previousAnnotations, deletedAt, action = 'cleared', savedSetId = null) {
+    undoClearData = { annotations: previousAnnotations, deletedAt, action, savedSetId };
+    clearTimeout(undoBannerTimer);
+
+    const count = previousAnnotations.length;
+    const text = action === 'saved'
+      ? `Saved ${count} annotation${count !== 1 ? 's' : ''} for later`
+      : 'Annotations saved to history';
+
+    clearUndoBanner.innerHTML = `
+      <span class="undo-banner-text">${escHtml(text)}</span>
+      <button id="undo-clear-btn" class="undo-clear-btn">Undo</button>
+    `;
+    clearUndoBanner.style.display = 'flex';
+
+    document.getElementById('undo-clear-btn').addEventListener('click', () => {
+      if (!undoClearData) return;
+      const { annotations: prevAnns, deletedAt: ts, action: act, savedSetId: setId } = undoClearData;
+      undoClearData = null;
+      hideClearUndoBanner();
+
+      if (act === 'saved') {
+        // Remove the saved-for-later set and restore annotations.
+        chrome.storage.local.get({ annotations: [], [SAVED_LATER_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+          const set = r[SAVED_LATER_KEY].find(s => s.id === setId);
+          const newSaved = r[SAVED_LATER_KEY].filter(s => s.id !== setId);
+          const store = { ...(r[ANN_STORE_KEY] || {}) };
+          if (set) {
+            const ids = Array.isArray(set.annotationIds)
+              ? set.annotationIds
+              : (set.annotations || []).map(a => a.id);
+            refStoreDec(store, ids.filter(Boolean));
+          }
+          isWritingFromPopup = true;
+          chrome.storage.local.set({
+            annotations: prevAnns,
+            [SAVED_LATER_KEY]: newSaved,
+            [ANN_STORE_KEY]: store,
+          }, () => {
+            isWritingFromPopup = false;
+            render(prevAnns);
+            prevAnns.forEach(ann => broadcastRestore(ann));
+          });
+        });
         return;
-      t.dataset._autosizeObs = "1";
-      const n = new IntersectionObserver((e) => {
-        for (const t of e)
-          if (t.isIntersecting && t.target.scrollHeight > 0) {
-            (n.disconnect(),
-              delete t.target.dataset._autosizeObs,
-              (t.target.style.height = "auto"),
-              (t.target.style.height =
-                Math.max(46, t.target.scrollHeight) + "px"));
+      }
+
+      chrome.storage.local.get({ annotations: [], [HISTORY_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+        const restoredIds = new Set(prevAnns.map(a => a.id));
+        const removed = r[HISTORY_KEY].filter(a => restoredIds.has(a.id) && a.deletedAt === ts);
+        const newHist = r[HISTORY_KEY].filter(a => !(restoredIds.has(a.id) && a.deletedAt === ts));
+        const store   = { ...(r[ANN_STORE_KEY] || {}) };
+        refStoreDec(store, removed.map(h => h.id));
+        isWritingFromPopup = true;
+        chrome.storage.local.set({
+          annotations: prevAnns,
+          [HISTORY_KEY]: newHist,
+          [ANN_STORE_KEY]: store,
+        }, () => {
+          isWritingFromPopup = false;
+          render(prevAnns);
+          prevAnns.forEach(ann => broadcastRestore(ann));
+        });
+      });
+    });
+
+    undoBannerTimer = setTimeout(hideClearUndoBanner, 5000);
+  }
+
+  function hideClearUndoBanner() {
+    clearTimeout(undoBannerTimer);
+    clearUndoBanner.style.display = 'none';
+    clearUndoBanner.innerHTML = '';
+  }
+
+  // ── Render annotation list ─────────────────────────────────────────────────
+  // Helper: build the inner HTML for a set of annotations grouped by URL.
+  // Used both for the un-grouped "loose" annotations and for the contents of
+  // each Copy-All snapshot ("big box").
+  function buildGroupedAnnotationsHTML(anns, opts) {
+    opts = opts || {};
+    const showGroupCount = !!opts.showGroupCount;
+    // Per-group accordion: when `accordion` is true, each URL group
+    // independently opens/closes. `openUrls` is the set of URLs currently
+    // expanded; `snapId` is forwarded onto each header so the click handler
+    // can persist state for the right snapshot.
+    const accordion  = !!opts.accordion;
+    const openUrls   = opts.openUrls instanceof Set ? opts.openUrls : new Set();
+    const snapId     = opts.snapId || '';
+    const byUrl = {};
+    anns.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
+
+    let html = '';
+    Object.entries(byUrl).forEach(([url, items]) => {
+      // Inside the big box (showGroupCount), put the blue count badge AFTER
+      // the link (truncating the link if necessary). For loose groups the
+      // count is hidden entirely.
+      const countBadge = showGroupCount
+        ? `<span class="count-badge copy-all-group-count" title="${items.length} annotation${items.length !== 1 ? 's' : ''}">${items.length}</span>`
+        : '';
+      const isOpen     = !accordion || openUrls.has(url);
+      const groupCls   = `url-group${accordion ? ' url-group--accordion' : ''}${accordion && isOpen ? ' open' : ''}`;
+      const headerExtra = accordion
+        ? ` data-accordion-snap="${escHtml(snapId)}" data-accordion-url="${escHtml(url)}" role="button" tabindex="0"`
+        : '';
+      const caret = accordion
+        ? `<span class="url-group-caret" aria-hidden="true">▸</span>`
+        : '';
+      html += `<div class="${groupCls}">
+        <div class="url-header"${headerExtra}>
+          ${caret}<div class="url-label url-label--clickable copy-all-group-url" title="${escHtml(url)}" data-nav-url="${escHtml(url)}">${escHtml(url)}</div>
+          <button class="url-copy-btn" data-url="${escHtml(url)}" title="Copy group as Markdown">📋 Copy group</button>
+          <button class="url-clear-group-btn" data-url="${escHtml(url)}" title="Clear group (saves to history)">🗑</button>
+          ${countBadge}
+        </div>`;
+      // Wrap items in an accordion body so we can hide them per-group without
+      // affecting the URL header itself.
+      if (accordion) html += `<div class="url-group-body">`;
+      items.forEach(ann => {
+        const sel = getSelectorDisplay(ann);
+        const isPageLevel = !!(ann.pageLevel || ann.tag === 'page');
+        const isMulti = Array.isArray(ann.contextElements) && ann.contextElements.length > 0;
+        const codeTitle = isMulti
+          ? `Click to navigate to this annotation\n${sel}`
+          : 'Click to navigate to this annotation';
+        html += `
+        <div class="item${isPageLevel ? ' item--page-level' : ''}">
+          <div class="item-sel">
+            <code class="ann-code--clickable${isMulti ? ' ann-code--multi' : ''}" data-nav-ann-id="${escHtml(ann.id)}" title="${escHtml(codeTitle)}">${escHtml(sel)}</code>
+            <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋</button>
+            <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Clear annotation">🗑</button>
+          </div>
+          <textarea
+            class="item-note-edit"
+            data-ann-id="${escHtml(ann.id)}"
+            placeholder="Add a note…"
+          >${escHtml(ann.comment || '')}</textarea>
+        </div>`;
+      });
+      if (accordion) html += `</div>`;
+      html += '</div>';
+    });
+    return html;
+  }
+
+  // Format a snapshot's timestamp like "12:34 PM, Tuesday, Apr 30, 2026".
+  function formatSnapshotTimestamp(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const day  = d.toLocaleDateString(undefined, { weekday: 'long' });
+      const date = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+      return `${time}, ${day}, ${date}`;
+    } catch { return ts; }
+  }
+
+  // "12:34 PM, 4/30" — short label used in the big-box header.
+  function formatBigBoxLabel(ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      const time  = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const month = d.getMonth() + 1;
+      const day   = d.getDate();
+      return `${time}, ${month}/${day}`;
+    } catch { return ts; }
+  }
+
+  // Reconcile snapshots against the current annotation list: drop any
+  // annotation IDs that are no longer in `anns`, and drop any snapshot whose
+  // annotation set is empty. Returns the surviving snapshots.
+  function reconcileSnapshots(snapshots, anns) {
+    const liveIds = new Set(anns.map(a => a.id));
+    const out = [];
+    snapshots.forEach(s => {
+      const ids  = (Array.isArray(s.annotationIds) ? s.annotationIds : []).filter(id => liveIds.has(id));
+      if (ids.length > 0) out.push({ ...s, annotationIds: ids });
+    });
+    return out;
+  }
+
+  function render(anns) {
+    badge.textContent = anns.length > 0 ? String(anns.length) : '';
+
+    if (anns.length === 0) {
+      // Read current shortcut to show the right gesture in the empty-state hint
+      loadSettings(s => {
+        const mod = modLabel(s.shortcut?.modifier || 'alt');
+        listEl.innerHTML = `
+          <p class="empty-msg">
+            No annotations yet.<br>
+            Hold <strong>${escHtml(mod)} + Right-Click</strong> any element on a page.
+          </p>`;
+      });
+      // Also clear stale snapshots so they don't reappear next time we have
+      // annotations.
+      chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: [] });
+      return;
+    }
+
+    chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+      const rawSnaps  = snapR[COPY_ALL_SNAPSHOTS_KEY] || [];
+      const snapshots = reconcileSnapshots(rawSnaps, anns);
+      // Persist reconciliation if we actually trimmed anything.
+      if (snapshots.length !== rawSnaps.length ||
+          snapshots.some((s, i) => (rawSnaps[i] && s.annotationIds.length !== (rawSnaps[i].annotationIds || []).length))) {
+        chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: snapshots });
+      }
+
+      // Annotations covered by any snapshot become "boxed"; the rest are loose.
+      const boxedIds = new Set();
+      snapshots.forEach(s => (s.annotationIds || []).forEach(id => boxedIds.add(id)));
+      const annsById = new Map(anns.map(a => [a.id, a]));
+      const looseAnns = anns.filter(a => !boxedIds.has(a.id));
+
+      let html = '';
+
+      // Render each snapshot ("big box") in the order they were captured.
+      snapshots.forEach(snap => {
+        const ids = snap.annotationIds || [];
+        const innerAnns = ids.map(id => annsById.get(id)).filter(Boolean);
+        const expanded  = !!snap.expanded;
+        const whenFull  = formatSnapshotTimestamp(snap.timestamp);
+        const whenShort = formatCompactTimestamp(snap.timestamp);
+        const bigBoxLabel = formatBigBoxLabel(snap.timestamp);
+        html += `
+        <div class="copy-all-snapshot${expanded ? ' expanded' : ''}" data-snap-id="${escHtml(snap.id)}">
+          <div class="copy-all-header" data-snap-toggle="${escHtml(snap.id)}" role="button" tabindex="0" title="Click to ${expanded ? 'collapse' : 'expand'}">
+            <span class="copy-all-caret" aria-hidden="true">▸</span>
+            <span class="count-badge copy-all-title-count" title="${innerAnns.length} annotation${innerAnns.length !== 1 ? 's' : ''} copied">${innerAnns.length}</span>
+            <span class="copy-all-meta copy-all-meta--copied" title="${escHtml(whenFull)}">${escHtml(bigBoxLabel)}</span>
+            <span class="copy-all-spacer"></span>
+            <button class="copy-all-action copy-all-save copy-all-save--icon" data-snap-id="${escHtml(snap.id)}" title="Save for later — move these annotations to the Saved for Later tab" aria-label="Save for later">🕐</button>
+            <button class="copy-all-action copy-all-ungroup" data-snap-ungroup="${escHtml(snap.id)}" title="Unpack — move these annotations back into the main list">⇱ Unpack</button>
+            <button class="copy-all-action copy-all-clear copy-all-clear--icon" data-snap-id="${escHtml(snap.id)}" title="Clear (move to history)" aria-label="Clear group (move to history)">🗑</button>
+          </div>
+          <div class="copy-all-summary">
+            ${(() => {
+              // Collapsed view: one row per URL group with a leading count badge.
+              const byUrl = {};
+              innerAnns.forEach(a => (byUrl[a.url] = byUrl[a.url] || []).push(a));
+              return Object.entries(byUrl).map(([url, items]) => `
+                <div class="copy-all-summary-row" data-snap-jump="${escHtml(snap.id)}" data-jump-url="${escHtml(url)}" role="button" tabindex="0" title="Click to expand and jump to this group">
+                  <span class="copy-all-group-url" title="${escHtml(url)}">${escHtml(url)}</span>
+                  <span class="count-badge copy-all-group-count">${items.length}</span>
+                </div>`).join('');
+            })()}
+          </div>
+          <div class="copy-all-body">
+            ${buildGroupedAnnotationsHTML(innerAnns, {
+              showGroupCount: true,
+              accordion:      true,
+              snapId:         snap.id,
+              openUrls:       new Set(Array.isArray(snap.openUrls) ? snap.openUrls : []),
+            })}
+          </div>
+        </div>`;
+      });
+
+      // Render any loose annotations (those not in any snapshot) below.
+      if (looseAnns.length > 0) {
+        html += buildGroupedAnnotationsHTML(looseAnns, { showGroupCount: false });
+      }
+
+      finishRender(html, anns);
+    });
+  }
+
+  // Wire up listeners + finalize the rendered list.
+  function finishRender(html, anns) {
+    listEl.innerHTML = html;
+
+    // Auto-resize all textareas to fit their content
+    autoResizeAll(listEl);
+
+    listEl.querySelectorAll('.item-note-edit').forEach(ta => {
+      let _dirtyInSnap = false;
+      ta.addEventListener('input', () => {
+        saveComment(ta.dataset.annId, ta.value);
+        autoResizeTextarea(ta);
+        // Track whether this note was edited while inside a Copy-All snapshot
+        if (!_dirtyInSnap && ta.closest('.copy-all-snapshot')) _dirtyInSnap = true;
+      });
+      // When the user finishes editing a note that lives inside a big box,
+      // atomically flush the save and move the annotation to the loose list.
+      ta.addEventListener('blur', () => {
+        if (!_dirtyInSnap) return;
+        _dirtyInSnap = false;
+        // Guard: annotation may already have been ungrouped between input and blur
+        const snapEl = ta.closest('.copy-all-snapshot');
+        if (!snapEl) return;
+        const annId = ta.dataset.annId;
+        const currentValue = ta.value;
+        // Cancel any pending debounced save — we'll write it atomically below
+        clearTimeout(saveTimers[annId]);
+        delete saveTimers[annId];
+        // Atomically save the updated comment + remove from snapshot
+        isWritingFromPopup = true;
+        chrome.storage.local.get({ annotations: [], [COPY_ALL_SNAPSHOTS_KEY]: [] }, r => {
+          const anns  = r.annotations.slice();
+          const snaps = r[COPY_ALL_SNAPSHOTS_KEY] || [];
+          const ann   = anns.find(a => a.id === annId);
+          const newSnaps = snaps
+            .map(s => ({ ...s, annotationIds: (s.annotationIds || []).filter(id => id !== annId) }))
+            .filter(s => (s.annotationIds || []).length > 0);
+          const toStore = { [COPY_ALL_SNAPSHOTS_KEY]: newSnaps };
+          if (ann) {
+            ann.comment = currentValue;
+            toStore.annotations = anns;
+          }
+          chrome.storage.local.set(toStore, () => {
+            isWritingFromPopup = false;
+            load();
+          });
+        });
+      });
+    });
+    listEl.querySelectorAll('.item-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => deleteAnnotation(btn.dataset.annId));
+    });
+    listEl.querySelectorAll('.url-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => copyGroup(btn.dataset.url));
+    });
+    listEl.querySelectorAll('.url-clear-group-btn').forEach(btn => {
+      btn.addEventListener('click', () => clearGroup(btn.dataset.url));
+    });
+    listEl.querySelectorAll('.item-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => copyAnnotation(btn.dataset.annId));
+    });
+
+    // ── Copy-All snapshot listeners ─────────────────────────────────────────
+    // Header click (or Enter/Space on focus) toggles expand/collapse.
+    listEl.querySelectorAll('[data-snap-toggle]').forEach(hdr => {
+      const handler = e => {
+        // Don't toggle when interacting with action buttons inside the header.
+        if (e.target.closest('button')) return;
+        if (e.target.closest('.copy-all-summary-row')) return;
+        if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+        if (e.type === 'keydown') e.preventDefault();
+        toggleCopyAllSnapshot(hdr.dataset.snapToggle);
+      };
+      hdr.addEventListener('click',   handler);
+      hdr.addEventListener('keydown', handler);
+    });
+    listEl.querySelectorAll('[data-snap-collapse]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        toggleCopyAllSnapshot(btn.dataset.snapCollapse, false);
+      });
+    });
+    listEl.querySelectorAll('.copy-all-save').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        copyAllSnapshotSaveForLater(btn.dataset.snapId);
+      });
+    });
+    listEl.querySelectorAll('.copy-all-clear').forEach(btn => {
+      btn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const ok = await showConfirm('Clear all annotations in this group? They will be moved to history.', { okLabel: 'Clear' });
+        if (!ok) return;
+        copyAllSnapshotClear(btn.dataset.snapId);
+      });
+    });
+    listEl.querySelectorAll('[data-snap-ungroup]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        copyAllSnapshotUngroup(btn.dataset.snapUngroup);
+      });
+      btn.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          copyAllSnapshotUngroup(btn.dataset.snapUngroup);
+        }
+      });
+    });
+    listEl.querySelectorAll('.copy-all-summary-row').forEach(row => {
+      const handler = e => {
+        if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+        if (e.type === 'keydown') e.preventDefault();
+        e.stopPropagation();
+        copyAllSnapshotJump(row.dataset.snapJump, row.dataset.jumpUrl);
+      };
+      row.addEventListener('click',   handler);
+      row.addEventListener('keydown', handler);
+    });
+
+    // ── Per-URL-group accordion inside expanded big-boxes ─────────────────────
+    // Clicking a URL header inside an expanded snapshot toggles ONLY that
+    // group, leaving sibling groups in their current state. Behavior is gated
+    // by the data-accordion-snap attribute so non-snapshot url-headers are
+    // unaffected.
+    listEl.querySelectorAll('.url-header[data-accordion-snap]').forEach(hdr => {
+      const handler = e => {
+        if (e.target.closest('button')) return;
+        if (e.target.closest('.url-label--clickable')) return;
+        if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return;
+        if (e.type === 'keydown') e.preventDefault();
+        e.stopPropagation();
+        toggleSnapshotUrlGroup(hdr.dataset.accordionSnap, hdr.dataset.accordionUrl);
+      };
+      hdr.addEventListener('click',   handler);
+      hdr.addEventListener('keydown', handler);
+    });
+
+    // Re-apply search highlights if search is active
+    if (searchActive && searchInput && searchInput.value.trim()) {
+      applySearch(searchInput.value.trim());
+    }
+  }
+
+  // ── Copy-All snapshot ops ────────────────────────────────────────────────
+  function updateSnapshot(snapId, mut, cb) {
+    chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, r => {
+      const snaps = (r[COPY_ALL_SNAPSHOTS_KEY] || []).map(s =>
+        s.id === snapId ? mut(s) : s
+      );
+      chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: snaps }, () => cb && cb(snaps));
+    });
+  }
+
+  function toggleCopyAllSnapshot(snapId, force) {
+    updateSnapshot(snapId, s => ({ ...s, expanded: typeof force === 'boolean' ? force : !s.expanded }), () => {
+      // Local DOM-only toggle to avoid a full re-render (preserves textarea
+      // focus, scroll, etc.).
+      const el = listEl.querySelector(`.copy-all-snapshot[data-snap-id="${cssEscape(snapId)}"]`);
+      if (!el) return;
+      if (typeof force === 'boolean') el.classList.toggle('expanded', force);
+      else el.classList.toggle('expanded');
+    });
+  }
+
+  // Toggle a single URL group inside a snapshot's expanded body. Persists the
+  // open/closed set on the snapshot as `openUrls`. DOM-only DOM update so
+  // sibling textareas / scroll positions stay intact.
+  function toggleSnapshotUrlGroup(snapId, url, force) {
+    if (!snapId) return;
+    updateSnapshot(snapId, s => {
+      const open = new Set(Array.isArray(s.openUrls) ? s.openUrls : []);
+      const next = typeof force === 'boolean' ? force : !open.has(url);
+      if (next) open.add(url); else open.delete(url);
+      return { ...s, openUrls: [...open] };
+    }, () => {
+      const snapEl = listEl.querySelector(`.copy-all-snapshot[data-snap-id="${cssEscape(snapId)}"]`);
+      if (!snapEl) return;
+      const hdr = snapEl.querySelector(
+        `.url-header[data-accordion-snap="${cssEscape(snapId)}"][data-accordion-url="${cssEscape(url)}"]`
+      );
+      if (!hdr) return;
+      const group = hdr.closest('.url-group--accordion');
+      if (!group) return;
+      if (typeof force === 'boolean') group.classList.toggle('open', force);
+      else group.classList.toggle('open');
+    });
+  }
+
+  // Helper: minimal CSS-escape for use in attribute selectors.
+  function cssEscape(s) {
+    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/"/g, '\\"');
+  }
+
+  // Save the snapshot's annotations to "saved for later", remove them from
+  // current annotations, and drop the snapshot.
+  function copyAllSnapshotSaveForLater(snapId) {
+    readDedupStorage(r => {
+      chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+        const snaps = snapR[COPY_ALL_SNAPSHOTS_KEY] || [];
+        const snap  = snaps.find(s => s.id === snapId);
+        if (!snap) return;
+        const ids   = (snap.annotationIds || []).filter(Boolean);
+        const idSet = new Set(ids);
+        const targetAnns = r.annotations.filter(a => idSet.has(a.id));
+        if (targetAnns.length === 0) {
+          // Snapshot is empty — just drop it.
+          chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: snaps.filter(s => s.id !== snapId) },
+            () => load());
+          return;
+        }
+        const remaining = r.annotations.filter(a => !idSet.has(a.id));
+        const store = { ...(r[ANN_STORE_KEY] || {}) };
+        const now   = new Date().toISOString();
+        const sflId = `sfl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+        // Mirror doSaveForLater: dedup identical sets, then bump refs.
+        const newIdsKey = [...ids].sort().join(',');
+        const dropped   = [];
+        const dedupedSaved = (r[SAVED_LATER_KEY] || []).filter(s => {
+          const sIds = Array.isArray(s.annotationIds) ? s.annotationIds : (s.annotations || []).map(a => a.id);
+          const key  = [...sIds].sort().join(',');
+          if (key === newIdsKey) { dropped.push(s); return false; }
+          return true;
+        });
+        dropped.forEach(d => {
+          const dIds = Array.isArray(d.annotationIds) ? d.annotationIds : (d.annotations || []).map(a => a.id);
+          refStoreDec(store, dIds.filter(Boolean));
+        });
+        targetAnns.forEach(ann => {
+          if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+          else store[ann.id] = { ...store[ann.id], ...ann };
+          store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+        });
+
+        const newSet = { id: sflId, savedAt: now, count: targetAnns.length, annotationIds: ids };
+        const newSaved = [...dedupedSaved, newSet];
+        const newSnaps = snaps.filter(s => s.id !== snapId);
+
+        isWritingFromPopup = true;
+        chrome.storage.local.set({
+          annotations: remaining,
+          [SAVED_LATER_KEY]: newSaved,
+          [ANN_STORE_KEY]: store,
+          [COPY_ALL_SNAPSHOTS_KEY]: newSnaps,
+        }, () => {
+          isWritingFromPopup = false;
+          render(remaining);
+          targetAnns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+          showToast(`Saved ${targetAnns.length} annotation${targetAnns.length !== 1 ? 's' : ''} for later.`);
+        });
+      });
+    });
+  }
+
+  // Clear the snapshot's annotations: move them to history and drop the snapshot.
+  function copyAllSnapshotClear(snapId) {
+    readDedupStorage(r => {
+      chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+        const snaps = snapR[COPY_ALL_SNAPSHOTS_KEY] || [];
+        const snap  = snaps.find(s => s.id === snapId);
+        if (!snap) return;
+        const idSet = new Set((snap.annotationIds || []).filter(Boolean));
+        const targetAnns = r.annotations.filter(a => idSet.has(a.id));
+        const remaining  = r.annotations.filter(a => !idSet.has(a.id));
+        const store = { ...(r[ANN_STORE_KEY] || {}) };
+        let   hist  = r[HISTORY_KEY];
+        const now   = new Date().toISOString();
+        targetAnns.forEach(ann => {
+          const oldRefs = hist.filter(h => h.id === ann.id);
+          if (oldRefs.length) refStoreDec(store, oldRefs.map(h => h.id));
+          hist = hist.filter(h => h.id !== ann.id);
+          if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+          else store[ann.id] = { ...store[ann.id], ...ann };
+          store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+          hist.push({ id: ann.id, deletedAt: now });
+        });
+        const newSnaps = snaps.filter(s => s.id !== snapId);
+        isWritingFromPopup = true;
+        chrome.storage.local.set({
+          annotations: remaining,
+          [HISTORY_KEY]: hist,
+          [ANN_STORE_KEY]: store,
+          [COPY_ALL_SNAPSHOTS_KEY]: newSnaps,
+        }, () => {
+          enforceHistoryLimitInStorage(() => {
+            isWritingFromPopup = false;
+            render(remaining);
+            targetAnns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+            showToast(`Cleared ${targetAnns.length} annotation${targetAnns.length !== 1 ? 's' : ''} (saved to history).`);
+          });
+        });
+      });
+    });
+  }
+
+  // Ungroup: drop the snapshot only. The annotations themselves remain in the
+  // current set and re-appear as loose items in the normal list.
+  function copyAllSnapshotUngroup(snapId) {
+    chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+      const snaps = snapR[COPY_ALL_SNAPSHOTS_KEY] || [];
+      const snap  = snaps.find(s => s.id === snapId);
+      if (!snap) return;
+      const remaining = snaps.filter(s => s.id !== snapId);
+      const count = (snap.annotationIds || []).length;
+      chrome.storage.local.set({ [COPY_ALL_SNAPSHOTS_KEY]: remaining }, () => {
+        load();
+        showToast(`Ungrouped ${count} annotation${count !== 1 ? 's' : ''}.`);
+      });
+    });
+  }
+
+  // Expand the snapshot and scroll the clicked URL group's header to the top
+  // of the visible scroll area.
+  function copyAllSnapshotJump(snapId, url) {
+    // Expand the snapshot AND open just this URL group (per-group accordion).
+    updateSnapshot(snapId, s => {
+      const open = new Set(Array.isArray(s.openUrls) ? s.openUrls : []);
+      open.add(url);
+      return { ...s, expanded: true, openUrls: [...open] };
+    }, () => {
+      const snapEl = listEl.querySelector(`.copy-all-snapshot[data-snap-id="${cssEscape(snapId)}"]`);
+      if (!snapEl) return;
+      snapEl.classList.add('expanded');
+      // Find the matching url-group header inside the body.
+      const safeUrl = cssEscape(url);
+      const target = snapEl.querySelector(
+        `.copy-all-body .url-header [data-nav-url="${safeUrl}"]`
+      );
+      const headerRow = target ? target.closest('.url-header') : null;
+      const groupEl   = headerRow ? headerRow.closest('.url-group--accordion') : null;
+      if (groupEl) groupEl.classList.add('open');
+      const scrollEl = headerRow || snapEl;
+      try {
+        scrollEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      } catch (_) {
+        scrollEl.scrollIntoView();
+      }
+      if (headerRow) {
+        headerRow.classList.add('item-nav-flash');
+        setTimeout(() => headerRow.classList.remove('item-nav-flash'), 700);
+      }
+    });
+  }
+
+  // ── Navigation click delegation on the main list ───────────────────────────
+  listEl.addEventListener('click', e => {
+    // Click on annotation code element → navigate to that annotation
+    const codeEl = e.target.closest('.ann-code--clickable');
+    if (codeEl && !e.target.closest('button')) {
+      const annId = codeEl.dataset.navAnnId;
+      if (annId) {
+        const item = codeEl.closest('.item');
+        navigateToAnnotation(annId, item);
+      }
+      return;
+    }
+
+    // Click on URL group label → navigate to that URL
+    const urlLabel = e.target.closest('.url-label--clickable');
+    if (urlLabel && !e.target.closest('button')) {
+      const url = urlLabel.dataset.navUrl;
+      if (url) navigateToUrl(url);
+      return;
+    }
+  });
+
+  // ── Update footer button labels from settings ────────────────────────────
+  function updateButtonLabels(settings) {
+    const btnActions = settings.buttonActions || DEFAULT_SETTINGS.buttonActions;
+    const copyLeft   = btnActions.copyBtn?.left   || 'copyAll';
+    const copyRight  = btnActions.copyBtn?.right  || 'cutAll';
+    const clearLeft  = btnActions.clearBtn?.left  || 'clearAll';
+    const clearRight = btnActions.clearBtn?.right || 'saveForLater';
+
+    const copyLeftCfg   = BUTTON_ACTIONS[copyLeft]   || BUTTON_ACTIONS.copyAll;
+    const copyRightCfg  = BUTTON_ACTIONS[copyRight]  || BUTTON_ACTIONS.cutAll;
+    const clearLeftCfg  = BUTTON_ACTIONS[clearLeft]  || BUTTON_ACTIONS.clearAll;
+    const clearRightCfg = BUTTON_ACTIONS[clearRight] || BUTTON_ACTIONS.saveForLater;
+
+    copyBtn.innerHTML = `
+      <span>${copyLeftCfg.emoji} ${escHtml(copyLeftCfg.label)}</span>
+      <span class="cut-hint">right-click: ${escHtml(copyRightCfg.label.toLowerCase())}</span>`;
+    clearBtn.innerHTML = `
+      <span>${clearLeftCfg.emoji} ${escHtml(clearLeftCfg.label)}</span>
+      <span class="cut-hint">right-click: ${escHtml(clearRightCfg.label.toLowerCase())}</span>`;
+  }
+
+  function load() {
+    chrome.storage.local.get({ annotations: [] }, r => render(r.annotations));
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    // Trigger a debounced sync backup any time tracked data changes
+    if (changes.annotations || changes[HISTORY_KEY] || changes[COPY_HISTORY_KEY]
+        || changes[SAVED_LATER_KEY] || changes[SETTINGS_KEY]) {
+      backupToSync();
+    }
+    // Capture undo/redo deltas across tracked keys.
+    if (suppressUndoCapture === 0) captureUndoFromChanges(changes);
+
+    if (changes.annotations) {
+      const newAnns = changes.annotations.newValue || [];
+      if (!isWritingFromPopup && !historyVisible && !settingsVisible) {
+        render(newAnns);
+      }
+      // When the history panel is open (especially the Copy Log), the live
+      // row state (red row + minus button vs restore button) depends on the
+      // current annotation set. If annotations change from any source while
+      // history is visible, re-render the active history tab so the
+      // highlight stays accurate. We always do this — whether the change
+      // came from the popup itself or another tab — because removeAnnotation
+      // / restore flows mutate `annotations` and we must reflect the result.
+      if (historyVisible) {
+        renderHistoryTab();
+      }
+    }
+    // Copy Log rows are also affected by changes to the copy-history list
+    // itself (e.g., a row gets backfilled or removed in another window).
+    // Re-render so live highlighting stays in sync there too.
+    if (changes[COPY_HISTORY_KEY] && historyVisible && historyTab === 'copies'
+        && !isWritingFromPopup) {
+      renderHistoryTab();
+    }
+  });
+
+  // ── Universal undo / redo ────────────────────────────────────────────────
+  // Listen for storage changes on tracked keys; coalesce them per-tick and
+  // push a single undo entry capturing the prior state. Mutations driven by
+  // applyState (undo / redo) are skipped via suppressUndoCapture.
+  function captureUndoFromChanges(changes) {
+    let touched = false;
+    UNDO_TRACKED_KEYS.forEach(key => {
+      if (!Object.prototype.hasOwnProperty.call(changes, key)) return;
+      touched = true;
+      if (!pendingUndoOld) pendingUndoOld = {};
+      // Only the first old-value seen in this coalesced batch is the real
+      // "before" state; later events for the same key in the same tick are
+      // intermediate states from chained writes.
+      if (!Object.prototype.hasOwnProperty.call(pendingUndoOld, key)) {
+        pendingUndoOld[key] = changes[key].oldValue;
+      }
+    });
+    if (!touched) return;
+    if (pendingUndoTask) return;
+    pendingUndoTask = setTimeout(() => {
+      const snap = pendingUndoOld;
+      pendingUndoOld  = null;
+      pendingUndoTask = null;
+      if (!snap) return;
+      undoStack.push(snap);
+      if (undoStack.length > UNDO_STACK_LIMIT) undoStack.shift();
+      // Any new user mutation invalidates the redo stack.
+      redoStack = [];
+      updateUndoButtons();
+    }, 0);
+  }
+
+  function readTrackedState(cb) {
+    const defaults = {};
+    UNDO_TRACKED_KEYS.forEach(k => { defaults[k] = undefined; });
+    chrome.storage.local.get(defaults, r => {
+      const out = {};
+      UNDO_TRACKED_KEYS.forEach(k => { out[k] = r[k]; });
+      cb(out);
+    });
+  }
+
+  function applyState(state, cb) {
+    if (!state) { if (cb) cb(); return; }
+    const toSet    = {};
+    const toRemove = [];
+    UNDO_TRACKED_KEYS.forEach(k => {
+      if (Object.prototype.hasOwnProperty.call(state, k)) {
+        const v = state[k];
+        if (v === undefined) toRemove.push(k);
+        else toSet[k] = v;
+      }
+    });
+    suppressUndoCapture++;
+    isWritingFromPopup = true;
+    const finishWrite = () => {
+      isWritingFromPopup = false;
+      // Decrement suppress after a small delay so any onChanged events
+      // queued for this write see the suppression flag.
+      setTimeout(() => { suppressUndoCapture = Math.max(0, suppressUndoCapture - 1); }, 50);
+      // Reload UI from authoritative storage state.
+      chrome.storage.local.get({ annotations: [], [SETTINGS_KEY]: DEFAULT_SETTINGS }, r => {
+        if (historyVisible) renderHistoryTab();
+        else if (settingsVisible) renderSettings();
+        else render(r.annotations);
+        applyDarkMode((r[SETTINGS_KEY] || {}).darkMode);
+        updateButtonLabels({ ...DEFAULT_SETTINGS, ...(r[SETTINGS_KEY] || {}) });
+      });
+      if (cb) cb();
+    };
+    const doRemove = () => {
+      if (toRemove.length === 0) return finishWrite();
+      chrome.storage.local.remove(toRemove, finishWrite);
+    };
+    if (Object.keys(toSet).length === 0) doRemove();
+    else chrome.storage.local.set(toSet, doRemove);
+  }
+
+  function doUndo() {
+    if (undoStack.length === 0) return;
+    const prev = undoStack.pop();
+    readTrackedState(curr => {
+      // Build a forward-state for redo from the *current* values of just
+      // those keys that the undo step touches.
+      const forward = {};
+      Object.keys(prev).forEach(k => { forward[k] = curr[k]; });
+      redoStack.push(forward);
+      if (redoStack.length > UNDO_STACK_LIMIT) redoStack.shift();
+      applyState(prev, updateUndoButtons);
+    });
+  }
+
+  function doRedo() {
+    if (redoStack.length === 0) return;
+    const next = redoStack.pop();
+    readTrackedState(curr => {
+      const back = {};
+      Object.keys(next).forEach(k => { back[k] = curr[k]; });
+      undoStack.push(back);
+      if (undoStack.length > UNDO_STACK_LIMIT) undoStack.shift();
+      applyState(next, updateUndoButtons);
+    });
+  }
+
+  function updateUndoButtons() {
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+  }
+
+  // Match a keyboard event against a configured shortcut.
+  // Shortcut shape: { modifier: 'mod' | 'ctrl' | 'meta' | 'alt' | 'shift', key: 'z' }
+  // 'mod' (default) accepts Ctrl on Windows/Linux and Cmd (meta) on macOS.
+  function shortcutMatches(e, sc) {
+    if (!sc || !sc.key) return false;
+    const key = (e.key || '').toLowerCase();
+    if (key !== String(sc.key).toLowerCase()) return false;
+    const mod = sc.modifier || 'mod';
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+    if (mod === 'mod')   return (isMac ? e.metaKey : e.ctrlKey) && !e.altKey;
+    if (mod === 'ctrl')  return e.ctrlKey  && !e.metaKey;
+    if (mod === 'meta')  return e.metaKey  && !e.ctrlKey;
+    if (mod === 'alt')   return e.altKey   && !e.ctrlKey && !e.metaKey;
+    if (mod === 'shift') return e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+    return false;
+  }
+
+  // Global keydown for undo/redo. Settings panel inputs still see the events
+  // first (we only act if the target isn't a text field handling its own undo).
+  document.addEventListener('keydown', e => {
+    // Don't hijack browser undo inside text fields — let the textarea/input
+    // handle its own undo/redo of typed content.
+    const tgt = e.target;
+    const inTextField = tgt && (
+      tgt.tagName === 'TEXTAREA' ||
+      (tgt.tagName === 'INPUT' && /^(text|search|url|email|password|number)$/i.test(tgt.type || 'text'))
+    );
+    if (inTextField) return;
+    loadSettings(s => {
+      const undoSc = s.undoShortcut || DEFAULT_SETTINGS.undoShortcut;
+      const redoSc = s.redoShortcut || DEFAULT_SETTINGS.redoShortcut;
+      if (shortcutMatches(e, undoSc)) {
+        e.preventDefault();
+        doUndo();
+      } else if (shortcutMatches(e, redoSc)) {
+        e.preventDefault();
+        doRedo();
+      }
+    });
+  });
+
+  // ── Sync restore banner ───────────────────────────────────────────────────
+  // Called on startup: if local storage is empty (e.g. after reinstall) but
+  // chrome.storage.sync has data, auto-restores the full bundle so annotations
+  // are never lost after reinstalling, without requiring any user action.
+  function checkSyncRestore() {
+    chrome.storage.local.get({ annotations: [] }, async local => {
+      if (local.annotations.length > 0) return; // local has data — no restore needed
+      const result = await readFromSync();
+      if (!result) return;
+      const hasData = (result.annotations   && result.annotations.length   > 0)
+                   || (result.history        && result.history.length        > 0)
+                   || (result.savedForLater  && result.savedForLater.length  > 0);
+      if (!hasData) return;
+
+      // Auto-restore full bundle — no banner required
+      const toSet = {};
+      if (result.annotations  && result.annotations.length)   toSet.annotations       = result.annotations;
+      if (result.history       && result.history.length)       toSet[HISTORY_KEY]      = result.history;
+      if (result.copyHistory   && result.copyHistory.length)   toSet[COPY_HISTORY_KEY] = result.copyHistory;
+      if (result.savedForLater && result.savedForLater.length) toSet[SAVED_LATER_KEY]  = result.savedForLater;
+      if (result.settings && Object.keys(result.settings).length) toSet[SETTINGS_KEY] = result.settings;
+
+      // Reset the migration flag so the legacy-format sync payload is migrated
+      // back into the dedup format on this fresh local state. Also reset the
+      // copy-log backfill flag so any legacy copy-log entries in the restored
+      // payload get matched back to their annotation IDs.
+      toSet[MIGRATION_FLAG] = false;
+      toSet[COPY_LOG_BACKFILL_FLAG] = false;
+      toSet[ANN_STORE_KEY]  = {};
+
+      isWritingFromPopup = true;
+      chrome.storage.local.set(toSet, () => {
+        isWritingFromPopup = false;
+        maybeMigrateStorage(() => {
+          backfillCopyLogIds(() => {});
+          const anns = result.annotations || [];
+          if (anns.length) {
+            render(anns);
+            anns.forEach(ann => broadcastRestore(ann));
+          }
+          if (result.settings) {
+            if (result.settings.darkMode !== undefined) applyDarkMode(result.settings.darkMode);
+            updateButtonLabels({ ...DEFAULT_SETTINGS, ...result.settings });
+          }
+        });
+      });
+    });
+  }
+
+  function showRestoreBanner(annotations, ts) {
+    if (!restoreBanner) return;
+    const when = ts ? new Date(ts).toLocaleString() : 'unknown time';
+    restoreBanner.innerHTML = `
+      <div class="restore-banner-text">
+        ☁ Sync backup found — <strong>${annotations.length}</strong> annotation${annotations.length !== 1 ? 's' : ''} from ${escHtml(when)}
+      </div>
+      <div class="restore-banner-actions">
+        <button id="restore-confirm-btn" class="restore-btn restore-btn--confirm">Restore</button>
+        <button id="restore-dismiss-btn" class="restore-btn restore-btn--dismiss">Dismiss</button>
+      </div>`;
+    restoreBanner.style.display = 'flex';
+
+    restoreBanner.querySelector('#restore-confirm-btn').addEventListener('click', () => {
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations }, () => {
+        isWritingFromPopup = false;
+        restoreBanner.style.display = 'none';
+        render(annotations);
+        // Notify active tab so chips get re-injected
+        annotations.forEach(ann => broadcastRestore(ann));
+      });
+    });
+
+    restoreBanner.querySelector('#restore-dismiss-btn').addEventListener('click', () => {
+      restoreBanner.style.display = 'none';
+    });
+  }
+
+  // ── Search helpers ────────────────────────────────────────────────────────
+
+  // Returns the currently visible content panel to search over
+  function getSearchTargetPanel() {
+    if (settingsVisible) return settingsEl;
+    if (historyVisible)  return historyEl;
+    return listEl;
+  }
+
+  function openSearch() {
+    searchActive = true;
+    searchBar.style.display = 'flex';
+    searchBtn.classList.add('active');
+    searchInput.focus();
+    searchInput.select();
+    // Re-apply search to whatever panel is now visible
+    if (searchInput.value.trim()) applySearch(searchInput.value.trim());
+  }
+
+  function closeSearch() {
+    searchActive = false;
+    searchBar.style.display = 'none';
+    searchBtn.classList.remove('active');
+    searchInput.value = '';
+    clearSearchHighlights();
+  }
+
+  function clearSearchHighlights() {
+    // Clear highlights from all panels we may have touched.
+    [listEl, historyEl, settingsEl].forEach(panel => {
+      panel.querySelectorAll('.item, .copy-all-snapshot, .sfl-set, .settings-section').forEach(el => {
+        el.classList.remove('search-match', 'search-no-match', 'search-current');
+      });
+      // Restore any text nodes we wrapped in mark.search-hl.
+      panel.querySelectorAll('mark.search-hl').forEach(m => {
+        const parent = m.parentNode;
+        if (!parent) return;
+        parent.replaceChild(document.createTextNode(m.textContent), m);
+        parent.normalize();
+      });
+      panel.querySelectorAll('.search-note-match').forEach(el => {
+        el.classList.remove('search-note-match');
+      });
+      // Tear down any input/textarea overlays.
+      panel.querySelectorAll('.search-overlay-wrap').forEach(wrap => unwrapSearchOverlay(wrap));
+    });
+    searchMatches = [];
+    if (searchCount) searchCount.textContent = '';
+    if (searchCount) delete searchCount.dataset.empty;
+  }
+
+  // Wrap a textarea/input with an overlay that mirrors content + highlight marks.
+  // Returns the inner highlight container we can write to.
+  function wrapSearchOverlay(field) {
+    const parent = field.parentNode;
+    if (!parent) return null;
+    const wrap = document.createElement('span');
+    wrap.className = 'search-overlay-wrap';
+    const isTextarea = field.tagName === 'TEXTAREA';
+    wrap.dataset.kind = isTextarea ? 'textarea' : 'input';
+    parent.insertBefore(wrap, field);
+    const overlay = document.createElement('div');
+    overlay.className = 'search-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(overlay);
+    wrap.appendChild(field);
+    field.classList.add('search-overlay-host');
+    // Copy the field's font + padding metrics to the overlay so the marks line
+    // up character-for-character with the underlying field text.
+    const cs = window.getComputedStyle(field);
+    overlay.style.font           = cs.font;
+    overlay.style.lineHeight     = cs.lineHeight;
+    overlay.style.letterSpacing  = cs.letterSpacing;
+    overlay.style.padding        = cs.padding;
+    overlay.style.borderWidth    = cs.borderWidth;
+    overlay.style.borderStyle    = cs.borderStyle;
+    overlay.style.boxSizing      = cs.boxSizing;
+    overlay.style.borderRadius   = cs.borderRadius;
+    overlay.style.textAlign      = cs.textAlign;
+    if (!isTextarea) overlay.style.whiteSpace = 'pre';
+    syncSearchOverlay(field);
+    field.addEventListener('input',  syncSearchOverlayHandler);
+    field.addEventListener('scroll', syncSearchOverlayScrollHandler);
+    return overlay;
+  }
+
+  function syncSearchOverlayHandler(e) { syncSearchOverlay(e.target); }
+  function syncSearchOverlayScrollHandler(e) {
+    const wrap = e.target.closest('.search-overlay-wrap');
+    const overlay = wrap?.querySelector('.search-overlay');
+    if (overlay) {
+      overlay.scrollTop  = e.target.scrollTop;
+      overlay.scrollLeft = e.target.scrollLeft;
+    }
+  }
+
+  function syncSearchOverlay(field) {
+    const wrap    = field.parentNode;
+    if (!wrap || !wrap.classList || !wrap.classList.contains('search-overlay-wrap')) return;
+    const overlay = wrap.querySelector('.search-overlay');
+    if (!overlay) return;
+    const term = (searchInput && searchInput.value.trim()) || '';
+    overlay.innerHTML = renderHighlightedText(field.value, term);
+    overlay.scrollTop  = field.scrollTop;
+    overlay.scrollLeft = field.scrollLeft;
+  }
+
+  function unwrapSearchOverlay(wrap) {
+    const field = wrap.querySelector('textarea, input');
+    if (field) {
+      field.classList.remove('search-overlay-host');
+      field.removeEventListener('input',  syncSearchOverlayHandler);
+      field.removeEventListener('scroll', syncSearchOverlayScrollHandler);
+      wrap.parentNode.insertBefore(field, wrap);
+    }
+    wrap.remove();
+  }
+
+  // Build escaped-HTML where every occurrence of term is wrapped in <mark>.
+  function renderHighlightedText(text, term) {
+    const safe = escHtml(text || '');
+    if (!term) return safe;
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re  = new RegExp(`(${esc})`, 'gi');
+    return safe.replace(re, '<mark class="search-hl">$1</mark>');
+  }
+
+  // Wrap matches in plain DOM text nodes (no rich formatting, e.g. <code>, .hist-note,
+  // labels, hint paragraphs). Walks only text-node descendants of root.
+  function highlightTextNodes(root, term) {
+    if (!root || !term) return false;
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re  = new RegExp(esc, 'gi');
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        // Skip text inside our own marks, scripts, and form controls' UA shadow.
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        const p = node.parentNode;
+        if (!p) return NodeFilter.FILTER_REJECT;
+        if (p.nodeName === 'SCRIPT' || p.nodeName === 'STYLE') return NodeFilter.FILTER_REJECT;
+        if (p.classList && p.classList.contains('search-hl')) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const targets = [];
+    let n; while ((n = walker.nextNode())) targets.push(n);
+    let any = false;
+    targets.forEach(textNode => {
+      const text = textNode.nodeValue;
+      re.lastIndex = 0;
+      if (!re.test(text)) return;
+      re.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let lastIdx = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, m.index)));
+        const mark = document.createElement('mark');
+        mark.className = 'search-hl';
+        mark.textContent = m[0];
+        frag.appendChild(mark);
+        lastIdx = m.index + m[0].length;
+        if (m[0].length === 0) re.lastIndex++; // safety
+      }
+      if (lastIdx < text.length) frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+      textNode.parentNode.replaceChild(frag, textNode);
+      any = true;
+    });
+    return any;
+  }
+
+  // ── Apply search to a single "card" element. Returns true if the card matched. ─
+  function applySearchToCard(card, term, termLower) {
+    let matched = false;
+
+    // 1. Plain-text content elements
+    const textEls = card.querySelectorAll(
+      'code, .hist-note, .url-label, .copy-hist-preview, ' +
+      '.copy-hist-url, .copy-hist-ann-sels, .copy-hist-fix-body, ' +
+      '.sfl-url, ' +
+      '.settings-label, .settings-hint, .settings-row-title, .settings-row-sub, ' +
+      '.settings-section-title, .settings-value, ' +
+      '.copy-all-meta, .copy-all-group-url, .copy-all-group-count'
+    );
+    textEls.forEach(el => {
+      if ((el.textContent || '').toLowerCase().includes(termLower)) {
+        if (highlightTextNodes(el, term)) matched = true;
+      }
+    });
+
+    // 2. Form controls — textarea/input/select. Wrap with overlay for live highlight.
+    const fields = card.querySelectorAll('textarea, input[type="text"], input:not([type])');
+    fields.forEach(field => {
+      const v = (field.value || '').toLowerCase();
+      if (!v.includes(termLower)) return;
+      matched = true;
+      field.classList.add('search-note-match');
+      // Re-use a wrap if already there from a previous match in same panel.
+      if (!field.parentNode.classList || !field.parentNode.classList.contains('search-overlay-wrap')) {
+        wrapSearchOverlay(field);
+      } else {
+        syncSearchOverlay(field);
+      }
+    });
+
+    // 3. <select> can't host marks; just flag the row if the visible option matches.
+    card.querySelectorAll('select').forEach(sel => {
+      const opt = sel.options[sel.selectedIndex];
+      const txt = (opt && opt.textContent ? opt.textContent : '').toLowerCase();
+      if (txt.includes(termLower)) matched = true;
+    });
+
+    // 4. contenteditable nodes (none currently in popup, but supported defensively).
+    card.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach(ce => {
+      if ((ce.textContent || '').toLowerCase().includes(termLower)) {
+        if (highlightTextNodes(ce, term)) matched = true;
+      }
+    });
+
+    return matched;
+  }
+
+  function applySearch(term) {
+    clearSearchHighlights();
+    if (!term) return;
+
+    const termLower = term.toLowerCase();
+    searchMatches = [];
+
+    const panel = getSearchTargetPanel();
+
+    if (panel === settingsEl) {
+      // Settings: each top-level section is a "card"; do not dim non-matching
+      // sections (settings is meant to be browseable while searching).
+      panel.querySelectorAll('.settings-section').forEach(section => {
+        if (applySearchToCard(section, term, termLower)) {
+          section.classList.add('search-match');
+          searchMatches.push(section);
+        }
+      });
+    } else {
+      // List or History: use either .item or .copy-all-snapshot or .sfl-set
+      // as the unit. .copy-all-snapshot is treated as a single match group; if
+      // any nested .item inside matches, the snapshot expands and the inner
+      // .item is added to the match list instead, so navigation is precise.
+      const cards = panel.querySelectorAll(
+        '.copy-all-snapshot, .sfl-set, .item:not(.copy-all-snapshot .item)'
+      );
+      // First pass: snapshots — auto-expand if any match inside.
+      panel.querySelectorAll('.copy-all-snapshot').forEach(snap => {
+        const inner = snap.querySelectorAll('.item');
+        let anyInner = false;
+        inner.forEach(item => {
+          if (applySearchToCard(item, term, termLower)) {
+            item.classList.add('search-match');
+            searchMatches.push(item);
+            anyInner = true;
+          }
+        });
+        // Also search the snapshot's header (timestamp / count) and the
+        // collapsed summary rows (per-group URLs + counts) so collapsed boxes
+        // are still findable.
+        const head = snap.querySelector('.copy-all-header');
+        const summary = snap.querySelector('.copy-all-summary');
+        const headMatch = (head && applySearchToCard(head, term, termLower)) ||
+                          (summary && applySearchToCard(summary, term, termLower));
+        if (anyInner || headMatch) {
+          snap.classList.add('search-match');
+          if (anyInner) snap.dataset.searchAutoExpanded = 'true';
+        }
+      });
+      // Second pass: top-level .item cards (not inside any .copy-all-snapshot).
+      panel.querySelectorAll('.item').forEach(item => {
+        if (item.closest('.copy-all-snapshot')) return; // handled above
+        if (applySearchToCard(item, term, termLower)) {
+          item.classList.add('search-match');
+          searchMatches.push(item);
+        } else {
+          item.classList.add('search-no-match');
+        }
+      });
+      // Saved-for-later sets (history panel)
+      panel.querySelectorAll('.sfl-set').forEach(set => {
+        if (applySearchToCard(set, term, termLower)) {
+          set.classList.add('search-match');
+          searchMatches.push(set);
+        } else {
+          set.classList.add('search-no-match');
+        }
+      });
+    }
+
+    searchCurrentIdx = 0;
+    scrollToCurrentMatch();
+    updateSearchCount();
+  }
+
+  function scrollToCurrentMatch() {
+    if (searchMatches.length === 0) return;
+    searchMatches.forEach((el, i) => {
+      el.classList.toggle('search-current', i === searchCurrentIdx);
+    });
+    const cur = searchMatches[searchCurrentIdx];
+    if (!cur) return;
+    // If the current card lives inside a collapsed snapshot, expand the snapshot
+    // first so the match becomes visible.
+    const snap = cur.closest && cur.closest('.copy-all-snapshot');
+    if (snap && !snap.classList.contains('expanded')) {
+      snap.classList.add('expanded');
+    }
+    cur.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // For form controls, also select the first occurrence of the term so
+    // browser-native highlighting falls precisely on the matched range.
+    const term = (searchInput && searchInput.value.trim()) || '';
+    if (term) {
+      const field = cur.querySelector('textarea.search-note-match, input.search-note-match');
+      if (field && typeof field.setSelectionRange === 'function') {
+        const v = field.value || '';
+        const idx = v.toLowerCase().indexOf(term.toLowerCase());
+        if (idx >= 0) {
+          try { field.setSelectionRange(idx, idx + term.length); } catch (_) {}
+        }
+      }
+    }
+  }
+
+  function updateSearchCount() {
+    if (!searchCount) return;
+    if (!searchInput.value.trim()) {
+      searchCount.textContent = '';
+      delete searchCount.dataset.empty;
+      return;
+    }
+    if (searchMatches.length === 0) {
+      searchCount.textContent = 'No results';
+      searchCount.dataset.empty = 'true';
+    } else {
+      searchCount.textContent = `${searchCurrentIdx + 1}/${searchMatches.length}`;
+      delete searchCount.dataset.empty;
+    }
+  }
+
+  function nextMatch() {
+    if (searchMatches.length === 0) return;
+    searchCurrentIdx = (searchCurrentIdx + 1) % searchMatches.length;
+    scrollToCurrentMatch();
+    updateSearchCount();
+  }
+
+  function prevMatch() {
+    if (searchMatches.length === 0) return;
+    searchCurrentIdx = (searchCurrentIdx - 1 + searchMatches.length) % searchMatches.length;
+    scrollToCurrentMatch();
+    updateSearchCount();
+  }
+
+  // Keyboard: Ctrl+F / ⌘F open search; Escape closes it
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      if (searchActive) closeSearch();
+      else openSearch();
+      return;
+    }
+    if (e.key === 'Escape' && searchActive) {
+      closeSearch();
+    }
+  });
+
+  searchBtn.addEventListener('click', () => {
+    if (searchActive) closeSearch();
+    else openSearch();
+  });
+
+  if (undoBtn) undoBtn.addEventListener('click', () => doUndo());
+  if (redoBtn) redoBtn.addEventListener('click', () => doRedo());
+  updateUndoButtons();
+
+  searchInput.addEventListener('input', () => {
+    applySearch(searchInput.value.trim());
+  });
+
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) prevMatch();
+      else nextMatch();
+    }
+    if (e.key === 'Escape') closeSearch();
+  });
+
+  document.getElementById('search-prev').addEventListener('click', prevMatch);
+  document.getElementById('search-next').addEventListener('click', nextMatch);
+  document.getElementById('search-close').addEventListener('click', closeSearch);
+
+  // ── History panel ──────────────────────────────────────────────────────────
+  function showHistory() {
+    historyVisible  = true;
+    settingsVisible = false;
+    if (restoreBanner) restoreBanner.style.display = 'none';
+    // Search stays active — it will search history items instead
+    listEl.style.display      = 'none';
+    footer.style.display      = 'none';
+    settingsEl.style.display  = 'none';
+    historyEl.style.display   = 'block';
+    settingsBtn.textContent   = '⚙️';
+    settingsBtn.title         = 'Settings';
+    settingsBtn.classList.remove('active');
+    historyBtn.textContent    = '✕';
+    historyBtn.title          = 'Close history';
+    renderHistoryTab();
+  }
+
+  function renderHistoryTab() {
+    if (historyTab === 'annotations') renderAnnotationHistory();
+    else if (historyTab === 'saved')  renderSavedForLater();
+    else renderCopyHistory();
+  }
+
+  function historyTabsHTML(active) {
+    return `
+      <div class="hist-tabs">
+        <button class="hist-tab${active === 'annotations' ? ' active' : ''}" data-tab="annotations">Annotations</button>
+        <button class="hist-tab${active === 'saved'       ? ' active' : ''}" data-tab="saved">Saved for Later</button>
+        <button class="hist-tab${active === 'copies'      ? ' active' : ''}" data-tab="copies">Copy Log</button>
+      </div>`;
+  }
+
+  function attachTabListeners() {
+    historyEl.querySelectorAll('.hist-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        historyTab = btn.dataset.tab;
+        renderHistoryTab();
+      });
+    });
+  }
+
+  function renderAnnotationHistory() {
+    chrome.storage.local.get({ [HISTORY_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+      const hist  = r[HISTORY_KEY];
+      const store = r[ANN_STORE_KEY] || {};
+
+      if (hist.length === 0) {
+        historyEl.innerHTML = historyTabsHTML('annotations') +
+          `<p class="empty-msg">No annotation history yet.<br>Deleted annotations will appear here.</p>`;
+        attachTabListeners();
+        return;
+      }
+
+      // Dereference history into full ann objects, dropping orphans.
+      const sorted = [];
+      [...hist].reverse().forEach(h => {
+        const full = resolveRef(h, store);
+        if (!full) return; // orphan ref — skip rendering
+        sorted.push({ ...full, deletedAt: h.deletedAt || full.deletedAt });
+      });
+      const byUrl  = {};
+      sorted.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
+
+      let html = historyTabsHTML('annotations');
+      Object.entries(byUrl).forEach(([url, items]) => {
+        html += `<div class="url-group">
+          <div class="url-header">
+            <div class="url-label hist-clickable-text" data-full-text="${escHtml(url)}" title="${escHtml(url)}">${escHtml(url)}</div>
+          </div>`;
+        items.forEach(ann => {
+          const sel = getSelector(ann);
+          html += `
+          <div class="item hist-item">
+            <div class="item-sel">
+              <code class="hist-clickable-text" data-full-text="${escHtml(sel)}">${escHtml(sel)}</code>
+              <button class="hist-restore-btn"
+                data-ann-id="${escHtml(ann.id)}"
+                data-deleted-at="${escHtml(ann.deletedAt || '')}"
+                title="Restore annotation">↺</button>
+              <button class="hist-perm-delete-btn"
+                data-ann-id="${escHtml(ann.id)}"
+                data-deleted-at="${escHtml(ann.deletedAt || '')}"
+                title="Permanently delete">✕</button>
+            </div>
+            <div class="hist-meta">
+              <span class="hist-ts">📅 ${escHtml(formatTimestamp(ann.timestamp))}</span>
+              <span class="hist-ts hist-deleted">🗑 ${escHtml(formatTimestamp(ann.deletedAt))}</span>
+            </div>
+            ${ann.comment
+              ? `<div class="hist-note hist-clickable-text" data-full-text="${escHtml(ann.comment)}">${escHtml(ann.comment)}</div>`
+              : `<div class="hist-note empty-note">(no note)</div>`}
+          </div>`;
+        });
+        html += '</div>';
+      });
+
+      historyEl.innerHTML = html;
+      attachTabListeners();
+      attachExternalLinks(historyEl);
+      historyEl.querySelectorAll('.hist-restore-btn').forEach(btn => {
+        btn.addEventListener('click', () => restoreAnnotation(btn.dataset.annId, btn.dataset.deletedAt));
+      });
+
+      historyEl.querySelectorAll('.hist-perm-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => permDeleteAnnotationHistory(btn.dataset.annId, btn.dataset.deletedAt));
+      });
+
+      // Re-apply search highlights if search is active
+      if (searchActive && searchInput && searchInput.value.trim()) {
+        applySearch(searchInput.value.trim());
+      }
+    });
+  }
+
+  function permDeleteAnnotationHistory(annId, deletedAt) {
+    chrome.storage.local.get({ [HISTORY_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+      const removed = r[HISTORY_KEY].filter(a => a.id === annId && a.deletedAt === deletedAt);
+      const newHist = r[HISTORY_KEY].filter(a => !(a.id === annId && a.deletedAt === deletedAt));
+      const store   = { ...(r[ANN_STORE_KEY] || {}) };
+      refStoreDec(store, removed.map(h => h.id));
+      chrome.storage.local.set({ [HISTORY_KEY]: newHist, [ANN_STORE_KEY]: store }, () => renderAnnotationHistory());
+    });
+  }
+
+  function renderSavedForLater() {
+    chrome.storage.local.get({ [SAVED_LATER_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+      const sets  = r[SAVED_LATER_KEY] || [];
+      const store = r[ANN_STORE_KEY] || {};
+      if (sets.length === 0) {
+        historyEl.innerHTML = historyTabsHTML('saved') +
+          `<p class="empty-msg">No saved-for-later sets yet.<br>Right-click <strong>🗑 Clear All</strong> to save the current annotations here.</p>`;
+        attachTabListeners();
+        return;
+      }
+
+      let html = historyTabsHTML('saved');
+      [...sets].reverse().forEach(set => {
+        const when  = formatTimestamp(set.savedAt);
+        // Resolve references; fall back to legacy inline annotations array.
+        const resolved = Array.isArray(set.annotationIds)
+          ? resolveList(set.annotationIds, store)
+          : (set.annotations || []);
+        const items = resolved.slice(0, 50);
+        // Group by URL so we can render thin blue URL separators between
+        // annotation groups while preserving the original order. Multi-element
+        // annotations stay as a single row (selectors joined with ellipsis).
+        const groups = [];
+        const groupIdx = new Map();
+        items.forEach(ann => {
+          const u = ann.url || '';
+          if (!groupIdx.has(u)) {
+            groupIdx.set(u, groups.length);
+            groups.push({ url: u, items: [] });
+          }
+          groups[groupIdx.get(u)].items.push(ann);
+        });
+        const overflow = resolved.length > items.length
+          ? `<li class="sfl-overflow"><em>+${resolved.length - items.length} more…</em></li>`
+          : '';
+        html += `
+        <div class="sfl-set" data-set-id="${escHtml(set.id)}">
+          <div class="sfl-set-header">
+            <span class="sfl-set-meta">📅 ${escHtml(when)} · ${set.count || items.length} annotation${(set.count || items.length) !== 1 ? 's' : ''}</span>
+            <div class="sfl-set-actions">
+              <button class="hist-restore-btn sfl-restore" data-set-id="${escHtml(set.id)}" title="Restore these annotations">↺</button>
+              <button class="hist-perm-delete-btn sfl-delete" data-set-id="${escHtml(set.id)}" title="Delete this set">✕</button>
+            </div>
+          </div>
+          ${groups.map(g => `
+            <div class="sfl-url-group">
+              <div class="sfl-url hist-clickable-text" data-full-text="${escHtml(g.url || '')}" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
+              <ul class="sfl-set-list">
+                ${g.items.map(ann => {
+                  const sel  = getSelectorDisplay(ann);
+                  const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
+                  const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
+                  // Per-row clear button — every item in the list must have an
+                  // action button (mirrors the rule in Annotation History and
+                  // Copy Log). Uses the same trash-can button as the Current
+                  // Annotations tab. Clearing removes the annotation from this
+                  // saved-for-later set but preserves it in the Annotations
+                  // History tab so it can never be permanently lost from a
+                  // single click.
+                  const rowBtn = ann.id
+                    ? `<button class="item-delete-btn sfl-row-clear-btn" data-set-id="${escHtml(set.id)}" data-ann-id="${escHtml(ann.id)}" title="Clear annotation (kept in Annotation History)">🗑</button>`
+                    : `<button class="item-delete-btn sfl-row-clear-btn sfl-row-clear-btn--dom" title="Clear row">🗑</button>`;
+                  return `<li title="${escHtml(sel)}"><code class="hist-clickable-text" data-full-text="${escHtml(sel)}">${escHtml(sel)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span>${rowBtn}</li>`;
+                }).join('')}
+              </ul>
+            </div>`).join('')}
+          ${overflow ? `<ul class="sfl-set-list">${overflow}</ul>` : ''}
+        </div>`;
+      });
+
+      historyEl.innerHTML = html;
+      attachTabListeners();
+
+      historyEl.querySelectorAll('.sfl-restore').forEach(btn => {
+        btn.addEventListener('click', () => restoreSavedForLaterSet(btn.dataset.setId));
+      });
+      historyEl.querySelectorAll('.sfl-delete').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const ok = await showConfirm('Delete this saved-for-later set? This cannot be undone.', { okLabel: 'Delete' });
+          if (!ok) return;
+          deleteSavedForLaterSet(btn.dataset.setId);
+        });
+      });
+
+      // Per-row clear: remove a single annotation from a saved-for-later set
+      // but preserve it in the Annotation History tab (so it is never
+      // permanently deleted by a single click).
+      // For DOM-only fallbacks (legacy items missing an id), just hide the row.
+      historyEl.querySelectorAll('.sfl-row-clear-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          if (btn.classList.contains('sfl-row-clear-btn--dom')) {
+            const li = btn.closest('li');
+            if (li) li.remove();
             return;
           }
-      });
-      n.observe(t);
-    }
-    function Ct(t) {
-      const e = { ...t, expiresAt: Date.now() + 3e4 };
-      return new Promise((t) => chrome.storage.local.set({ _navIntent: e }, t));
-    }
-    function It(t, e, n = "cleared", o = null) {
-      ((F = { annotations: t, deletedAt: e, action: n, savedSetId: o }),
-        clearTimeout(R));
-      const a = t.length,
-        s =
-          "saved" === n
-            ? `Saved ${a} annotation${1 !== a ? "s" : ""} for later`
-            : "Annotations saved to history";
-      ((E.innerHTML = `\n      <span class="undo-banner-text">${mt(s)}</span>\n      <button id="undo-clear-btn" class="undo-clear-btn">Undo</button>\n    `),
-        (E.style.display = "flex"),
-        document
-          .getElementById("undo-clear-btn")
-          .addEventListener("click", () => {
-            if (!F) return;
-            const {
-              annotations: t,
-              deletedAt: e,
-              action: n,
-              savedSetId: o,
-            } = F;
-            ((F = null),
-              Tt(),
-              "saved" !== n
-                ? chrome.storage.local.get(
-                    { annotations: [], [x]: [], [I]: {} },
-                    (n) => {
-                      const o = new Set(t.map((t) => t.id)),
-                        a = n[x].filter(
-                          (t) => o.has(t.id) && t.deletedAt === e,
-                        ),
-                        s = n[x].filter(
-                          (t) => !(o.has(t.id) && t.deletedAt === e),
-                        ),
-                        r = { ...(n[I] || {}) };
-                      (Et(
-                        r,
-                        a.map((t) => t.id),
-                      ),
-                        (D = !0),
-                        chrome.storage.local.set(
-                          { annotations: t, [x]: s, [I]: r },
-                          () => {
-                            ((D = !1), qt(t), t.forEach((t) => Q(t)));
-                          },
-                        ));
-                    },
-                  )
-                : chrome.storage.local.get(
-                    { annotations: [], [L]: [], [I]: {} },
-                    (e) => {
-                      const n = e[L].find((t) => t.id === o),
-                        a = e[L].filter((t) => t.id !== o),
-                        s = { ...(e[I] || {}) };
-                      (n &&
-                        Et(
-                          s,
-                          (Array.isArray(n.annotationIds)
-                            ? n.annotationIds
-                            : (n.annotations || []).map((t) => t.id)
-                          ).filter(Boolean),
-                        ),
-                        (D = !0),
-                        chrome.storage.local.set(
-                          { annotations: t, [L]: a, [I]: s },
-                          () => {
-                            ((D = !1), qt(t), t.forEach((t) => Q(t)));
-                          },
-                        ));
-                    },
-                  ));
-          }),
-        (R = setTimeout(Tt, 5e3)));
-    }
-    function Tt() {
-      (clearTimeout(R), (E.style.display = "none"), (E.innerHTML = ""));
-    }
-    function _t(t, e) {
-      const n = !!(e = e || {}).showGroupCount,
-        o = !!e.accordion,
-        a = e.openUrls instanceof Set ? e.openUrls : new Set(),
-        s = e.snapId || "",
-        r = {};
-      t.forEach((t) => (r[t.url] = r[t.url] || []).push(t));
-      let i = "";
-      return (
-        Object.entries(r).forEach(([t, e]) => {
-          const r = n
-              ? `<span class="count-badge copy-all-group-count" title="${e.length} annotation${1 !== e.length ? "s" : ""}">${e.length}</span>`
-              : "",
-            l = !o || a.has(t),
-            c = `url-group${o ? " url-group--accordion" : ""}${o && l ? " open" : ""}`,
-            d = o
-              ? ` data-accordion-snap="${mt(s)}" data-accordion-url="${mt(t)}" role="button" tabindex="0"`
-              : "";
-          ((i += `<div class="${c}">\n        <div class="url-header"${d}>\n          ${o ? '<span class="url-group-caret" aria-hidden="true">▸</span>' : ""}<div class="url-label url-label--clickable copy-all-group-url" title="${mt(t)}" data-nav-url="${mt(t)}">${mt(t)}</div>\n          <button class="url-copy-btn" data-url="${mt(t)}" title="Copy group as Markdown">📋 Copy group</button>\n          <button class="url-clear-group-btn" data-url="${mt(t)}" title="Clear group (saves to history)">🗑</button>\n          ${r}\n        </div>`),
-            o && (i += '<div class="url-group-body">'),
-            e.forEach((t) => {
-              const e = gt(t),
-                n = !(!t.pageLevel && "page" !== t.tag),
-                o =
-                  Array.isArray(t.contextElements) &&
-                  t.contextElements.length > 0,
-                a = o
-                  ? `Click to navigate to this annotation\n${e}`
-                  : "Click to navigate to this annotation";
-              i += `\n        <div class="item${n ? " item--page-level" : ""}">\n          <div class="item-sel">\n            <code class="ann-code--clickable${o ? " ann-code--multi" : ""}" data-nav-ann-id="${mt(t.id)}" title="${mt(a)}">${mt(e)}</code>\n            <button class="item-copy-btn" data-ann-id="${mt(t.id)}" title="Copy this annotation">📋</button>\n            <button class="item-delete-btn" data-ann-id="${mt(t.id)}" title="Clear annotation">🗑</button>\n          </div>\n          <textarea\n            class="item-note-edit"\n            data-ann-id="${mt(t.id)}"\n            placeholder="Add a note…"\n          >${mt(t.comment || "")}</textarea>\n        </div>`;
-            }),
-            o && (i += "</div>"),
-            (i += "</div>"));
-        }),
-        i
-      );
-    }
-    function qt(t) {
-      if (
-        ((p.textContent = t.length > 0 ? String(t.length) : ""), 0 === t.length)
-      )
-        return (
-          ut((t) => {
-            const e = (function (t) {
-              return n[t] || "Alt";
-            })(t.shortcut?.modifier || "alt");
-            c.innerHTML = `\n          <p class="empty-msg">\n            No annotations yet.<br>\n            Hold <strong>${mt(e)} + Right-Click</strong> any element on a page.\n          </p>`;
-          }),
-          void chrome.storage.local.set({ [C]: [] })
-        );
-      chrome.storage.local.get({ [C]: [] }, (e) => {
-        const n = e[C] || [],
-          o = (function (t, e) {
-            const n = new Set(e.map((t) => t.id)),
-              o = [];
-            return (
-              t.forEach((t) => {
-                const e = (
-                  Array.isArray(t.annotationIds) ? t.annotationIds : []
-                ).filter((t) => n.has(t));
-                e.length > 0 && o.push({ ...t, annotationIds: e });
-              }),
-              o
-            );
-          })(n, t);
-        (o.length !== n.length ||
-          o.some(
-            (t, e) =>
-              n[e] &&
-              t.annotationIds.length !== (n[e].annotationIds || []).length,
-          )) &&
-          chrome.storage.local.set({ [C]: o });
-        const a = new Set();
-        o.forEach((t) => (t.annotationIds || []).forEach((t) => a.add(t)));
-        const s = new Map(t.map((t) => [t.id, t])),
-          r = t.filter((t) => !a.has(t.id));
-        let d = "";
-        (o.forEach((t) => {
-          const e = (t.annotationIds || [])
-              .map((t) => s.get(t))
-              .filter(Boolean),
-            n = !!t.expanded,
-            o = (function (t) {
-              if (!t) return "";
-              try {
-                const e = new Date(t);
-                return `${e.toLocaleTimeString(void 0, { hour: "numeric", minute: "2-digit" })}, ${e.toLocaleDateString(void 0, { weekday: "long" })}, ${e.toLocaleDateString(void 0, { year: "numeric", month: "short", day: "numeric" })}`;
-              } catch {
-                return t;
-              }
-            })(t.timestamp),
-            a =
-              ((function (t) {
-                if (!t) return "";
-                try {
-                  const e = new Date(t),
-                    n = e.toLocaleDateString(void 0, {
-                      month: "short",
-                      day: "numeric",
-                    });
-                  let o = e.getHours();
-                  const a = e.getMinutes(),
-                    s = o >= 12 ? "p" : "a";
-                  return (
-                    (o %= 12),
-                    0 === o && (o = 12),
-                    `${n}, ${o}:${a < 10 ? `0${a}` : `${a}`}${s}`
-                  );
-                } catch {
-                  return t;
-                }
-              })(t.timestamp),
-              (function (t) {
-                if (!t) return "";
-                try {
-                  const e = new Date(t);
-                  return `${e.toLocaleTimeString(void 0, { hour: "numeric", minute: "2-digit" })}, ${e.getMonth() + 1}/${e.getDate()}`;
-                } catch {
-                  return t;
-                }
-              })(t.timestamp));
-          d += `\n        <div class="copy-all-snapshot${n ? " expanded" : ""}" data-snap-id="${mt(t.id)}">\n          <div class="copy-all-header" data-snap-toggle="${mt(t.id)}" role="button" tabindex="0" title="Click to ${n ? "collapse" : "expand"}">\n            <span class="copy-all-caret" aria-hidden="true">▸</span>\n            <span class="count-badge copy-all-title-count" title="${e.length} annotation${1 !== e.length ? "s" : ""} copied">${e.length}</span>\n            <span class="copy-all-meta copy-all-meta--copied" title="${mt(o)}">${mt(a)}</span>\n            <span class="copy-all-spacer"></span>\n            <button class="copy-all-action copy-all-save copy-all-save--icon" data-snap-id="${mt(t.id)}" title="Save for later — move these annotations to the Saved for Later tab" aria-label="Save for later">🕐</button>\n            <button class="copy-all-action copy-all-ungroup" data-snap-ungroup="${mt(t.id)}" title="Unpack — move these annotations back into the main list">⇱ Unpack</button>\n            <button class="copy-all-action copy-all-clear copy-all-clear--icon" data-snap-id="${mt(t.id)}" title="Clear (move to history)" aria-label="Clear group (move to history)">🗑</button>\n          </div>\n          <div class="copy-all-summary">\n            ${(() => {
-            const n = {};
-            return (
-              e.forEach((t) => (n[t.url] = n[t.url] || []).push(t)),
-              Object.entries(n)
-                .map(
-                  ([e, n]) =>
-                    `\n                <div class="copy-all-summary-row" data-snap-jump="${mt(t.id)}" data-jump-url="${mt(e)}" role="button" tabindex="0" title="Click to expand and jump to this group">\n                  <span class="copy-all-group-url" title="${mt(e)}">${mt(e)}</span>\n                  <span class="count-badge copy-all-group-count">${n.length}</span>\n                </div>`,
-                )
-                .join("")
-            );
-          })()}\n          </div>\n          <div class="copy-all-body">\n            ${_t(e, { showGroupCount: !0, accordion: !0, snapId: t.id, openUrls: new Set(Array.isArray(t.openUrls) ? t.openUrls : []) })}\n          </div>\n        </div>`;
-        }),
-          r.length > 0 && (d += _t(r, { showGroupCount: !1 })),
-          (function (t) {
-            ((c.innerHTML = t),
-              c.querySelectorAll(".item-note-edit").forEach((t) => Lt(t)),
-              c.querySelectorAll(".item-note-edit").forEach((t) => {
-                let e = !1;
-                (t.addEventListener("input", () => {
-                  var n, o;
-                  ((n = t.dataset.annId),
-                    (o = t.value),
-                    clearTimeout($t[n]),
-                    ($t[n] = setTimeout(() => {
-                      ((D = !0),
-                        chrome.storage.local.get({ annotations: [] }, (t) => {
-                          const e = t.annotations,
-                            a = e.find((t) => t.id === n);
-                          a
-                            ? ((a.comment = o),
-                              chrome.storage.local.set(
-                                { annotations: e },
-                                () => {
-                                  D = !1;
-                                },
-                              ))
-                            : (D = !1);
-                        }));
-                    }, 350)),
-                    Lt(t),
-                    !e && t.closest(".copy-all-snapshot") && (e = !0));
-                }),
-                  t.addEventListener("blur", () => {
-                    if (!e) return;
-                    if (((e = !1), !t.closest(".copy-all-snapshot"))) return;
-                    const n = t.dataset.annId,
-                      o = t.value;
-                    (clearTimeout($t[n]),
-                      delete $t[n],
-                      (D = !0),
-                      chrome.storage.local.get(
-                        { annotations: [], [C]: [] },
-                        (t) => {
-                          const e = t.annotations.slice(),
-                            a = t[C] || [],
-                            s = e.find((t) => t.id === n),
-                            r = a
-                              .map((t) => ({
-                                ...t,
-                                annotationIds: (t.annotationIds || []).filter(
-                                  (t) => t !== n,
-                                ),
-                              }))
-                              .filter(
-                                (t) => (t.annotationIds || []).length > 0,
-                              ),
-                            i = { [C]: r };
-                          (s && ((s.comment = o), (i.annotations = e)),
-                            chrome.storage.local.set(i, () => {
-                              ((D = !1), Ot());
-                            }));
-                        },
-                      ));
-                  }));
-              }),
-              c.querySelectorAll(".item-delete-btn").forEach((t) => {
-                t.addEventListener("click", () => {
-                  return (
-                    (e = t.dataset.annId),
-                    (D = !0),
-                    void bt((t) => {
-                      const n = t.annotations,
-                        o = t[x],
-                        a = { ...(t[I] || {}) },
-                        s = n.find((t) => t.id === e);
-                      let r = o;
-                      if (s) {
-                        const t = o.filter((t) => t.id === s.id);
-                        (t.length &&
-                          Et(
-                            a,
-                            t.map((t) => t.id),
-                          ),
-                          (r = o.filter((t) => t.id !== s.id)),
-                          a[s.id] || (a[s.id] = { ...s, _refCount: 0 }),
-                          (a[s.id]._refCount = (a[s.id]._refCount || 0) + 1),
-                          r.push({
-                            id: s.id,
-                            deletedAt: new Date().toISOString(),
-                          }));
-                      }
-                      const i = n.filter((t) => t.id !== e);
-                      chrome.storage.local.set(
-                        { annotations: i, [x]: r, [I]: a },
-                        () => {
-                          vt(() => {
-                            ((D = !1), qt(i), s && Y(e, s.xpath));
-                          });
-                        },
-                      );
-                    })
-                  );
-                  var e;
-                });
-              }),
-              c.querySelectorAll(".url-copy-btn").forEach((t) => {
-                t.addEventListener("click", () => {
-                  return (
-                    (e = t.dataset.url),
-                    void chrome.storage.local.get({ annotations: [] }, (t) => {
-                      const n = t.annotations.filter(
-                        (t) => t.url === e && t.comment && t.comment.trim(),
-                      );
-                      if (0 === n.length)
-                        return void i(
-                          "No annotations with notes in this group.",
-                        );
-                      let o = `## ${e}\n`;
-                      (n.forEach((t, e) => {
-                        o += st(e + 1, t);
-                      }),
-                        navigator.clipboard
-                          .writeText(o.trim())
-                          .then(() => {
-                            const t = e
-                                .replace(/\\/g, "\\\\")
-                                .replace(/"/g, '\\"'),
-                              n = c.querySelector(
-                                `.url-copy-btn[data-url="${t}"]`,
-                              );
-                            if (n) {
-                              const t = n.innerHTML;
-                              ((n.innerHTML = "✅ Copied!"),
-                                setTimeout(() => (n.innerHTML = t), 1500));
-                            }
-                          })
-                          .catch(() =>
-                            i("Clipboard write failed.", { kind: "error" }),
-                          ));
-                    })
-                  );
-                  var e;
-                });
-              }),
-              c.querySelectorAll(".url-clear-group-btn").forEach((t) => {
-                t.addEventListener("click", () => {
-                  return (
-                    (e = t.dataset.url),
-                    void bt((t) => {
-                      const n = t.annotations.filter((t) => t.url === e);
-                      if (0 === n.length) return;
-                      const o = t.annotations.filter((t) => t.url !== e);
-                      let a = t[x];
-                      const s = { ...(t[I] || {}) },
-                        r = new Date().toISOString();
-                      (n.forEach((t) => {
-                        const e = a.filter((e) => e.id === t.id);
-                        (e.length &&
-                          Et(
-                            s,
-                            e.map((t) => t.id),
-                          ),
-                          (a = a.filter((e) => e.id !== t.id)),
-                          s[t.id] || (s[t.id] = { ...t, _refCount: 0 }),
-                          (s[t.id]._refCount = (s[t.id]._refCount || 0) + 1),
-                          a.push({ id: t.id, deletedAt: r }));
-                      }),
-                        (D = !0),
-                        chrome.storage.local.set(
-                          { annotations: o, [x]: a, [I]: s },
-                          () => {
-                            vt(() => {
-                              ((D = !1),
-                                qt(o),
-                                n.forEach((t) => Y(t.id, t.xpath)));
-                            });
-                          },
-                        ));
-                    })
-                  );
-                  var e;
-                });
-              }),
-              c.querySelectorAll(".item-copy-btn").forEach((t) => {
-                t.addEventListener("click", () => {
-                  return (
-                    (e = t.dataset.annId),
-                    void chrome.storage.local.get({ annotations: [] }, (t) => {
-                      const n = t.annotations.find((t) => t.id === e);
-                      if (!n) return;
-                      const o = st(1, n).trim();
-                      navigator.clipboard
-                        .writeText(o)
-                        .then(() => {
-                          const t = c.querySelector(
-                            `.item-copy-btn[data-ann-id="${e}"]`,
-                          );
-                          if (t) {
-                            const e = t.innerHTML;
-                            ((t.innerHTML = "✅"),
-                              setTimeout(() => (t.innerHTML = e), 1500));
-                          }
-                        })
-                        .catch(() =>
-                          i("Clipboard write failed.", { kind: "error" }),
-                        );
-                    })
-                  );
-                  var e;
-                });
-              }),
-              c.querySelectorAll("[data-snap-toggle]").forEach((t) => {
-                const e = (e) => {
-                  e.target.closest("button") ||
-                    e.target.closest(".copy-all-summary-row") ||
-                    ("keydown" === e.type &&
-                      "Enter" !== e.key &&
-                      " " !== e.key) ||
-                    ("keydown" === e.type && e.preventDefault(),
-                    Mt(t.dataset.snapToggle));
-                };
-                (t.addEventListener("click", e),
-                  t.addEventListener("keydown", e));
-              }),
-              c.querySelectorAll("[data-snap-collapse]").forEach((t) => {
-                t.addEventListener("click", (e) => {
-                  (e.stopPropagation(), Mt(t.dataset.snapCollapse, !1));
-                });
-              }),
-              c.querySelectorAll(".copy-all-save").forEach((t) => {
-                t.addEventListener("click", (e) => {
-                  var n;
-                  (e.stopPropagation(),
-                    (n = t.dataset.snapId),
-                    bt((t) => {
-                      chrome.storage.local.get({ [C]: [] }, (e) => {
-                        const o = e[C] || [],
-                          a = o.find((t) => t.id === n);
-                        if (!a) return;
-                        const s = (a.annotationIds || []).filter(Boolean),
-                          r = new Set(s),
-                          l = t.annotations.filter((t) => r.has(t.id));
-                        if (0 === l.length)
-                          return void chrome.storage.local.set(
-                            { [C]: o.filter((t) => t.id !== n) },
-                            () => Ot(),
-                          );
-                        const c = t.annotations.filter((t) => !r.has(t.id)),
-                          d = { ...(t[I] || {}) },
-                          u = new Date().toISOString(),
-                          p = `sfl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-                          h = [...s].sort().join(","),
-                          m = [],
-                          y = (t[L] || []).filter(
-                            (t) =>
-                              [
-                                ...(Array.isArray(t.annotationIds)
-                                  ? t.annotationIds
-                                  : (t.annotations || []).map((t) => t.id)),
-                              ]
-                                .sort()
-                                .join(",") !== h || (m.push(t), !1),
-                          );
-                        (m.forEach((t) => {
-                          const e = Array.isArray(t.annotationIds)
-                            ? t.annotationIds
-                            : (t.annotations || []).map((t) => t.id);
-                          Et(d, e.filter(Boolean));
-                        }),
-                          l.forEach((t) => {
-                            (d[t.id]
-                              ? (d[t.id] = { ...d[t.id], ...t })
-                              : (d[t.id] = { ...t, _refCount: 0 }),
-                              (d[t.id]._refCount =
-                                (d[t.id]._refCount || 0) + 1));
-                          }));
-                        const g = [
-                            ...y,
-                            {
-                              id: p,
-                              savedAt: u,
-                              count: l.length,
-                              annotationIds: s,
-                            },
-                          ],
-                          f = o.filter((t) => t.id !== n);
-                        ((D = !0),
-                          chrome.storage.local.set(
-                            { annotations: c, [L]: g, [I]: d, [C]: f },
-                            () => {
-                              ((D = !1),
-                                qt(c),
-                                l.forEach((t) => Y(t.id, t.xpath)),
-                                i(
-                                  `Saved ${l.length} annotation${1 !== l.length ? "s" : ""} for later.`,
-                                ));
-                            },
-                          ));
-                      });
-                    }));
-                });
-              }),
-              c.querySelectorAll(".copy-all-clear").forEach((t) => {
-                t.addEventListener("click", async (e) => {
-                  var n;
-                  (e.stopPropagation(),
-                    (await l(
-                      "Clear all annotations in this group? They will be moved to history.",
-                      { okLabel: "Clear" },
-                    )) &&
-                      ((n = t.dataset.snapId),
-                      bt((t) => {
-                        chrome.storage.local.get({ [C]: [] }, (e) => {
-                          const o = e[C] || [],
-                            a = o.find((t) => t.id === n);
-                          if (!a) return;
-                          const s = new Set(
-                              (a.annotationIds || []).filter(Boolean),
-                            ),
-                            r = t.annotations.filter((t) => s.has(t.id)),
-                            l = t.annotations.filter((t) => !s.has(t.id)),
-                            c = { ...(t[I] || {}) };
-                          let d = t[x];
-                          const u = new Date().toISOString();
-                          r.forEach((t) => {
-                            const e = d.filter((e) => e.id === t.id);
-                            (e.length &&
-                              Et(
-                                c,
-                                e.map((t) => t.id),
-                              ),
-                              (d = d.filter((e) => e.id !== t.id)),
-                              c[t.id]
-                                ? (c[t.id] = { ...c[t.id], ...t })
-                                : (c[t.id] = { ...t, _refCount: 0 }),
-                              (c[t.id]._refCount =
-                                (c[t.id]._refCount || 0) + 1),
-                              d.push({ id: t.id, deletedAt: u }));
-                          });
-                          const p = o.filter((t) => t.id !== n);
-                          ((D = !0),
-                            chrome.storage.local.set(
-                              { annotations: l, [x]: d, [I]: c, [C]: p },
-                              () => {
-                                vt(() => {
-                                  ((D = !1),
-                                    qt(l),
-                                    r.forEach((t) => Y(t.id, t.xpath)),
-                                    i(
-                                      `Cleared ${r.length} annotation${1 !== r.length ? "s" : ""} (saved to history).`,
-                                    ));
-                                });
-                              },
-                            ));
-                        });
-                      })));
-                });
-              }),
-              c.querySelectorAll("[data-snap-ungroup]").forEach((t) => {
-                (t.addEventListener("click", (e) => {
-                  (e.stopPropagation(), Dt(t.dataset.snapUngroup));
-                }),
-                  t.addEventListener("keydown", (e) => {
-                    ("Enter" !== e.key && " " !== e.key) ||
-                      (e.preventDefault(),
-                      e.stopPropagation(),
-                      Dt(t.dataset.snapUngroup));
-                  }));
-              }),
-              c.querySelectorAll(".copy-all-summary-row").forEach((t) => {
-                const e = (e) => {
-                  var n, o;
-                  ("keydown" === e.type &&
-                    "Enter" !== e.key &&
-                    " " !== e.key) ||
-                    ("keydown" === e.type && e.preventDefault(),
-                    e.stopPropagation(),
-                    (n = t.dataset.snapJump),
-                    (o = t.dataset.jumpUrl),
-                    Bt(
-                      n,
-                      (t) => {
-                        const e = new Set(
-                          Array.isArray(t.openUrls) ? t.openUrls : [],
-                        );
-                        return (
-                          e.add(o),
-                          { ...t, expanded: !0, openUrls: [...e] }
-                        );
-                      },
-                      () => {
-                        const t = c.querySelector(
-                          `.copy-all-snapshot[data-snap-id="${Ht(n)}"]`,
-                        );
-                        if (!t) return;
-                        t.classList.add("expanded");
-                        const e = Ht(o),
-                          a = t.querySelector(
-                            `.copy-all-body .url-header [data-nav-url="${e}"]`,
-                          ),
-                          s = a ? a.closest(".url-header") : null,
-                          r = s ? s.closest(".url-group--accordion") : null;
-                        r && r.classList.add("open");
-                        const i = s || t;
-                        try {
-                          i.scrollIntoView({
-                            block: "start",
-                            behavior: "smooth",
-                          });
-                        } catch (t) {
-                          i.scrollIntoView();
-                        }
-                        s &&
-                          (s.classList.add("item-nav-flash"),
-                          setTimeout(
-                            () => s.classList.remove("item-nav-flash"),
-                            700,
-                          ));
-                      },
-                    ));
-                };
-                (t.addEventListener("click", e),
-                  t.addEventListener("keydown", e));
-              }),
-              c
-                .querySelectorAll(".url-header[data-accordion-snap]")
-                .forEach((t) => {
-                  const e = (e) => {
-                    var n, o;
-                    e.target.closest("button") ||
-                      e.target.closest(".url-label--clickable") ||
-                      ("keydown" === e.type &&
-                        "Enter" !== e.key &&
-                        " " !== e.key) ||
-                      ("keydown" === e.type && e.preventDefault(),
-                      e.stopPropagation(),
-                      (n = t.dataset.accordionSnap),
-                      (o = t.dataset.accordionUrl),
-                      n &&
-                        Bt(
-                          n,
-                          (t) => {
-                            const e = new Set(
-                              Array.isArray(t.openUrls) ? t.openUrls : [],
-                            );
-                            return (
-                              e.has(o) ? e.delete(o) : e.add(o),
-                              { ...t, openUrls: [...e] }
-                            );
-                          },
-                          () => {
-                            const t = c.querySelector(
-                              `.copy-all-snapshot[data-snap-id="${Ht(n)}"]`,
-                            );
-                            if (!t) return;
-                            const e = t.querySelector(
-                              `.url-header[data-accordion-snap="${Ht(n)}"][data-accordion-url="${Ht(o)}"]`,
-                            );
-                            if (!e) return;
-                            const a = e.closest(".url-group--accordion");
-                            a && a.classList.toggle("open");
-                          },
-                        ));
-                  };
-                  (t.addEventListener("click", e),
-                    t.addEventListener("keydown", e));
-                }),
-              N && b && b.value.trim() && Zt(b.value.trim()));
-          })(d));
-      });
-    }
-    function Bt(t, e, n) {
-      chrome.storage.local.get({ [C]: [] }, (o) => {
-        const a = (o[C] || []).map((n) => (n.id === t ? e(n) : n));
-        chrome.storage.local.set({ [C]: a }, () => n && n(a));
-      });
-    }
-    function Mt(t, e) {
-      Bt(
-        t,
-        (t) => ({ ...t, expanded: "boolean" == typeof e ? e : !t.expanded }),
-        () => {
-          const n = c.querySelector(
-            `.copy-all-snapshot[data-snap-id="${Ht(t)}"]`,
-          );
-          n &&
-            ("boolean" == typeof e
-              ? n.classList.toggle("expanded", e)
-              : n.classList.toggle("expanded"));
-        },
-      );
-    }
-    function Ht(t) {
-      return "undefined" != typeof CSS && CSS.escape
-        ? CSS.escape(t)
-        : String(t).replace(/"/g, '\\"');
-    }
-    function Dt(t) {
-      chrome.storage.local.get({ [C]: [] }, (e) => {
-        const n = e[C] || [],
-          o = n.find((e) => e.id === t);
-        if (!o) return;
-        const a = n.filter((e) => e.id !== t),
-          s = (o.annotationIds || []).length;
-        chrome.storage.local.set({ [C]: a }, () => {
-          (Ot(), i(`Ungrouped ${s} annotation${1 !== s ? "s" : ""}.`));
+          clearAnnotationFromSavedForLater(btn.dataset.setId, btn.dataset.annId);
         });
       });
-    }
-    function Nt(t) {
-      const n = t.buttonActions || dt.buttonActions,
-        o = n.copyBtn?.left || "copyAll",
-        a = n.copyBtn?.right || "cutAll",
-        s = n.clearBtn?.left || "clearAll",
-        r = n.clearBtn?.right || "saveForLater",
-        i = e[o] || e.copyAll,
-        l = e[a] || e.cutAll,
-        c = e[s] || e.clearAll,
-        d = e[r] || e.saveForLater;
-      ((h.innerHTML = `\n      <span>${i.emoji} ${mt(i.label)}</span>\n      <span class="cut-hint">right-click: ${mt(l.label.toLowerCase())}</span>`),
-        (m.innerHTML = `\n      <span>${c.emoji} ${mt(c.label)}</span>\n      <span class="cut-hint">right-click: ${mt(d.label.toLowerCase())}</span>`));
-    }
-    function Ot() {
-      chrome.storage.local.get({ annotations: [] }, (t) => qt(t.annotations));
-    }
-    function jt(t) {
-      const e = {};
-      (U.forEach((t) => {
-        e[t] = void 0;
-      }),
-        chrome.storage.local.get(e, (e) => {
-          const n = {};
-          (U.forEach((t) => {
-            n[t] = e[t];
-          }),
-            t(n));
-        }));
-    }
-    function Pt(t, e) {
-      if (!t) return void (e && e());
-      const n = {},
-        o = [];
-      (U.forEach((e) => {
-        if (Object.prototype.hasOwnProperty.call(t, e)) {
-          const a = t[e];
-          void 0 === a ? o.push(e) : (n[e] = a);
-        }
-      }),
-        G++,
-        (D = !0));
-      const a = () => {
-          ((D = !1),
-            setTimeout(() => {
-              G = Math.max(0, G - 1);
-            }, 50),
-            chrome.storage.local.get({ annotations: [], [$]: dt }, (t) => {
-              (B ? se() : M ? ue() : qt(t.annotations),
-                ht((t[$] || {}).darkMode),
-                Nt({ ...dt, ...(t[$] || {}) }));
-            }),
-            e && e());
-        },
-        s = () => {
-          if (0 === o.length) return a();
-          chrome.storage.local.remove(o, a);
-        };
-      0 === Object.keys(n).length ? s() : chrome.storage.local.set(n, s);
-    }
-    function Ft() {
-      if (0 === K.length) return;
-      const t = K.pop();
-      jt((e) => {
-        const n = {};
-        (Object.keys(t).forEach((t) => {
-          n[t] = e[t];
-        }),
-          V.push(n),
-          V.length > 100 && V.shift(),
-          Pt(t, Ut));
-      });
-    }
-    function Rt() {
-      if (0 === V.length) return;
-      const t = V.pop();
-      jt((e) => {
-        const n = {};
-        (Object.keys(t).forEach((t) => {
-          n[t] = e[t];
-        }),
-          K.push(n),
-          K.length > 100 && K.shift(),
-          Pt(t, Ut));
-      });
-    }
-    function Ut() {
-      (J && (J.disabled = 0 === K.length), X && (X.disabled = 0 === V.length));
-    }
-    function Kt(t, e) {
-      if (!e || !e.key) return !1;
-      if ((t.key || "").toLowerCase() !== String(e.key).toLowerCase())
-        return !1;
-      const n = e.modifier || "mod",
-        o = /Mac|iPhone|iPad/.test(navigator.platform || "");
-      return "mod" === n
-        ? (o ? t.metaKey : t.ctrlKey) && !t.altKey
-        : "ctrl" === n
-          ? t.ctrlKey && !t.metaKey
-          : "meta" === n
-            ? t.metaKey && !t.ctrlKey
-            : "alt" === n
-              ? t.altKey && !t.ctrlKey && !t.metaKey
-              : "shift" === n &&
-                t.shiftKey &&
-                !t.ctrlKey &&
-                !t.metaKey &&
-                !t.altKey;
-    }
-    function Vt() {
-      ((N = !0),
-        (v.style.display = "flex"),
-        f.classList.add("active"),
-        b.focus(),
-        b.select(),
-        b.value.trim() && Zt(b.value.trim()));
-    }
-    function Wt() {
-      ((N = !1),
-        (v.style.display = "none"),
-        f.classList.remove("active"),
-        (b.value = ""),
-        zt());
-    }
-    function zt() {
-      ([c, d, u].forEach((t) => {
-        (t
-          .querySelectorAll(
-            ".item, .copy-all-snapshot, .sfl-set, .settings-section",
-          )
-          .forEach((t) => {
-            t.classList.remove(
-              "search-match",
-              "search-no-match",
-              "search-current",
-            );
-          }),
-          t.querySelectorAll("mark.search-hl").forEach((t) => {
-            const e = t.parentNode;
-            e &&
-              (e.replaceChild(document.createTextNode(t.textContent), t),
-              e.normalize());
-          }),
-          t.querySelectorAll(".search-note-match").forEach((t) => {
-            t.classList.remove("search-note-match");
-          }),
-          t.querySelectorAll(".search-overlay-wrap").forEach((t) =>
-            (function (t) {
-              const e = t.querySelector("textarea, input");
-              (e &&
-                (e.classList.remove("search-overlay-host"),
-                e.removeEventListener("input", Gt),
-                e.removeEventListener("scroll", Jt),
-                t.parentNode.insertBefore(e, t)),
-                t.remove());
-            })(t),
-          ));
-      }),
-        (O = []),
-        w && (w.textContent = ""),
-        w && delete w.dataset.empty);
-    }
-    function Gt(t) {
-      Xt(t.target);
-    }
-    function Jt(t) {
-      const e = t.target.closest(".search-overlay-wrap"),
-        n = e?.querySelector(".search-overlay");
-      n &&
-        ((n.scrollTop = t.target.scrollTop),
-        (n.scrollLeft = t.target.scrollLeft));
-    }
-    function Xt(t) {
-      const e = t.parentNode;
-      if (!e || !e.classList || !e.classList.contains("search-overlay-wrap"))
+    });
+  }
+
+  // Remove a single annotation id from a saved-for-later set without touching
+  // the others. If the set becomes empty, the set itself is removed.
+  // NOTE: this version decrements the store refcount, which can permanently
+  // drop the annotation if it isn't also referenced elsewhere. Kept for
+  // internal callers that truly want a full remove. The per-row clear button
+  // now uses clearAnnotationFromSavedForLater() below, which preserves the
+  // annotation in Annotation History.
+  function removeAnnotationFromSavedForLater(setId, annId) {
+    chrome.storage.local.get({ [SAVED_LATER_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+      const sets  = r[SAVED_LATER_KEY] || [];
+      const idx   = sets.findIndex(s => s.id === setId);
+      if (idx < 0) return;
+      const set   = sets[idx];
+      const store = { ...(r[ANN_STORE_KEY] || {}) };
+
+      // Modern sets carry `annotationIds`; legacy carry inline `annotations`.
+      let newSet;
+      if (Array.isArray(set.annotationIds)) {
+        const newIds = set.annotationIds.filter(id => id !== annId);
+        if (newIds.length === set.annotationIds.length) return;
+        refStoreDec(store, [annId]);
+        newSet = { ...set, annotationIds: newIds, count: newIds.length };
+      } else if (Array.isArray(set.annotations)) {
+        const newAnns = set.annotations.filter(a => a.id !== annId);
+        if (newAnns.length === set.annotations.length) return;
+        newSet = { ...set, annotations: newAnns, count: newAnns.length };
+      } else {
         return;
-      const n = e.querySelector(".search-overlay");
-      if (!n) return;
-      const o = (b && b.value.trim()) || "";
-      ((n.innerHTML = (function (t, e) {
-        const n = mt(t || "");
-        if (!e) return n;
-        const o = e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-          a = new RegExp(`(${o})`, "gi");
-        return n.replace(a, '<mark class="search-hl">$1</mark>');
-      })(t.value, o)),
-        (n.scrollTop = t.scrollTop),
-        (n.scrollLeft = t.scrollLeft));
-    }
-    function Yt(t, e) {
-      if (!t || !e) return !1;
-      const n = e.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-        o = new RegExp(n, "gi"),
-        a = document.createTreeWalker(t, NodeFilter.SHOW_TEXT, {
-          acceptNode(t) {
-            if (!t.nodeValue || !t.nodeValue.trim())
-              return NodeFilter.FILTER_REJECT;
-            const e = t.parentNode;
-            return e
-              ? "SCRIPT" === e.nodeName ||
-                "STYLE" === e.nodeName ||
-                (e.classList && e.classList.contains("search-hl"))
-                ? NodeFilter.FILTER_REJECT
-                : NodeFilter.FILTER_ACCEPT
-              : NodeFilter.FILTER_REJECT;
-          },
-        }),
-        s = [];
-      let r;
-      for (; (r = a.nextNode()); ) s.push(r);
-      let i = !1;
-      return (
-        s.forEach((t) => {
-          const e = t.nodeValue;
-          if (((o.lastIndex = 0), !o.test(e))) return;
-          o.lastIndex = 0;
-          const n = document.createDocumentFragment();
-          let a,
-            s = 0;
-          for (; null !== (a = o.exec(e)); ) {
-            a.index > s &&
-              n.appendChild(document.createTextNode(e.slice(s, a.index)));
-            const t = document.createElement("mark");
-            ((t.className = "search-hl"),
-              (t.textContent = a[0]),
-              n.appendChild(t),
-              (s = a.index + a[0].length),
-              0 === a[0].length && o.lastIndex++);
-          }
-          (s < e.length && n.appendChild(document.createTextNode(e.slice(s))),
-            t.parentNode.replaceChild(n, t),
-            (i = !0));
-        }),
-        i
-      );
-    }
-    function Qt(t, e, n) {
-      let o = !1;
-      return (
-        t
-          .querySelectorAll(
-            "code, .hist-note, .url-label, .copy-hist-preview, .copy-hist-url, .copy-hist-ann-sels, .copy-hist-fix-body, .sfl-url, .settings-label, .settings-hint, .settings-row-title, .settings-row-sub, .settings-section-title, .settings-value, .copy-all-meta, .copy-all-group-url, .copy-all-group-count",
-          )
-          .forEach((t) => {
-            (t.textContent || "").toLowerCase().includes(n) &&
-              Yt(t, e) &&
-              (o = !0);
-          }),
-        t
-          .querySelectorAll('textarea, input[type="text"], input:not([type])')
-          .forEach((t) => {
-            (t.value || "").toLowerCase().includes(n) &&
-              ((o = !0),
-              t.classList.add("search-note-match"),
-              t.parentNode.classList &&
-              t.parentNode.classList.contains("search-overlay-wrap")
-                ? Xt(t)
-                : (function (t) {
-                    const e = t.parentNode;
-                    if (!e) return null;
-                    const n = document.createElement("span");
-                    n.className = "search-overlay-wrap";
-                    const o = "TEXTAREA" === t.tagName;
-                    ((n.dataset.kind = o ? "textarea" : "input"),
-                      e.insertBefore(n, t));
-                    const a = document.createElement("div");
-                    ((a.className = "search-overlay"),
-                      a.setAttribute("aria-hidden", "true"),
-                      n.appendChild(a),
-                      n.appendChild(t),
-                      t.classList.add("search-overlay-host"));
-                    const s = window.getComputedStyle(t);
-                    ((a.style.font = s.font),
-                      (a.style.lineHeight = s.lineHeight),
-                      (a.style.letterSpacing = s.letterSpacing),
-                      (a.style.padding = s.padding),
-                      (a.style.borderWidth = s.borderWidth),
-                      (a.style.borderStyle = s.borderStyle),
-                      (a.style.boxSizing = s.boxSizing),
-                      (a.style.borderRadius = s.borderRadius),
-                      (a.style.textAlign = s.textAlign),
-                      o || (a.style.whiteSpace = "pre"),
-                      Xt(t),
-                      t.addEventListener("input", Gt),
-                      t.addEventListener("scroll", Jt));
-                  })(t));
-          }),
-        t.querySelectorAll("select").forEach((t) => {
-          const e = t.options[t.selectedIndex];
-          (e && e.textContent ? e.textContent : "").toLowerCase().includes(n) &&
-            (o = !0);
-        }),
-        t
-          .querySelectorAll('[contenteditable="true"], [contenteditable=""]')
-          .forEach((t) => {
-            (t.textContent || "").toLowerCase().includes(n) &&
-              Yt(t, e) &&
-              (o = !0);
-          }),
-        o
-      );
-    }
-    function Zt(t) {
-      if ((zt(), !t)) return;
-      const e = t.toLowerCase();
-      O = [];
-      const n = M ? u : B ? d : c;
-      (n === u
-        ? n.querySelectorAll(".settings-section").forEach((n) => {
-            Qt(n, t, e) && (n.classList.add("search-match"), O.push(n));
-          })
-        : (n.querySelectorAll(
-            ".copy-all-snapshot, .sfl-set, .item:not(.copy-all-snapshot .item)",
-          ),
-          n.querySelectorAll(".copy-all-snapshot").forEach((n) => {
-            const o = n.querySelectorAll(".item");
-            let a = !1;
-            o.forEach((n) => {
-              Qt(n, t, e) &&
-                (n.classList.add("search-match"), O.push(n), (a = !0));
-            });
-            const s = n.querySelector(".copy-all-header"),
-              r = n.querySelector(".copy-all-summary"),
-              i = (s && Qt(s, t, e)) || (r && Qt(r, t, e));
-            (a || i) &&
-              (n.classList.add("search-match"),
-              a && (n.dataset.searchAutoExpanded = "true"));
-          }),
-          n.querySelectorAll(".item").forEach((n) => {
-            n.closest(".copy-all-snapshot") ||
-              (Qt(n, t, e)
-                ? (n.classList.add("search-match"), O.push(n))
-                : n.classList.add("search-no-match"));
-          }),
-          n.querySelectorAll(".sfl-set").forEach((n) => {
-            Qt(n, t, e)
-              ? (n.classList.add("search-match"), O.push(n))
-              : n.classList.add("search-no-match");
-          })),
-        (j = 0),
-        te(),
-        ee());
-    }
-    function te() {
-      if (0 === O.length) return;
-      O.forEach((t, e) => {
-        t.classList.toggle("search-current", e === j);
-      });
-      const t = O[j];
-      if (!t) return;
-      const e = t.closest && t.closest(".copy-all-snapshot");
-      (e && !e.classList.contains("expanded") && e.classList.add("expanded"),
-        t.scrollIntoView({ block: "nearest", behavior: "smooth" }));
-      const n = (b && b.value.trim()) || "";
-      if (n) {
-        const e = t.querySelector(
-          "textarea.search-note-match, input.search-note-match",
-        );
-        if (e && "function" == typeof e.setSelectionRange) {
-          const t = (e.value || "").toLowerCase().indexOf(n.toLowerCase());
-          if (t >= 0)
-            try {
-              e.setSelectionRange(t, t + n.length);
-            } catch (t) {}
+      }
+
+      const newSets = (newSet.count > 0)
+        ? sets.map((s, i) => i === idx ? newSet : s)
+        : sets.filter((_, i) => i !== idx);
+
+      chrome.storage.local.set({
+        [SAVED_LATER_KEY]: newSets,
+        [ANN_STORE_KEY]: store,
+      }, () => renderSavedForLater());
+    });
+  }
+
+  // Per-row clear button in the Saved for Later tab. Removes the annotation
+  // from the saved-for-later set but pushes it into the Annotation History
+  // tab with a fresh deletedAt timestamp, so the annotation is preserved and
+  // can still be restored from history. Net effect on the ref store is
+  // neutral: one SFL reference is dropped, one History reference is added.
+  function clearAnnotationFromSavedForLater(setId, annId) {
+    chrome.storage.local.get({
+      [SAVED_LATER_KEY]: [],
+      [HISTORY_KEY]:     [],
+      [ANN_STORE_KEY]:   {},
+    }, r => {
+      const sets  = r[SAVED_LATER_KEY] || [];
+      const idx   = sets.findIndex(s => s.id === setId);
+      if (idx < 0) return;
+      const set   = sets[idx];
+      const store = { ...(r[ANN_STORE_KEY] || {}) };
+      const hist  = Array.isArray(r[HISTORY_KEY]) ? [...r[HISTORY_KEY]] : [];
+
+      // Resolve the full annotation before we touch the store, so that
+      // history entries created from legacy inline-annotations sets also
+      // have a proper store snapshot to point at.
+      let annSnapshot = null;
+      if (Array.isArray(set.annotationIds)) {
+        if (!set.annotationIds.includes(annId)) return;
+        annSnapshot = store[annId] ? stripRefMeta(store[annId]) : null;
+      } else if (Array.isArray(set.annotations)) {
+        const inline = set.annotations.find(a => a.id === annId);
+        if (!inline) return;
+        annSnapshot = { ...inline };
+        // Legacy inline sets never created a store entry — seed one here so
+        // the new history reference can resolve back to a real annotation.
+        if (!store[annSnapshot.id]) {
+          store[annSnapshot.id] = { ...annSnapshot, _refCount: 0 };
         }
+      } else {
+        return;
       }
-    }
-    function ee() {
-      if (w)
-        return b.value.trim()
-          ? void (0 === O.length
-              ? ((w.textContent = "No results"), (w.dataset.empty = "true"))
-              : ((w.textContent = `${j + 1}/${O.length}`),
-                delete w.dataset.empty))
-          : ((w.textContent = ""), void delete w.dataset.empty);
-    }
-    function ne() {
-      0 !== O.length && ((j = (j + 1) % O.length), te(), ee());
-    }
-    function oe() {
-      0 !== O.length && ((j = (j - 1 + O.length) % O.length), te(), ee());
-    }
-    function ae() {
-      ((B = !0),
-        (M = !1),
-        k && (k.style.display = "none"),
-        (c.style.display = "none"),
-        (A.style.display = "none"),
-        (u.style.display = "none"),
-        (d.style.display = "block"),
-        (g.textContent = "⚙️"),
-        (g.title = "Settings"),
-        g.classList.remove("active"),
-        (y.textContent = "✕"),
-        (y.title = "Close history"),
-        se());
-    }
-    function se() {
-      "annotations" === H ? le() : "saved" === H ? ce() : de();
-    }
-    function re(t) {
-      return `\n      <div class="hist-tabs">\n        <button class="hist-tab${"annotations" === t ? " active" : ""}" data-tab="annotations">Annotations</button>\n        <button class="hist-tab${"saved" === t ? " active" : ""}" data-tab="saved">Saved for Later</button>\n        <button class="hist-tab${"copies" === t ? " active" : ""}" data-tab="copies">Copy Log</button>\n      </div>`;
-    }
-    function ie() {
-      d.querySelectorAll(".hist-tab").forEach((t) => {
-        t.addEventListener("click", () => {
-          ((H = t.dataset.tab), se());
-        });
-      });
-    }
-    function le() {
-      chrome.storage.local.get({ [x]: [], [I]: {} }, (t) => {
-        const e = t[x],
-          n = t[I] || {};
-        if (0 === e.length)
-          return (
-            (d.innerHTML =
-              re("annotations") +
-              '<p class="empty-msg">No annotation history yet.<br>Deleted annotations will appear here.</p>'),
-            void ie()
-          );
-        const o = [];
-        [...e].reverse().forEach((t) => {
-          const e = wt(t, n);
-          e && o.push({ ...e, deletedAt: t.deletedAt || e.deletedAt });
-        });
-        const a = {};
-        o.forEach((t) => (a[t.url] = a[t.url] || []).push(t));
-        let s = re("annotations");
-        (Object.entries(a).forEach(([t, e]) => {
-          ((s += `<div class="url-group">\n          <div class="url-header">\n            <div class="url-label hist-clickable-text" data-full-text="${mt(t)}" title="${mt(t)}">${mt(t)}</div>\n          </div>`),
-            e.forEach((t) => {
-              const e = yt(t);
-              s += `\n          <div class="item hist-item">\n            <div class="item-sel">\n              <code class="hist-clickable-text" data-full-text="${mt(e)}">${mt(e)}</code>\n              <button class="hist-restore-btn"\n                data-ann-id="${mt(t.id)}"\n                data-deleted-at="${mt(t.deletedAt || "")}"\n                title="Restore annotation">↺</button>\n              <button class="hist-perm-delete-btn"\n                data-ann-id="${mt(t.id)}"\n                data-deleted-at="${mt(t.deletedAt || "")}"\n                title="Permanently delete">✕</button>\n            </div>\n            <div class="hist-meta">\n              <span class="hist-ts">📅 ${mt(ft(t.timestamp))}</span>\n              <span class="hist-ts hist-deleted">🗑 ${mt(ft(t.deletedAt))}</span>\n            </div>\n            ${t.comment ? `<div class="hist-note hist-clickable-text" data-full-text="${mt(t.comment)}">${mt(t.comment)}</div>` : '<div class="hist-note empty-note">(no note)</div>'}\n          </div>`;
-            }),
-            (s += "</div>"));
-        }),
-          (d.innerHTML = s),
-          ie(),
-          ye(d),
-          d.querySelectorAll(".hist-restore-btn").forEach((t) => {
-            t.addEventListener("click", () => {
-              return (
-                (e = t.dataset.annId),
-                (n = t.dataset.deletedAt),
-                void bt((t) => {
-                  const o = t.annotations,
-                    a = t[x],
-                    s = { ...(t[I] || {}) },
-                    r = a.findIndex((t) => t.id === e && t.deletedAt === n);
-                  if (-1 === r) return;
-                  const i = wt(a[r], s) || { ...a[r] };
-                  if ((delete i.deletedAt, !i || !i.id)) return;
-                  if (i.url)
-                    try {
-                      const t = new URL(i.url);
-                      i.url = t.origin + t.pathname;
-                    } catch (t) {}
-                  if (o.some((t) => t.id === i.id)) return void ae();
-                  const l = [...o, i],
-                    c = a.filter((t, e) => e !== r);
-                  (Et(s, [i.id]),
-                    chrome.storage.local.set(
-                      { annotations: l, [x]: c, [I]: s },
-                      () => {
-                        (ae(), Q(i));
-                      },
-                    ));
-                })
-              );
-              var e, n;
-            });
-          }),
-          d.querySelectorAll(".hist-perm-delete-btn").forEach((t) => {
-            t.addEventListener("click", () => {
-              return (
-                (e = t.dataset.annId),
-                (n = t.dataset.deletedAt),
-                void chrome.storage.local.get({ [x]: [], [I]: {} }, (t) => {
-                  const o = t[x].filter((t) => t.id === e && t.deletedAt === n),
-                    a = t[x].filter((t) => !(t.id === e && t.deletedAt === n)),
-                    s = { ...(t[I] || {}) };
-                  (Et(
-                    s,
-                    o.map((t) => t.id),
-                  ),
-                    chrome.storage.local.set({ [x]: a, [I]: s }, () => le()));
-                })
-              );
-              var e, n;
-            });
-          }),
-          N && b && b.value.trim() && Zt(b.value.trim()));
-      });
-    }
-    function ce() {
-      chrome.storage.local.get({ [L]: [], [I]: {} }, (t) => {
-        const e = t[L] || [],
-          n = t[I] || {};
-        if (0 === e.length)
-          return (
-            (d.innerHTML =
-              re("saved") +
-              '<p class="empty-msg">No saved-for-later sets yet.<br>Right-click <strong>🗑 Clear All</strong> to save the current annotations here.</p>'),
-            void ie()
-          );
-        let o = re("saved");
-        ([...e].reverse().forEach((t) => {
-          const e = ft(t.savedAt),
-            a = Array.isArray(t.annotationIds)
-              ? At(t.annotationIds, n)
-              : t.annotations || [],
-            s = a.slice(0, 50),
-            r = [],
-            i = new Map();
-          s.forEach((t) => {
-            const e = t.url || "";
-            (i.has(e) || (i.set(e, r.length), r.push({ url: e, items: [] })),
-              r[i.get(e)].items.push(t));
-          });
-          const l =
-            a.length > s.length
-              ? `<li class="sfl-overflow"><em>+${a.length - s.length} more…</em></li>`
-              : "";
-          o += `\n        <div class="sfl-set" data-set-id="${mt(t.id)}">\n          <div class="sfl-set-header">\n            <span class="sfl-set-meta">📅 ${mt(e)} · ${t.count || s.length} annotation${1 !== (t.count || s.length) ? "s" : ""}</span>\n            <div class="sfl-set-actions">\n              <button class="hist-restore-btn sfl-restore" data-set-id="${mt(t.id)}" title="Restore these annotations">↺</button>\n              <button class="hist-perm-delete-btn sfl-delete" data-set-id="${mt(t.id)}" title="Delete this set">✕</button>\n            </div>\n          </div>\n          ${r
-            .map(
-              (e) =>
-                `\n            <div class="sfl-url-group">\n              <div class="sfl-url hist-clickable-text" data-full-text="${mt(e.url || "")}" title="${mt(e.url)}">${mt(e.url || "(no url)")}</div>\n              <ul class="sfl-set-list">\n                ${e.items
-                  .map((e) => {
-                    const n = gt(e),
-                      o =
-                        e.comment && e.comment.trim()
-                          ? e.comment.trim()
-                          : "(no note)",
-                      a = o.slice(0, 120) + (o.length > 120 ? "…" : ""),
-                      s = e.id
-                        ? `<button class="item-delete-btn sfl-row-clear-btn" data-set-id="${mt(t.id)}" data-ann-id="${mt(e.id)}" title="Clear annotation (kept in Annotation History)">🗑</button>`
-                        : '<button class="item-delete-btn sfl-row-clear-btn sfl-row-clear-btn--dom" title="Clear row">🗑</button>';
-                    return `<li title="${mt(n)}"><code class="hist-clickable-text" data-full-text="${mt(n)}">${mt(n)}</code><span class="hist-clickable-text" data-full-text="${mt(o)}">${mt(a)}</span>${s}</li>`;
-                  })
-                  .join("")}\n              </ul>\n            </div>`,
-            )
-            .join(
-              "",
-            )}\n          ${l ? `<ul class="sfl-set-list">${l}</ul>` : ""}\n        </div>`;
-        }),
-          (d.innerHTML = o),
-          ie(),
-          d.querySelectorAll(".sfl-restore").forEach((t) => {
-            t.addEventListener("click", () => {
-              return (
-                (e = t.dataset.setId),
-                void bt((t) => {
-                  const n = t[L].find((t) => t.id === e);
-                  if (!n) return;
-                  const o = { ...(t[I] || {}) },
-                    a = Array.isArray(n.annotationIds)
-                      ? At(n.annotationIds, o)
-                      : n.annotations || [],
-                    s = Array.isArray(n.annotationIds)
-                      ? n.annotationIds
-                      : (n.annotations || []).map((t) => t.id),
-                    r = new Set(t.annotations.map((t) => t.id)),
-                    i = a.filter((t) => !r.has(t.id)),
-                    l = [...t.annotations, ...i],
-                    c = t[L].filter((t) => t.id !== e);
-                  (Et(o, s.filter(Boolean)),
-                    (D = !0),
-                    chrome.storage.local.set(
-                      { annotations: l, [L]: c, [I]: o },
-                      () => {
-                        ((D = !1), i.forEach((t) => Q(t)), ce());
-                      },
-                    ));
-                })
-              );
-              var e;
-            });
-          }),
-          d.querySelectorAll(".sfl-delete").forEach((t) => {
-            t.addEventListener("click", async () => {
-              var e;
-              (await l(
-                "Delete this saved-for-later set? This cannot be undone.",
-                { okLabel: "Delete" },
-              )) &&
-                ((e = t.dataset.setId),
-                chrome.storage.local.get({ [L]: [], [I]: {} }, (t) => {
-                  const n = t[L].find((t) => t.id === e),
-                    o = t[L].filter((t) => t.id !== e),
-                    a = { ...(t[I] || {}) };
-                  (n &&
-                    Et(
-                      a,
-                      (Array.isArray(n.annotationIds)
-                        ? n.annotationIds
-                        : (n.annotations || []).map((t) => t.id)
-                      ).filter(Boolean),
-                    ),
-                    chrome.storage.local.set({ [L]: o, [I]: a }, () => ce()));
-                }));
-            });
-          }),
-          d.querySelectorAll(".sfl-row-clear-btn").forEach((t) => {
-            t.addEventListener("click", (e) => {
-              e.stopPropagation();
-              if (t.classList.contains("sfl-row-clear-btn--dom")) {
-                const e = t.closest("li");
-                return void (e && e.remove());
-              }
-              const setId = t.dataset.setId,
-                annId = t.dataset.annId;
-              chrome.storage.local.get({ [L]: [], [x]: [], [I]: {} }, (r) => {
-                const sets = r[L] || [],
-                  idx = sets.findIndex((s) => s.id === setId);
-                if (idx < 0) return;
-                const set = sets[idx],
-                  store = { ...(r[I] || {}) },
-                  hist = Array.isArray(r[x]) ? [...r[x]] : [];
-                let snap = null;
-                if (Array.isArray(set.annotationIds)) {
-                  if (!set.annotationIds.includes(annId)) return;
-                  snap = store[annId] ? kt(store[annId]) : null;
-                } else if (Array.isArray(set.annotations)) {
-                  const inline = set.annotations.find((a) => a.id === annId);
-                  if (!inline) return;
-                  snap = { ...inline };
-                  if (!store[snap.id])
-                    store[snap.id] = { ...snap, _refCount: 0 };
-                } else return;
-                let newSet;
-                if (Array.isArray(set.annotationIds)) {
-                  const ids = set.annotationIds.filter((id) => id !== annId);
-                  if (ids.length === set.annotationIds.length) return;
-                  newSet = { ...set, annotationIds: ids, count: ids.length };
-                } else {
-                  const anns = set.annotations.filter((a) => a.id !== annId);
-                  if (anns.length === set.annotations.length) return;
-                  newSet = { ...set, annotations: anns, count: anns.length };
-                }
-                if (Array.isArray(set.annotationIds)) Et(store, [annId]);
-                if (!store[annId] && snap)
-                  store[annId] = { ...snap, _refCount: 0 };
-                if (store[annId])
-                  store[annId]._refCount = (store[annId]._refCount || 0) + 1;
-                const oldHist = hist.filter((h) => h.id === annId);
-                if (oldHist.length)
-                  Et(
-                    store,
-                    oldHist.map((h) => h.id),
-                  );
-                const newHist = hist.filter((h) => h.id !== annId);
-                newHist.push({
-                  id: annId,
-                  deletedAt: new Date().toISOString(),
-                });
-                const newSets =
-                  newSet.count > 0
-                    ? sets.map((s, i) => (i === idx ? newSet : s))
-                    : sets.filter((_, i) => i !== idx);
-                chrome.storage.local.set(
-                  { [L]: newSets, [x]: newHist, [I]: store },
-                  () => ce(),
-                );
-              });
-            });
-          }));
-      });
-    }
-    function bk(b) {
-      chrome.storage.local.get(
-        { [S]: [], [I]: {}, annotations: [], [Bk]: !1 },
-        (t) => {
-          if (t[Bk]) return void (b && b());
-          const e = t[S] || [],
-            n = { ...(t[I] || {}) },
-            o = t.annotations || [],
-            a = new Map();
-          (Object.entries(n).forEach(([t, e]) => {
-            t && e && a.set(t, kt(e));
-          }),
-            o.forEach((t) => {
-              t && t.id && a.set(t.id, t);
-            }));
-          const s = (t) => (t || "").split("#")[0],
-            r = new Map(),
-            i = new Map(),
-            l = (t) => {
-              if (!t) return "";
-              if (t.pageLevel || "page" === t.tag) return "(whole page)";
-              const e =
-                  void 0 !== t.elId
-                    ? t.elId
-                      ? `#${t.elId}`
-                      : ""
-                    : t.id && "N/A" !== t.id && !t.id.startsWith("ann_")
-                      ? t.id
-                      : "",
-                n = t.classes && "N/A" !== t.classes ? t.classes : "";
-              return `${t.tag || "?"}${e}${n}`;
-            };
-          a.forEach((t, e) => {
-            const n = s(t.url);
-            if (t.xpath) {
-              const o = n + "|" + t.xpath;
-              r.has(o) || r.set(o, e);
-            }
-            const o = l(t),
-              a = (t.comment || "").trim().slice(0, 120),
-              c = n + "|" + o + "|" + a,
-              d = i.get(c) || [];
-            (d.push(e), i.set(c, d));
-          });
-          const c = (t) => {
-            if (!t || !t.trim()) return [];
-            const e = t.split("\n"),
-              n = [];
-            let o = "",
-              a = 0;
-            const s = /^#{2,3}\s+(.+)$/,
-              r = /^\d+\.\s+`([^`]*)`\s*(?:\|\s+`([^`]*)`)?\s*(?:→|->)\s*(.*)$/,
-              i = /^\d+\.\s+`([^`]*)`\s*$/;
-            for (; a < e.length; ) {
-              const c = e[a],
-                d = c.match(s);
-              if (d) {
-                ((o = d[1].trim()), a++);
-                continue;
-              }
-              const u = c.match(r);
-              if (u) {
-                (n.push({
-                  sel: u[1],
-                  xpath: u[2] || "",
-                  url: o,
-                  note: (u[3] || "").trim(),
-                }),
-                  a++);
-                continue;
-              }
-              const p = c.match(i);
-              if (p) {
-                let t = a + 1,
-                  s = "";
-                for (; t < e.length && e[t].startsWith("   - "); ) {
-                  const n = e[t].slice(5),
-                    o = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(n),
-                    a = /^https?:\/\//.test(n),
-                    r = n.startsWith('_"') && n.endsWith('"_');
-                  (o || a || r || (s = s ? s + "\n" + n : n), t++);
-                }
-                (n.push({ sel: p[1], xpath: "", url: o, note: s }), (a = t));
-                continue;
-              }
-              a++;
-            }
-            return n;
-          };
-          let d = !1;
-          const u = e.map((t) => {
-            if (!t) return t;
-            if (Array.isArray(t.annotationIds) && t.annotationIds.length)
-              return t;
-            const e = c(t.output);
-            if (!e.length) return t;
-            const o = [],
-              a = new Set();
-            return (
-              e.forEach((t) => {
-                const e = s(t.url);
-                let n = null;
-                if ((t.xpath && (n = r.get(e + "|" + t.xpath) || null), !n)) {
-                  const o =
-                    i.get(e + "|" + t.sel + "|" + t.note.slice(0, 120)) || [];
-                  n = o.find((t) => !a.has(t)) || null;
-                }
-                n && (o.push(n), a.add(n));
-              }),
-              o.length
-                ? (o.forEach((t) => {
-                    n[t] && (n[t]._refCount = (n[t]._refCount || 0) + 1);
-                  }),
-                  (d = !0),
-                  { ...t, annotationIds: o })
-                : t
-            );
-          });
-          if (!d)
-            return void chrome.storage.local.set({ [Bk]: !0 }, () => {
-              b && b();
-            });
-          chrome.storage.local.set({ [S]: u, [I]: n, [Bk]: !0 }, () => {
-            b && b();
-          });
-        },
-      );
-    }
-    function de() {
-      chrome.storage.local.get({ [S]: [], annotations: [], [I]: {} }, (t) => {
-        const e = t[S],
-          n = t[I] || {},
-          o = new Map((t.annotations || []).map((t) => [t.id, t]));
-        if (0 === e.length)
-          return (
-            (d.innerHTML =
-              re("copies") +
-              '<p class="empty-msg">No copy history yet.<br>Use the copy button to record an output here.</p>'),
-            void ie()
-          );
-        let a = re("copies");
-        ([...e]
-          .sort((t, e) => {
-            const n = t.timestamp ? new Date(t.timestamp).getTime() : 0;
-            return (e.timestamp ? new Date(e.timestamp).getTime() : 0) - n;
-          })
-          .forEach((t) => {
-            const e = (Array.isArray(t.annotationIds) ? t.annotationIds : [])
-              .map((t) => o.get(t) || (n[t] ? kt(n[t]) : null))
-              .filter(Boolean);
-            let s = [];
-            const i = new Map();
-            e.length > 0
-              ? e.forEach((t) => {
-                  const e = t.url || "";
-                  (i.has(e) ||
-                    (i.set(e, s.length), s.push({ url: e, items: [] })),
-                    s[i.get(e)].items.push(t));
-                })
-              : void 0;
-            const l = new Set(e.filter((t) => o.has(t.id)).map((t) => t.id)),
-              c = ft(t.timestamp),
-              d = 0,
-              u = null != t.count ? t.count : e.length || d,
-              p = !(!t.output || !String(t.output).trim());
-            a += `\n        <div class="sfl-set copy-hist-item" data-set-id="${mt(t.timestamp)}">\n          <div class="sfl-set-header">\n            <span class="sfl-set-meta">📅 ${mt(c)} · ${u} annotation${1 !== u ? "s" : ""}</span>\n            <div class="sfl-set-actions">\n              ${p ? `<button class="sfl-set-btn copy-hist-raw-btn" data-ts="${mt(t.timestamp)}" title="View raw output">📄 Raw</button>` : ""}\n              <button class="copy-hist-perm-delete-btn" data-ts="${mt(t.timestamp)}" title="Permanently delete">✕</button>\n            </div>\n          </div>\n          ${s
-              .map(
-                (t) =>
-                  `\n            <div class="sfl-url-group">\n              <div class="sfl-url hist-clickable-text" data-full-text="${mt(t.url || "")}" title="${mt(t.url)}">${mt(t.url || "(no url)")}</div>\n              <ul class="sfl-set-list">\n                ${t.items
-                    .map((t) => {
-                      const e = (function (t) {
-                          if (!t) return [];
-                          if (t.pageLevel || "page" === t.tag)
-                            return ["(whole page)"];
-                          const e = [],
-                            n =
-                              void 0 !== t.elId
-                                ? t.elId
-                                  ? `#${t.elId}`
-                                  : ""
-                                : t.id &&
-                                    "N/A" !== t.id &&
-                                    !t.id.startsWith("ann_")
-                                  ? t.id
-                                  : "",
-                            o =
-                              t.classes && "N/A" !== t.classes ? t.classes : "";
-                          return (
-                            e.push(`${t.tag || "?"}${n}${o}`),
-                            Array.isArray(t.contextElements) &&
-                              t.contextElements.forEach((t) => {
-                                const n = t.elId ? `#${t.elId}` : "",
-                                  o =
-                                    t.classes && "N/A" !== t.classes
-                                      ? t.classes
-                                      : "";
-                                e.push(`${t.tag || "?"}${n}${o}`);
-                              }),
-                            e
-                          );
-                        })(t),
-                        n = e.join(", "),
-                        o =
-                          t.comment && t.comment.trim()
-                            ? t.comment.trim()
-                            : "(no note)",
-                        a = o.slice(0, 120) + (o.length > 120 ? "…" : ""),
-                        s = t.id && l.has(t.id),
-                        i = s
-                          ? `<button class="copy-hist-row-remove-btn" data-ann-id="${mt(t.id)}" title="Remove this annotation from current">−</button>`
-                          : `<button class="hist-restore-btn copy-hist-row-restore-btn" data-ann-id="${mt(t.id)}" title="Restore annotation">↺</button>`;
-                      return `<li class="copy-hist-li${s ? " copy-hist-row--live" : ""}" title="${mt(n)}"><code class="hist-clickable-text" data-full-text="${mt(n)}">${mt(n)}</code><span class="hist-clickable-text" data-full-text="${mt(o)}">${mt(a)}</span>${i}</li>`;
-                    })
-                    .join("")}\n              </ul>\n            </div>`,
-              )
-              .join(
-                "",
-              )}\n          ${p ? `<pre class="copy-hist-raw-body" data-ts="${mt(t.timestamp)}" style="display:none;">${mt(t.output)}</pre>` : ""}\n        </div>`;
-          }),
-          (d.innerHTML = a),
-          ie(),
-          ye(d),
-          d.querySelectorAll(".copy-hist-perm-delete-btn").forEach((t) => {
-            t.addEventListener("click", () => {
-              const e = t.dataset.ts;
-              chrome.storage.local.get({ [S]: [], [I]: {} }, (t) => {
-                const n = t[S].filter((t) => t.timestamp === e),
-                  o = t[S].filter((t) => t.timestamp !== e),
-                  a = { ...(t[I] || {}) };
-                (n.forEach((t) => Et(a, xt(t.annotationIds))),
-                  chrome.storage.local.set({ [S]: o, [I]: a }, () => de()));
-              });
-            });
-          }),
-          d.querySelectorAll(".copy-hist-row-remove-btn").forEach((t) => {
-            t.addEventListener("click", (e) => {
-              e.stopPropagation();
-              var n;
-              ((n = t.dataset.annId),
-                bt((t) => {
-                  const e = t.annotations.find((t) => t.id === n);
-                  if (!e)
-                    return (i("Annotation not in current set."), void se());
-                  const o = t.annotations.filter((t) => t.id !== n);
-                  ((D = !0),
-                    chrome.storage.local.set({ annotations: o }, () => {
-                      ((D = !1), Y(e.id, e.xpath), se());
-                    }));
-                }));
-            });
-          }),
-          d.querySelectorAll(".copy-hist-row-restore-btn").forEach((t) => {
-            t.addEventListener("click", (e) => {
-              var n;
-              (e.stopPropagation(),
-                (n = t.dataset.annId),
-                bt((t) => {
-                  if (t.annotations.some((t) => t.id === n))
-                    return (
-                      i("Annotation is already in current set."),
-                      void se()
-                    );
-                  const e = t[I] || {},
-                    o = e[n] ? kt(e[n]) : null;
-                  if (!o)
-                    return (i("Annotation data not available."), void se());
-                  const a = [...t.annotations, o];
-                  ((D = !0),
-                    chrome.storage.local.set({ annotations: a }, () => {
-                      ((D = !1), Q(o), se());
-                    }));
-                }));
-            });
-          }),
-          d.querySelectorAll(".copy-hist-raw-btn").forEach((t) => {
-            t.addEventListener("click", (e) => {
-              e.stopPropagation();
-              const n = t.dataset.ts,
-                o = "undefined" != typeof CSS && CSS.escape ? CSS.escape(n) : n,
-                a = d.querySelector(`.copy-hist-raw-body[data-ts="${o}"]`);
-              if (!a) return;
-              const s = "none" !== a.style.display;
-              ((a.style.display = s ? "none" : "block"),
-                t.classList.toggle("active", !s));
-            });
-          }),
-          N && b && b.value.trim() && Zt(b.value.trim()));
-      });
-    }
-    function ue() {
-      const e = a();
-      ut((n) => {
-        let o = "";
-        e
-          ? chrome.storage.local.get({ [t]: null }, (e) => {
-              const a = mt((e[t] || {}).email || "");
-              ((o = `\n            <div class="settings-section" id="premium-section">\n              <div class="settings-section-title">⭐ Premium</div>\n              <div class="settings-row">\n                <span class="settings-label">Status</span>\n                <span class="settings-value premium-active-badge">✅ Active${a ? " · " + a : ""}</span>\n              </div>\n              <div class="settings-row settings-row--btns">\n                <button id="deactivate-license-btn" class="btn-history-action btn-history-danger">Deactivate license</button>\n              </div>\n              <p class="settings-hint" style="margin-top:4px;">\n                Premium features (dark mode, custom prepend/append) are unlocked\n                while your Gumroad license is valid. Status is re-checked\n                against Gumroad each time the popup opens.\n              </p>\n            </div>`),
-                pe(n, o, !0));
-            })
-          : ((o = `\n          <div class="settings-section" id="premium-section">\n            <div class="settings-section-title">⭐ Premium — $9.99 one-time</div>\n            <div class="settings-row">\n              <span class="settings-label">Status</span>\n              <span class="settings-value">🔒 Locked</span>\n            </div>\n            <p class="settings-hint" style="margin-top:4px;">\n              Unlocks dark mode and custom prepend/append text for Markdown\n              exports. Buy a license on Gumroad, then paste your license key\n              below.\n            </p>\n            <div class="settings-row settings-row--btns">\n              <a href="#" class="btn-history-action" data-url="${mt("https://arjunsharma10.gumroad.com/l/websiteDevAnnotator")}" id="buy-premium-link">→ Get Premium on Gumroad</a>\n            </div>\n            <div class="settings-field">\n              <label class="settings-label" for="license-key-input">License key</label>\n              <input type="text" id="license-key-input" class="settings-textarea" placeholder="Paste your Gumroad license key…" autocomplete="off" spellcheck="false" style="min-height:34px;height:34px;font-family:ui-monospace,monospace;" />\n            </div>\n            <div class="settings-row settings-row--btns">\n              <button id="activate-license-btn" class="btn-history-action">Activate</button>\n              <span id="license-activate-status" class="settings-value" style="flex:1;text-align:right;"></span>\n            </div>\n          </div>`),
-            pe(n, o, !1));
-      });
-    }
-    function pe(s, c, d) {
-      const p = s.shortcut?.modifier || "alt",
-        h = mt(n[p] || "Alt"),
-        m = HL_get(s, "annotations"),
-        m1 = HL_get(s, "saved"),
-        m2 = HL_get(s, "copies"),
-        y = 0 === m,
-        y1 = 0 === m1,
-        y2 = 0 === m2,
-        g = s.buttonActions || dt.buttonActions,
-        f = g.copyBtn?.left || "copyAll",
-        v = g.copyBtn?.right || "cutAll",
-        b = g.clearBtn?.left || "clearAll",
-        w = g.clearBtn?.right || "saveForLater",
-        k = (t) =>
-          Object.entries(e)
-            .map(
-              ([e, n]) =>
-                `<option value="${mt(e)}" ${t === e ? "selected" : ""}>${n.emoji} ${mt(n.label)}</option>`,
-            )
-            .join(""),
-        E = s.undoShortcut || dt.undoShortcut,
-        A = s.redoShortcut || dt.redoShortcut,
-        C = E.modifier || "mod",
-        T = E.key || "z",
-        _ = A.modifier || "mod",
-        q = A.key || "y",
-        B = (t) =>
-          [
-            ["mod", "Ctrl / ⌘ Cmd"],
-            ["ctrl", "Ctrl"],
-            ["meta", "Meta / ⌘ Cmd"],
-            ["alt", "Alt / Option"],
-            ["shift", "Shift"],
-          ]
-            .map(
-              ([e, n]) =>
-                `<option value="${e}" ${t === e ? "selected" : ""}>${mt(n)}</option>`,
-            )
-            .join("");
-      ((u.innerHTML = `\n      \x3c!-- ── Annotation Shortcut ── --\x3e\n      <div class="settings-section">\n        <div class="settings-section-title">⌨ Annotation Shortcut</div>\n        <div class="settings-row">\n          <label class="settings-label" for="shortcut-modifier">Modifier key</label>\n          <select id="shortcut-modifier" class="shortcut-select">\n            <option value="alt"  ${"alt" === p ? "selected" : ""}>Alt (default)</option>\n            <option value="ctrl" ${"ctrl" === p ? "selected" : ""}>Ctrl</option>\n            <option value="shift"${"shift" === p ? "selected" : ""}>Shift</option>\n            <option value="meta" ${"meta" === p ? "selected" : ""}>Meta / ⌘ Cmd</option>\n          </select>\n        </div>\n        <p class="settings-hint">\n          Hold <strong id="shortcut-preview">${h}</strong> + Right-Click any element to annotate it.\n        </p>\n        <div class="settings-row" id="open-popup-shortcut-row">\n          <div class="settings-row-label">\n            <div class="settings-row-title">Open popup shortcut</div>\n            <div class="settings-row-sub">\n              Default: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>.\n              Click to customize in Chrome.\n            </div>\n          </div>\n          <button id="open-popup-shortcut-btn" class="btn-secondary">Customize…</button>\n        </div>\n      </div>\n\n      \x3c!-- ── Undo / Redo Shortcuts ── --\x3e\n      <div class="settings-section">\n        <div class="settings-section-title">↶ Undo / Redo</div>\n        <div class="settings-row">\n          <label class="settings-label" for="undo-mod">Undo</label>\n          <div class="shortcut-pair">\n            <select id="undo-mod" class="shortcut-select">${B(C)}</select>\n            <span class="shortcut-plus">+</span>\n            <input id="undo-key" class="shortcut-key-input" maxlength="1" value="${mt(T)}" />\n          </div>\n        </div>\n        <div class="settings-row">\n          <label class="settings-label" for="redo-mod">Redo</label>\n          <div class="shortcut-pair">\n            <select id="redo-mod" class="shortcut-select">${B(_)}</select>\n            <span class="shortcut-plus">+</span>\n            <input id="redo-key" class="shortcut-key-input" maxlength="1" value="${mt(q)}" />\n          </div>\n        </div>\n      </div>\n\n      \x3c!-- ── Button Actions ── --\x3e\n      <div class="settings-section">\n        <div class="settings-section-title">🖱 Button Actions</div>\n        <div class="settings-row">\n          <label class="settings-label" for="copy-btn-left">Left button · left click</label>\n          <select id="copy-btn-left" class="shortcut-select">${k(f)}</select>\n        </div>\n        <div class="settings-row">\n          <label class="settings-label" for="copy-btn-right">Left button · right click</label>\n          <select id="copy-btn-right" class="shortcut-select">${k(v)}</select>\n        </div>\n        <div class="settings-row">\n          <label class="settings-label" for="clear-btn-left">Right button · left click</label>\n          <select id="clear-btn-left" class="shortcut-select">${k(b)}</select>\n        </div>\n        <div class="settings-row">\n          <label class="settings-label" for="clear-btn-right">Right button · right click</label>\n          <select id="clear-btn-right" class="shortcut-select">${k(w)}</select>\n        </div>\n      </div>\n\n      \x3c!-- ── Auto-Backup ── --\x3e\n      <div class="settings-section" id="backup-status-section">\n        <div class="settings-section-title">💾 Auto-Backup</div>\n        <div class="settings-row settings-row--toggle">\n          <span class="settings-label">Enable Auto-Backup</span>\n          <div class="toggle-wrap">\n            <label class="toggle-switch">\n              <input type="checkbox" id="backup-enabled-toggle" ${!1 !== s.backupEnabled ? "checked" : ""}>\n              <span class="toggle-slider"></span>\n            </label>\n          </div>\n        </div>\n        <div class="settings-row">\n          <span class="settings-label">Sync backup</span>\n          <span class="settings-value" id="sync-backup-status">Checking…</span>\n        </div>\n        <div class="settings-row">\n          <span class="settings-label">Local backup</span>\n          <span class="settings-value" id="file-backup-status">Checking…</span>\n        </div>\n        <p class="settings-hint" style="margin-top:4px;">\n          Annotations and history live on your device (chrome.storage.local). Auto-Backup mirrors a compressed snapshot to Chrome Sync (chrome.storage.sync) so it follows your Google account across signed-in Chrome installs. Sync is end-to-end encrypted by Google when you set a Sync passphrase. Disable Auto-Backup to keep data strictly local.\n        </p>\n        <div class="settings-row" style="justify-content:flex-end;margin-top:4px;">\n          <button id="backup-now-btn" class="btn-history-action">⚡ Backup Now</button>\n        </div>\n      </div>\n\n      \x3c!-- ── History ── --\x3e\n      <div class="settings-section">\n        <div class="settings-section-title">📜 History</div>\n        <p class="settings-hint" style="margin-top:-4px;margin-bottom:8px;">\n          Customize how many entries each history tab keeps. Set Indefinite to keep everything.\n        </p>\n        <div class="settings-row">\n          <label class="settings-label" for="max-hist-annotations">\n            Annotation History\n          </label>\n          <div class="history-limit-row">\n            <input type="number" id="max-hist-annotations" class="history-limit-input" min="1" max="10000" value="${y ? 200 : m}" ${y ? "disabled" : ""} />\n            <label class="history-indefinite-label">\n              <input type="checkbox" id="indef-hist-annotations" ${y ? "checked" : ""} />\n              Indefinite\n            </label>\n          </div>\n        </div>\n        <div class="settings-row">\n          <label class="settings-label" for="max-hist-saved">\n            Saved for Later\n          </label>\n          <div class="history-limit-row">\n            <input type="number" id="max-hist-saved" class="history-limit-input" min="1" max="10000" value="${y1 ? 20 : m1}" ${y1 ? "disabled" : ""} />\n            <label class="history-indefinite-label">\n              <input type="checkbox" id="indef-hist-saved" ${y1 ? "checked" : ""} />\n              Indefinite\n            </label>\n          </div>\n        </div>\n        <div class="settings-row">\n          <label class="settings-label" for="max-hist-copies">\n            Copy Log\n          </label>\n          <div class="history-limit-row">\n            <input type="number" id="max-hist-copies" class="history-limit-input" min="1" max="10000" value="${y2 ? 50 : m2}" ${y2 ? "disabled" : ""} />\n            <label class="history-indefinite-label">\n              <input type="checkbox" id="indef-hist-copies" ${y2 ? "checked" : ""} />\n              Indefinite\n            </label>\n          </div>\n        </div>\n        <div class="settings-row settings-row--btns">\n          <button id="clear-history-settings-btn" class="btn-history-action btn-history-danger">🗑 Clear History</button>\n        </div>\n      </div>\n\n      \x3c!-- ── All Data Export/Import ── --\x3e\n      <div class="settings-section">\n        <div class="settings-section-title">📦 All Data</div>\n        <div class="settings-row settings-row--btns">\n          <button id="export-all-btn" class="btn-history-action">📤 Export All Data</button>\n          <button id="import-all-btn" class="btn-history-action">📥 Import All Data</button>\n        </div>\n        <p class="settings-hint" style="margin-top:4px;">\n          Compressed bundle of every annotation, history entry, saved-for-later set, copy log, and setting. Nothing is truncated.\n        </p>\n        <input type="file" id="import-all-file" accept=".annotator,.gz,.json" style="display:none;" multiple />\n        <div id="sync-truncation-warning" class="sync-truncation-warning" style="display:none;">\n          ⚠ History is being truncated to fit sync storage limits. Your full history is preserved locally and in the latest export.\n        </div>\n      </div>\n\n      ${c}\n\n      \x3c!-- ── Appearance (premium) ── --\x3e\n      <div class="settings-section">\n        <div class="settings-section-title">🌙 Appearance${d ? "" : " — Premium"}</div>\n        <div class="settings-row settings-row--toggle">\n          <span class="settings-label">Dark Mode${d ? "" : " 🔒"}</span>\n          <div class="toggle-wrap">\n            <label class="toggle-switch">\n              <input type="checkbox" id="dark-mode-toggle" ${d && s.darkMode ? "checked" : ""} ${d ? "" : "disabled"}>\n              <span class="toggle-slider"></span>\n            </label>\n          </div>\n        </div>\n        ${d ? "" : '<p class="settings-hint" style="margin-top:4px;">Unlock with a Premium license to enable dark mode.</p>'}\n      </div>\n\n      \x3c!-- ── Markdown Copy (premium) ── --\x3e\n      <div class="settings-section">\n        <div class="settings-section-title">📝 Markdown Copy${d ? "" : " — Premium"}</div>\n        <div class="settings-field">\n          <label class="settings-label" for="prepend-text">Prepend Text${d ? "" : " 🔒"}</label>\n          <textarea\n            id="prepend-text"\n            class="settings-textarea"\n            placeholder="Text added before the markdown output…"\n            ${d ? "" : "disabled"}\n          >${d ? mt(s.prependText || "") : ""}</textarea>\n        </div>\n        <div class="settings-field">\n          <label class="settings-label" for="append-text">Append Text${d ? "" : " 🔒"}</label>\n          <textarea\n            id="append-text"\n            class="settings-textarea"\n            placeholder="Text added after the markdown output…"\n            ${d ? "" : "disabled"}\n          >${d ? mt(s.appendText || "") : ""}</textarea>\n        </div>\n        ${d ? "" : '<p class="settings-hint" style="margin-top:4px;">Unlock with a Premium license to add custom headers/footers to your Markdown exports.</p>'}\n      </div>\n\n      <div class="settings-github-row">\n        <a href="#" class="meta-link" data-url="https://github.com/asharma2027/ai-dev-annotator/tree/prod" title="View source on GitHub">View source on GitHub →</a>\n      </div>\n    `),
-        ye(u),
-        chrome.storage.local.get(
-          {
-            _lastSyncBackup: null,
-            _lastFileBackup: null,
-            _syncBackupError: null,
-            _fileBackupError: null,
-            _syncTruncated: !1,
-          },
-          (t) => {
-            const e = u.querySelector("#sync-backup-status"),
-              n = u.querySelector("#file-backup-status");
-            (e &&
-              (t._syncBackupError
-                ? ((e.textContent = "⚠ " + t._syncBackupError),
-                  (e.style.color = "#dc2626"))
-                : t._lastSyncBackup
-                  ? (e.textContent =
-                      "✅ " + new Date(t._lastSyncBackup).toLocaleTimeString())
-                  : (e.textContent = "Not yet")),
-              n &&
-                (t._fileBackupError
-                  ? ((n.textContent = "⚠ Failed"),
-                    (n.style.color = "#dc2626"),
-                    (n.title = t._fileBackupError))
-                  : t._lastFileBackup
-                    ? (n.textContent =
-                        "✅ " +
-                        new Date(t._lastFileBackup).toLocaleTimeString())
-                    : (n.textContent = "Pending (first backup in ~1 min)")));
-            const o = u.querySelector("#sync-truncation-warning");
-            o && (o.style.display = t._syncTruncated ? "block" : "none");
-          },
-        ),
-        u.querySelector("#backup-now-btn")?.addEventListener("click", (t) => {
-          const e = t.currentTarget;
-          ((e.disabled = !0),
-            (e.textContent = "…"),
-            chrome.runtime.sendMessage({ type: "triggerBackup" }, () => {
-              setTimeout(() => {
-                ((e.disabled = !1),
-                  (e.textContent = "⚡ Backup Now"),
-                  chrome.storage.local.get(
-                    { _lastSyncBackup: null, _lastFileBackup: null },
-                    (t) => {
-                      const e = u.querySelector("#sync-backup-status"),
-                        n = u.querySelector("#file-backup-status");
-                      (e &&
-                        t._lastSyncBackup &&
-                        (e.textContent =
-                          "✅ " +
-                          new Date(t._lastSyncBackup).toLocaleTimeString()),
-                        n &&
-                          t._lastFileBackup &&
-                          (n.textContent =
-                            "✅ " +
-                            new Date(t._lastFileBackup).toLocaleTimeString()));
-                    },
-                  ));
-              }, 3e3);
-            }));
-        }));
-      const M = u.querySelector("#shortcut-modifier"),
-        H = u.querySelector("#shortcut-preview");
-      M &&
-        M.addEventListener("change", () => {
-          const t = M.value;
-          (pt({ shortcut: { modifier: t } }),
-            H && (H.textContent = n[t] || "Alt"));
-        });
-      const D = u.querySelector("#undo-mod"),
-        N = u.querySelector("#undo-key"),
-        O = u.querySelector("#redo-mod"),
-        j = u.querySelector("#redo-key");
-      function P() {
-        const t = (N.value || "z").trim().slice(0, 1).toLowerCase() || "z";
-        ((N.value = t), pt({ undoShortcut: { modifier: D.value, key: t } }));
+
+      // Rebuild the set without this annotation. When it becomes empty the
+      // set itself is dropped (same behaviour as the old remove path).
+      let newSet;
+      if (Array.isArray(set.annotationIds)) {
+        const newIds = set.annotationIds.filter(id => id !== annId);
+        if (newIds.length === set.annotationIds.length) return;
+        newSet = { ...set, annotationIds: newIds, count: newIds.length };
+      } else {
+        const newAnns = set.annotations.filter(a => a.id !== annId);
+        if (newAnns.length === set.annotations.length) return;
+        newSet = { ...set, annotations: newAnns, count: newAnns.length };
       }
-      function F() {
-        const t = (j.value || "y").trim().slice(0, 1).toLowerCase() || "y";
-        ((j.value = t), pt({ redoShortcut: { modifier: O.value, key: t } }));
+
+      // Refcount bookkeeping:
+      //   - modern SFL sets hold a ref — decrement it
+      //   - legacy inline sets never incremented, so skip
+      //   - then add a fresh history reference (increment)
+      if (Array.isArray(set.annotationIds)) {
+        refStoreDec(store, [annId]);
       }
-      (D && D.addEventListener("change", P),
-        N && N.addEventListener("change", P),
-        O && O.addEventListener("change", F),
-        j && j.addEventListener("change", F),
-        document
-          .getElementById("open-popup-shortcut-btn")
-          ?.addEventListener("click", () => {
-            chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
-          }));
-      const R = u.querySelector("#copy-btn-left"),
-        U = u.querySelector("#copy-btn-right"),
-        K = u.querySelector("#clear-btn-left"),
-        V = u.querySelector("#clear-btn-right");
-      function W() {
-        pt(
-          {
-            buttonActions: {
-              copyBtn: { left: R.value, right: U.value },
-              clearBtn: { left: K.value, right: V.value },
-            },
-          },
-          (t) => Nt(t),
-        );
+      // Make sure a store entry exists before we re-increment (refStoreDec
+      // may have removed it if this was the last reference).
+      if (!store[annId] && annSnapshot) {
+        store[annId] = { ...annSnapshot, _refCount: 0 };
       }
-      [R, U, K, V].forEach((t) => {
-        t && t.addEventListener("change", W);
+      if (store[annId]) {
+        store[annId]._refCount = (store[annId]._refCount || 0) + 1;
+      }
+
+      // Drop any stale history ref for the same id so the newest clear
+      // timestamp wins (mirrors deleteAnnotation()). We already accounted
+      // for the new reference above.
+      const oldHistRefs = hist.filter(h => h.id === annId);
+      if (oldHistRefs.length) {
+        refStoreDec(store, oldHistRefs.map(h => h.id));
+      }
+      const newHist = hist.filter(h => h.id !== annId);
+      newHist.push({ id: annId, deletedAt: new Date().toISOString() });
+
+      const newSets = (newSet.count > 0)
+        ? sets.map((s, i) => i === idx ? newSet : s)
+        : sets.filter((_, i) => i !== idx);
+
+      chrome.storage.local.set({
+        [SAVED_LATER_KEY]: newSets,
+        [HISTORY_KEY]:     newHist,
+        [ANN_STORE_KEY]:   store,
+      }, () => {
+        enforceHistoryLimitInStorage(() => renderSavedForLater());
       });
-      const HL_DEF = { annotations: 200, saved: 20, copies: 50 };
-      function HL_wire(t, e, n) {
-        const o = u.querySelector("#" + e),
-          a = u.querySelector("#" + n);
-        if (!o || !a) return;
-        const s = (e) => {
-          const n = { historyLimits: { [t]: e } };
-          ("annotations" === t && (n.maxHistoryLength = e),
-            pt(n, () => {
-              vt(() => {
-                B && se();
-              });
-            }));
-        };
-        (a.addEventListener("change", () => {
-          if (a.checked) ((o.disabled = !0), s(0));
-          else {
-            o.disabled = !1;
-            const e = Math.max(1, parseInt(o.value, 10) || HL_DEF[t]);
-            ((o.value = e), s(e));
-          }
-        }),
-          o.addEventListener("change", () => {
-            const e = Math.max(1, parseInt(o.value, 10) || HL_DEF[t]);
-            ((o.value = e), s(e));
-          }));
-      }
-      (HL_wire("annotations", "max-hist-annotations", "indef-hist-annotations"),
-        HL_wire("saved", "max-hist-saved", "indef-hist-saved"),
-        HL_wire("copies", "max-hist-copies", "indef-hist-copies"),
-        u
-          .querySelector("#export-all-btn")
-          ?.addEventListener("click", async () => {
-            const t = u.querySelector("#export-all-btn"),
-              e = t.textContent;
-            ((t.disabled = !0), (t.textContent = "…"));
-            try {
-              const t = await new Promise((t) =>
-                  chrome.storage.local.get(
-                    {
-                      annotations: [],
-                      [x]: [],
-                      [S]: [],
-                      [L]: [],
-                      [$]: {},
-                      [I]: {},
-                    },
-                    t,
-                  ),
-                ),
-                e = t[I] || {},
-                n = (t[x] || [])
-                  .map((t) => {
-                    const n = wt(t, e);
-                    return n
-                      ? { ...n, deletedAt: t.deletedAt || n.deletedAt }
-                      : null;
-                  })
-                  .filter(Boolean),
-                o = (t[L] || []).map((t) => {
-                  const n = Array.isArray(t.annotationIds)
-                    ? At(t.annotationIds, e)
-                    : t.annotations || [];
-                  return {
-                    id: t.id,
-                    savedAt: t.savedAt,
-                    count: t.count || n.length,
-                    annotations: n,
-                  };
-                }),
-                a = (t[S] || []).map((n) => {
-                  const o = Array.isArray(n.annotationIds)
-                    ? n.annotationIds
-                        .map(
-                          (n) =>
-                            (t.annotations || []).find((t) => t.id === n) ||
-                            (e[n] ? kt(e[n]) : null),
-                        )
-                        .filter(Boolean)
-                    : [];
-                  return { ...n, annotations: o };
-                }),
-                s = ot({
-                  annotations: t.annotations,
-                  history: n,
-                  copyHistory: a,
-                  savedForLater: o,
-                  settings: t[$],
-                });
-              ((s._exported = new Date().toISOString()),
-                (s._version = "1.0.0"));
-              const r = JSON.stringify(s),
-                i = await rt(r),
-                l = new Blob([i], { type: "application/gzip" }),
-                c = URL.createObjectURL(l),
-                d = document.createElement("a");
-              ((d.href = c),
-                (d.download = `annotator-all-${new Date().toISOString().slice(0, 10)}.annotator`),
-                document.body.appendChild(d),
-                d.click(),
-                document.body.removeChild(d),
-                URL.revokeObjectURL(c));
-            } catch (t) {
-              i("Export failed: " + (t?.message || t), { kind: "error" });
-            } finally {
-              ((t.disabled = !1), (t.textContent = e));
-            }
-          }));
-      const J = u.querySelector("#import-all-btn"),
-        X = u.querySelector("#import-all-file");
-      (J &&
-        X &&
-        (J.addEventListener("click", () => X.click()),
-        X.addEventListener("change", async () => {
-          const t = Array.from(X.files);
-          if (!t.length) return;
-          async function e(t) {
-            const e = await new Promise((e, n) => {
-              const o = new FileReader();
-              ((o.onload = (t) => e(t.target.result)),
-                (o.onerror = n),
-                o.readAsArrayBuffer(t));
-            });
-            let n = null;
-            try {
-              const t = await it(new Uint8Array(e));
-              n = JSON.parse(t);
-            } catch {
-              try {
-                const t = new TextDecoder().decode(new Uint8Array(e));
-                n = JSON.parse(t);
-              } catch {
-                return null;
-              }
-            }
-            return n
-              ? 2 === n.v
-                ? at(n)
-                : {
-                    annotations: Array.isArray(n.annotations)
-                      ? n.annotations
-                      : [],
-                    history: Array.isArray(n.annotationHistory)
-                      ? n.annotationHistory
-                      : [],
-                    copyHistory: Array.isArray(n.copyHistory)
-                      ? n.copyHistory
-                      : [],
-                    savedForLater: Array.isArray(n.savedForLater)
-                      ? n.savedForLater
-                      : [],
-                    settings:
-                      n.annotatorSettings &&
-                      "object" == typeof n.annotatorSettings
-                        ? n.annotatorSettings
-                        : {},
-                  }
-              : null;
-          }
-          const n = [];
-          let o = 0;
-          for (const a of t) {
-            const t = await e(a);
-            t ? n.push(t) : o++;
-          }
-          if (
-            (o > 0 &&
-              i(`${o} file(s) were invalid and skipped.`, { kind: "error" }),
-            !n.length)
-          )
-            return void (X.value = "");
-          const a = n.reduce(
-              (t, e) => {
-                const n = new Set(t.annotations.map((t) => t.id));
-                e.annotations.forEach((e) => {
-                  e &&
-                    e.id &&
-                    !n.has(e.id) &&
-                    (n.add(e.id), t.annotations.push(e));
-                });
-                const o = new Set(
-                  t.history.map((t) => t.id + "|" + (t.deletedAt || "")),
-                );
-                e.history.forEach((e) => {
-                  if (!e || !e.id) return;
-                  const n = e.id + "|" + (e.deletedAt || "");
-                  o.has(n) || (o.add(n), t.history.push(e));
-                });
-                const a = new Set(t.copyHistory.map((t) => t.timestamp));
-                e.copyHistory.forEach((e) => {
-                  e &&
-                    e.timestamp &&
-                    !a.has(e.timestamp) &&
-                    (a.add(e.timestamp), t.copyHistory.push(e));
-                });
-                const s = new Set(t.savedForLater.map((t) => t.id));
-                return (
-                  e.savedForLater.forEach((e) => {
-                    e &&
-                      e.id &&
-                      !s.has(e.id) &&
-                      (s.add(e.id), t.savedForLater.push(e));
-                  }),
-                  (t.settings = { ...t.settings, ...e.settings }),
-                  t
-                );
-              },
-              {
-                annotations: [],
-                history: [],
-                copyHistory: [],
-                savedForLater: [],
-                settings: {},
-              },
-            ),
-            s = 1 === t.length ? "1 file" : `${t.length} files`;
-          (await l(
-            `Import ${s}?\n\n• ${a.annotations.length} active annotation(s)\n• ${a.history.length} history record(s)\n• ${a.savedForLater.length} saved-for-later set(s)\n• ${a.copyHistory.length} copy log(s)\n\nExisting items will be merged (not overwritten). Duplicates across files are automatically skipped.`,
-            { host: u },
-          ))
-            ? (chrome.storage.local.get(
-                {
-                  annotations: [],
-                  [x]: [],
-                  [S]: [],
-                  [L]: [],
-                  [$]: {},
-                  [I]: {},
-                },
-                (t) => {
-                  const e = { ...(t[I] || {}) },
-                    n = new Set(t.annotations.map((t) => t.id)),
-                    o = a.annotations.filter((t) => t && t.id && !n.has(t.id)),
-                    s = new Set(
-                      t[x].map((t) => t.id + "|" + (t.deletedAt || "")),
-                    ),
-                    r = [];
-                  a.history.forEach((t) => {
-                    if (!t || !t.id) return;
-                    const n = t.id + "|" + (t.deletedAt || "");
-                    if (!s.has(n)) {
-                      if (!e[t.id]) {
-                        const { deletedAt: n, ...o } = t;
-                        e[t.id] = { ...o, _refCount: 0 };
-                      }
-                      ((e[t.id]._refCount = (e[t.id]._refCount || 0) + 1),
-                        r.push({ id: t.id, deletedAt: t.deletedAt }));
-                    }
-                  });
-                  const l = new Set(t[S].map((t) => t.timestamp)),
-                    c = a.copyHistory
-                      .filter((t) => t && t.timestamp && !l.has(t.timestamp))
-                      .map((t) => {
-                        const n = Array.isArray(t.annotationIds)
-                          ? t
-                          : { ...t, annotationIds: [] };
-                        n.annotationIds.length &&
-                          Array.isArray(t.annotations) &&
-                          n.annotationIds.forEach((n) => {
-                            const o = t.annotations.find(
-                              (t) => t && t.id === n,
-                            );
-                            o &&
-                              (e[n]
-                                ? (e[n] = { ...e[n], ...o })
-                                : (e[n] = { ...o, _refCount: 0 }),
-                              (e[n]._refCount = (e[n]._refCount || 0) + 1));
-                          });
-                        const { annotations: o, ...a } = n;
-                        return a;
-                      }),
-                    d = new Set(t[L].map((t) => t.id)),
-                    u = [];
-                  (a.savedForLater.forEach((t) => {
-                    if (!t || d.has(t.id)) return;
-                    const n = Array.isArray(t.annotationIds)
-                        ? At(t.annotationIds, e)
-                        : t.annotations || [],
-                      o = n.map((t) => t.id).filter(Boolean);
-                    (o.forEach((t) => {
-                      const o = n.find((e) => e.id === t);
-                      (e[t] || (e[t] = { ...o, _refCount: 0 }),
-                        (e[t]._refCount = (e[t]._refCount || 0) + 1));
-                    }),
-                      u.push({
-                        id: t.id,
-                        savedAt: t.savedAt,
-                        count: t.count || o.length,
-                        annotationIds: o,
-                      }));
-                  }),
-                    chrome.storage.local.set(
-                      {
-                        annotations: [...t.annotations, ...o],
-                        [x]: [...t[x], ...r],
-                        [S]: [...t[S], ...c],
-                        [L]: [...t[L], ...u],
-                        [$]: { ...t[$], ...a.settings },
-                        [I]: e,
-                        [Bk]: !1,
-                      },
-                      () => {
-                        (bk(() => {
-                          "copies" === H && d.style.display === "block" && de();
-                        }),
-                          i(
-                            `Imported: ${o.length} annotation(s) · ${r.length} history · ${u.length} saved-for-later · ${c.length} copy log(s)`,
-                            { kind: "ok" },
-                          ),
-                          a.settings &&
-                            void 0 !== a.settings.darkMode &&
-                            ht(a.settings.darkMode));
-                      },
-                    ));
-                },
-              ),
-              (X.value = ""))
-            : (X.value = "");
-        })),
-        u
-          .querySelector("#clear-history-settings-btn")
-          ?.addEventListener("click", async () => {
-            (await l(
-              "Clear all annotation and copy history? This cannot be undone.",
-              { okLabel: "Delete", host: u },
-            )) &&
-              bt((t) => {
-                const e = { ...(t[I] || {}) };
-                ((t[x] || []).forEach((t) => t && t.id && Et(e, [t.id])),
-                  (t[S] || []).forEach((t) => Et(e, xt(t.annotationIds))),
-                  chrome.storage.local.set({ [x]: [], [S]: [], [I]: e }, () => {
-                    i("History cleared.", { kind: "ok" });
-                  }));
-              });
-          }));
-      const Y = u.querySelector("#backup-enabled-toggle");
-      Y &&
-        Y.addEventListener("change", () => {
-          pt({ backupEnabled: Y.checked });
-        });
-      const Q = u.querySelector("#dark-mode-toggle");
-      let Z, tt;
-      Q &&
-        a() &&
-        Q.addEventListener("change", () => {
-          pt({ darkMode: Q.checked }, (t) => ht(t.darkMode));
-        });
-      const et = u.querySelector("#prepend-text"),
-        nt = u.querySelector("#append-text");
-      (et &&
-        a() &&
-        et.addEventListener("input", () => {
-          (clearTimeout(Z),
-            (Z = setTimeout(() => pt({ prependText: et.value }), 350)));
-        }),
-        nt &&
-          a() &&
-          nt.addEventListener("input", () => {
-            (clearTimeout(tt),
-              (tt = setTimeout(() => pt({ appendText: nt.value }), 350)));
-          }));
-      const st = u.querySelector("#activate-license-btn"),
-        lt = u.querySelector("#license-key-input"),
-        ct = u.querySelector("#license-activate-status");
-      st &&
-        lt &&
-        st.addEventListener("click", async () => {
-          const e = (lt.value || "").trim();
-          if (!e)
-            return void (
-              ct &&
-              ((ct.textContent = "Enter your license key."),
-              (ct.style.color = "#dc2626"))
-            );
-          st.disabled = !0;
-          const n = st.textContent;
-          st.textContent = "Verifying…";
-          const a = await (async function (e) {
-            const n = await r(e);
-            return (
-              n.valid &&
-                (await new Promise((o) => {
-                  chrome.storage.local.set(
-                    {
-                      [t]: {
-                        valid: !0,
-                        key: e.trim(),
-                        email: n.email,
-                        activatedAt: new Date().toISOString(),
-                      },
-                    },
-                    o,
-                  );
-                }),
-                (o = !0)),
-              n
-            );
-          })(e);
-          ((st.disabled = !1),
-            (st.textContent = n),
-            a.valid
-              ? (ct &&
-                  ((ct.textContent = "✅ Activated"), (ct.style.color = "")),
-                i("Premium activated. Welcome!", { kind: "ok" }),
-                ue(),
-                ut((t) => ht(t.darkMode)))
-              : ct &&
-                ((ct.textContent = "⚠ " + (a.error || "Invalid license.")),
-                (ct.style.color = "#dc2626")));
-        });
-      const yt = u.querySelector("#deactivate-license-btn");
-      yt &&
-        yt.addEventListener("click", async () => {
-          (await l(
-            "Deactivate Premium on this install? Premium features will lock.",
-            { okLabel: "Deactivate", host: u },
-          )) &&
-            (await (async function () {
-              (await new Promise((e) => chrome.storage.local.remove(t, e)),
-                (o = !1));
-            })(),
-            ut((t) => {
-              const e = { ...t, darkMode: !1, prependText: "", appendText: "" };
-              chrome.storage.local.set({ [$]: e }, () => {
-                (ht(!1), i("Premium deactivated.", { kind: "ok" }), ue());
-              });
-            }));
-        });
-    }
-    function he(t, e) {
-      const n = t.filter((t) => t.comment && t.comment.trim());
-      if (0 === n.length) return null;
-      const o = {};
-      n.forEach((t) => (o[t.url] = o[t.url] || []).push(t));
-      const s = Object.keys(o);
-      let r = "";
-      1 === s.length
-        ? ((r += `## ${s[0]}\n`),
-          o[s[0]].forEach((t, e) => {
-            r += st(e + 1, t);
-          }))
-        : s.forEach((t, e) => {
-            (e > 0 && (r += "\n"),
-              (r += `### ${t}\n`),
-              o[t].forEach((t, e) => {
-                r += st(e + 1, t);
-              }));
-          });
-      let i = r.trim();
-      return (
-        a() &&
-          e &&
-          (e.prependText &&
-            e.prependText.trim() &&
-            (i = e.prependText.trim() + "\n\n" + i),
-          e.appendText &&
-            e.appendText.trim() &&
-            (i = i + "\n\n" + e.appendText.trim())),
-        { md: i, count: n.length }
-      );
-    }
-    function me(t, e) {
-      "copyAll" === t
-        ? (function (t) {
-            bt((e) => {
-              0 !== e.annotations.length
-                ? ut((n) => {
-                    const o = he(e.annotations, n);
-                    o
-                      ? navigator.clipboard
-                          .writeText(o.md)
-                          .then(() => {
-                            const a = e[S],
-                              s = { ...(e[I] || {}) };
-                            a.filter(
-                              (t) => (t.output || "").trim() === o.md.trim(),
-                            ).forEach((t) => Et(s, xt(t.annotationIds)));
-                            const r = a.filter(
-                                (t) => (t.output || "").trim() !== o.md.trim(),
-                              ),
-                              i = e.annotations.filter(
-                                (t) => t.comment && t.comment.trim(),
-                              ),
-                              l = i.map((t) => t.id);
-                            i.forEach((t) => {
-                              (s[t.id]
-                                ? (s[t.id] = { ...s[t.id], ...t })
-                                : (s[t.id] = { ...t, _refCount: 0 }),
-                                (s[t.id]._refCount =
-                                  (s[t.id]._refCount || 0) + 1));
-                            });
-                            const c = new Date().toISOString();
-                            if (
-                              (r.push({
-                                timestamp: c,
-                                output: o.md,
-                                count: o.count,
-                                annotationIds: l,
-                                prependText:
-                                  n && n.prependText && n.prependText.trim()
-                                    ? n.prependText.trim()
-                                    : "",
-                                appendText:
-                                  n && n.appendText && n.appendText.trim()
-                                    ? n.appendText.trim()
-                                    : "",
-                              }),
-                              chrome.storage.local.get({ [C]: [] }, (t) => {
-                                const n = t[C] || [],
-                                  o = new Set(e.annotations.map((t) => t.id)),
-                                  a = [
-                                    ...n.filter(
-                                      (t) =>
-                                        !(
-                                          Array.isArray(t.annotationIds)
-                                            ? t.annotationIds
-                                            : []
-                                        ).every((t) => o.has(t)),
-                                    ),
-                                    {
-                                      id: `cas_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-                                      timestamp: c,
-                                      annotationIds: e.annotations.map(
-                                        (t) => t.id,
-                                      ),
-                                      expanded: !1,
-                                    },
-                                  ];
-                                chrome.storage.local.set(
-                                  { [S]: r, [I]: s, [C]: a },
-                                  () => {
-                                    chrome.storage.local.get(
-                                      { annotations: [] },
-                                      (t) => qt(t.annotations),
-                                    );
-                                  },
-                                );
-                              }),
-                              t)
-                            ) {
-                              const e = t.innerHTML;
-                              ((t.innerHTML = "<span>✅ Copied!</span>"),
-                                setTimeout(() => (t.innerHTML = e), 1500));
-                            }
-                          })
-                          .catch(() =>
-                            i("Clipboard write failed. Try again.", {
-                              kind: "error",
-                            }),
-                          )
-                      : i("No annotations with notes to copy yet.");
-                  })
-                : i("No annotations with notes to copy yet.");
-            });
-          })(e)
-        : "cutAll" === t
-          ? (function (t) {
-              bt((e) => {
-                0 !== e.annotations.length
-                  ? ut((n) => {
-                      const o = he(e.annotations, n);
-                      o
-                        ? navigator.clipboard
-                            .writeText(o.md)
-                            .then(() => {
-                              const a = e[S],
-                                s = { ...(e[I] || {}) },
-                                r = e.annotations.filter(
-                                  (t) => t.comment && t.comment.trim(),
-                                ),
-                                i = r.map((t) => t.id);
-                              a.filter(
-                                (t) => (t.output || "").trim() === o.md.trim(),
-                              ).forEach((t) => Et(s, xt(t.annotationIds)));
-                              const l = a.filter(
-                                (t) => (t.output || "").trim() !== o.md.trim(),
-                              );
-                              (r.forEach((t) => {
-                                (s[t.id]
-                                  ? (s[t.id] = { ...s[t.id], ...t })
-                                  : (s[t.id] = { ...t, _refCount: 0 }),
-                                  (s[t.id]._refCount =
-                                    (s[t.id]._refCount || 0) + 1));
-                              }),
-                                l.push({
-                                  timestamp: new Date().toISOString(),
-                                  output: o.md,
-                                  count: o.count,
-                                  annotationIds: i,
-                                  prependText:
-                                    n && n.prependText && n.prependText.trim()
-                                      ? n.prependText.trim()
-                                      : "",
-                                  appendText:
-                                    n && n.appendText && n.appendText.trim()
-                                      ? n.appendText.trim()
-                                      : "",
-                                }));
-                              const c = new Date().toISOString();
-                              let d = e[x];
-                              if (
-                                (e.annotations.forEach((t) => {
-                                  const e = d.filter((e) => e.id === t.id);
-                                  (e.length &&
-                                    Et(
-                                      s,
-                                      e.map((t) => t.id),
-                                    ),
-                                    (d = d.filter((e) => e.id !== t.id)),
-                                    s[t.id]
-                                      ? (s[t.id] = { ...s[t.id], ...t })
-                                      : (s[t.id] = { ...t, _refCount: 0 }),
-                                    (s[t.id]._refCount =
-                                      (s[t.id]._refCount || 0) + 1),
-                                    d.push({ id: t.id, deletedAt: c }));
-                                }),
-                                (D = !0),
-                                chrome.storage.local.set(
-                                  { annotations: [], [x]: d, [S]: l, [I]: s },
-                                  () => {
-                                    vt(() => {
-                                      ((D = !1),
-                                        qt([]),
-                                        e.annotations.forEach((t) =>
-                                          Y(t.id, t.xpath),
-                                        ),
-                                        It(e.annotations, c));
-                                    });
-                                  },
-                                ),
-                                t)
-                              ) {
-                                const e = t.innerHTML;
-                                ((t.innerHTML = "<span>✅ Cut!</span>"),
-                                  setTimeout(() => (t.innerHTML = e), 1500));
-                              }
-                            })
-                            .catch(() =>
-                              i("Clipboard write failed. Try again.", {
-                                kind: "error",
-                              }),
-                            )
-                        : i("No annotations with notes to copy yet.");
-                    })
-                  : i("No annotations with notes to copy yet.");
-              });
-            })(e)
-          : "clearAll" === t
-            ? bt((t) => {
-                const e = t.annotations;
-                if (0 === e.length) return;
-                let n = t[x];
-                const o = { ...(t[I] || {}) },
-                  a = new Date().toISOString();
-                (e.forEach((t) => {
-                  const e = n.filter((e) => e.id === t.id);
-                  (e.length &&
-                    Et(
-                      o,
-                      e.map((t) => t.id),
-                    ),
-                    (n = n.filter((e) => e.id !== t.id)),
-                    o[t.id]
-                      ? (o[t.id] = { ...o[t.id], ...t })
-                      : (o[t.id] = { ...t, _refCount: 0 }),
-                    (o[t.id]._refCount = (o[t.id]._refCount || 0) + 1),
-                    n.push({ id: t.id, deletedAt: a }));
-                }),
-                  (D = !0),
-                  chrome.storage.local.set(
-                    { annotations: [], [x]: n, [I]: o },
-                    () => {
-                      vt(() => {
-                        ((D = !1),
-                          qt([]),
-                          e.forEach((t) => Y(t.id, t.xpath)),
-                          It(e, a, "cleared"));
-                      });
-                    },
-                  ));
-              })
-            : "saveForLater" === t &&
-              bt((t) => {
-                const e = t.annotations;
-                if (0 === e.length) return;
-                const n = new Date().toISOString(),
-                  o = `sfl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-                  a = e.map((t) => t.id),
-                  s = { id: o, savedAt: n, count: e.length, annotationIds: a },
-                  r = { ...(t[I] || {}) },
-                  i = [...a].sort().join(","),
-                  l = [],
-                  c = t[L].filter(
-                    (t) =>
-                      [
-                        ...(Array.isArray(t.annotationIds)
-                          ? t.annotationIds
-                          : (t.annotations || []).map((t) => t.id)),
-                      ]
-                        .sort()
-                        .join(",") !== i || (l.push(t), !1),
-                  );
-                (l.forEach((t) => {
-                  const e = Array.isArray(t.annotationIds)
-                    ? t.annotationIds
-                    : (t.annotations || []).map((t) => t.id);
-                  Et(r, e.filter(Boolean));
-                }),
-                  e.forEach((t) => {
-                    (r[t.id]
-                      ? (r[t.id] = { ...r[t.id], ...t })
-                      : (r[t.id] = { ...t, _refCount: 0 }),
-                      (r[t.id]._refCount = (r[t.id]._refCount || 0) + 1));
-                  }));
-                const d = [...c, s];
-                ((D = !0),
-                  chrome.storage.local.set(
-                    { annotations: [], [L]: d, [I]: r },
-                    () => {
-                      ((D = !1),
-                        qt([]),
-                        e.forEach((t) => Y(t.id, t.xpath)),
-                        It(e, n, "saved", o));
-                    },
-                  ));
-              });
-    }
-    function ye(t) {
-      t.querySelectorAll("[data-url]").forEach((t) => {
-        t.addEventListener("click", (e) => {
-          e.preventDefault();
-          const n = t.dataset.url;
-          n && "#" !== n && chrome.tabs.create({ url: n });
-        });
+    });
+  }
+
+  function restoreSavedForLaterSet(setId) {
+    readDedupStorage(r => {
+      const set = r[SAVED_LATER_KEY].find(s => s.id === setId);
+      if (!set) return;
+      const store = { ...(r[ANN_STORE_KEY] || {}) };
+
+      const annotations = Array.isArray(set.annotationIds)
+        ? resolveList(set.annotationIds, store)
+        : (set.annotations || []);
+      const idsInSet = Array.isArray(set.annotationIds)
+        ? set.annotationIds
+        : (set.annotations || []).map(a => a.id);
+
+      const existing = new Set(r.annotations.map(a => a.id));
+      const toAdd    = annotations.filter(a => !existing.has(a.id));
+      const merged   = [...r.annotations, ...toAdd];
+      const newSaved = r[SAVED_LATER_KEY].filter(s => s.id !== setId);
+
+      // Decrement refs for every id this set used to hold.
+      refStoreDec(store, idsInSet.filter(Boolean));
+
+      isWritingFromPopup = true;
+      chrome.storage.local.set({
+        annotations: merged,
+        [SAVED_LATER_KEY]: newSaved,
+        [ANN_STORE_KEY]: store,
+      }, () => {
+        isWritingFromPopup = false;
+        toAdd.forEach(ann => broadcastRestore(ann));
+        renderSavedForLater();
       });
-    }
-    (c.addEventListener("click", (t) => {
-      const e = t.target.closest(".ann-code--clickable");
-      if (e && !t.target.closest("button")) {
-        const t = e.dataset.navAnnId;
-        return void (
-          t &&
-          (async function (t, e) {
-            (e &&
-              (e.classList.add("item-nav-flash"),
-              setTimeout(() => e.classList.remove("item-nav-flash"), 700)),
-              chrome.storage.local.get({ annotations: [] }, async (e) => {
-                const n = e.annotations.find((e) => e.id === t);
-                if (!n) return;
-                await Ct({ type: "focusAnnotation", annId: t, url: n.url });
-                const o = (
-                  await chrome.tabs.query({ active: !0, currentWindow: !0 })
-                )[0];
-                if (o) {
-                  if (o.url === n.url)
-                    try {
-                      await chrome.tabs.sendMessage(o.id, {
-                        type: "focusAnnotation",
-                        annId: t,
-                      });
-                    } catch {}
-                  else await chrome.tabs.update(o.id, { url: n.url });
-                  window.close();
-                }
-              }));
-          })(t, e.closest(".item"))
-        );
+    });
+  }
+
+  function deleteSavedForLaterSet(setId) {
+    chrome.storage.local.get({ [SAVED_LATER_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+      const set = r[SAVED_LATER_KEY].find(s => s.id === setId);
+      const newSaved = r[SAVED_LATER_KEY].filter(s => s.id !== setId);
+      const store    = { ...(r[ANN_STORE_KEY] || {}) };
+      if (set) {
+        const ids = Array.isArray(set.annotationIds)
+          ? set.annotationIds
+          : (set.annotations || []).map(a => a.id);
+        refStoreDec(store, ids.filter(Boolean));
       }
-      const n = t.target.closest(".url-label--clickable");
-      if (n && !t.target.closest("button")) {
-        const t = n.dataset.navUrl;
-        return void (
-          t &&
-          (async function (t) {
-            await Ct({ type: "openAllForUrl", url: t });
-            const e = (
-              await chrome.tabs.query({ active: !0, currentWindow: !0 })
-            )[0];
-            if (e) {
-              if (e.url === t)
-                try {
-                  await chrome.tabs.sendMessage(e.id, {
-                    type: "openAllAnnotations",
-                    url: t,
-                  });
-                } catch {}
-              else await chrome.tabs.update(e.id, { url: t });
-              window.close();
-            }
-          })(t)
-        );
-      }
-    }),
-      chrome.storage.onChanged.addListener((t, e) => {
-        if (
-          "local" === e &&
-          ((t.annotations || t[x] || t[S] || t[L] || t[$]) &&
-            ut((t) => {
-              !1 !== t.backupEnabled &&
-                (clearTimeout(P),
-                (P = setTimeout(() => {
-                  !(async function () {
-                    try {
-                      const t = await new Promise((t) =>
-                          chrome.storage.local.get(
-                            {
-                              annotations: [],
-                              [x]: [],
-                              [S]: [],
-                              [L]: [],
-                              [$]: {},
-                              [I]: {},
-                            },
-                            t,
-                          ),
-                        ),
-                        e = t.annotations || [],
-                        n = t[I] || {};
-                      let o = (t[x] || [])
-                        .map((t) => {
-                          const e = wt(t, n);
-                          return e
-                            ? { ...e, deletedAt: t.deletedAt || e.deletedAt }
-                            : null;
-                        })
-                        .filter(Boolean);
-                      const a = (t[S] || []).map((t) => {
-                          const { annotationIds: e, ...n } = t;
-                          return n;
-                        }),
-                        s = (t[L] || []).map((t) => {
-                          const e = Array.isArray(t.annotationIds)
-                            ? At(t.annotationIds, n)
-                            : t.annotations || [];
-                          return {
-                            id: t.id,
-                            savedAt: t.savedAt,
-                            count: t.count || e.length,
-                            annotations: e,
-                          };
-                        }),
-                        r = t[$] || {};
-                      let i = !1,
-                        l = "";
-                      for (;;) {
-                        const t = ot({
-                          annotations: e,
-                          history: o,
-                          copyHistory: a,
-                          savedForLater: s,
-                          settings: r,
-                        });
-                        if (((l = await lt(t)), l.length <= 95e3)) break;
-                        if (0 === o.length) break;
-                        const n = Math.max(1, Math.floor(0.1 * o.length));
-                        ((o = o.slice(n)), (i = !0));
-                      }
-                      if (l.length > 95e3)
-                        return void chrome.storage.local.set({
-                          _syncBackupError:
-                            "Data still exceeds sync storage limit even after truncation.",
-                          _syncTruncated: i,
-                        });
-                      const c = [];
-                      for (let t = 0; t < l.length; t += 7e3)
-                        c.push(l.slice(t, t + 7e3));
-                      const d = await new Promise((t) =>
-                          chrome.storage.sync.get(null, t),
-                        ),
-                        u = Object.keys(d).filter(
-                          (t) => t.startsWith(_) || t.startsWith(q),
-                        );
-                      u.length &&
-                        (await new Promise((t) =>
-                          chrome.storage.sync.remove(u, t),
-                        ));
-                      const p = {
-                        [`${q}count`]: c.length,
-                        [`${q}ts`]: new Date().toISOString(),
-                        [`${q}ver`]: 2,
-                      };
-                      c.forEach((t, e) => {
-                        p[`${q}${e}`] = t;
-                      });
-                      try {
-                        (await chrome.storage.sync.set(p),
-                          chrome.storage.local.set({
-                            _lastSyncBackup: new Date().toISOString(),
-                            _syncBackupError: null,
-                            _syncTruncated: i,
-                          }));
-                      } catch (t) {
-                        (chrome.storage.local.set({
-                          _syncBackupError:
-                            "Sync write failed: " + (t?.message || t),
-                          _syncTruncated: i,
-                        }),
-                          console.warn("[Annotator] Sync write failed:", t));
-                      }
-                    } catch (t) {
-                      console.warn("[Annotator] Sync backup error:", t);
-                    }
-                  })();
-                }, 1500)));
-            }),
-          0 === G &&
-            (function (t) {
-              let e = !1;
-              (U.forEach((n) => {
-                Object.prototype.hasOwnProperty.call(t, n) &&
-                  ((e = !0),
-                  W || (W = {}),
-                  Object.prototype.hasOwnProperty.call(W, n) ||
-                    (W[n] = t[n].oldValue));
-              }),
-                e &&
-                  (z ||
-                    (z = setTimeout(() => {
-                      const t = W;
-                      ((W = null),
-                        (z = null),
-                        t &&
-                          (K.push(t),
-                          K.length > 100 && K.shift(),
-                          (V = []),
-                          Ut()));
-                    }, 0))));
-            })(t),
-          t.annotations)
-        ) {
-          const e = t.annotations.newValue || [];
-          (D || B || M || qt(e), B && se());
+      chrome.storage.local.set({ [SAVED_LATER_KEY]: newSaved, [ANN_STORE_KEY]: store }, () => renderSavedForLater());
+    });
+  }
+
+  // ── One-time backfill: recover annotationIds for legacy copy-log entries ──
+  //
+  // Older copy-log entries were stored as raw markdown with no annotation-id
+  // linkage. Without IDs the row buttons can't function correctly. This pass
+  // parses the markdown of any entry with an empty annotationIds list and
+  // looks each row up against the annotation store (preferring xpath, then
+  // falling back to (url, selector, note prefix)). The recovered IDs are
+  // persisted back to storage so subsequent renders can use them directly.
+  //
+  // The match logic only runs against the existing _annStore + current
+  // annotations — it doesn't fabricate new annotations. Rows that can't be
+  // matched are simply not rendered (the entry's header + Raw button still
+  // appear, and the user can permanently delete it from there).
+  function backfillCopyLogIds(cb) {
+    chrome.storage.local.get({
+      [COPY_HISTORY_KEY]: [], [ANN_STORE_KEY]: {}, annotations: [],
+      [COPY_LOG_BACKFILL_FLAG]: false,
+    }, r => {
+      if (r[COPY_LOG_BACKFILL_FLAG]) { if (cb) cb(); return; }
+      const copyHist = r[COPY_HISTORY_KEY] || [];
+      const store    = { ...(r[ANN_STORE_KEY] || {}) };
+      const liveAnns = r.annotations || [];
+
+      // Build lookup indices over every annotation we know about (current +
+      // store). Same id may appear in both — current wins (fresher data).
+      const annPool = new Map();
+      Object.entries(store).forEach(([id, ann]) => {
+        if (id && ann) annPool.set(id, stripRefMeta(ann));
+      });
+      liveAnns.forEach(a => { if (a && a.id) annPool.set(a.id, a); });
+
+      const normUrl = u => (u || '').split('#')[0];
+      const xpathIdx  = new Map(); // "normUrl|xpath" -> id
+      const selNoteIdx = new Map(); // "normUrl|sel|notePrefix" -> [ids]
+      annPool.forEach((ann, id) => {
+        const nu = normUrl(ann.url);
+        if (ann.xpath) {
+          const k = nu + '|' + ann.xpath;
+          if (!xpathIdx.has(k)) xpathIdx.set(k, id);
         }
-        t[S] && B && "copies" === H && !D && se();
-      }),
-      document.addEventListener("keydown", (t) => {
-        const e = t.target;
-        (e &&
-          ("TEXTAREA" === e.tagName ||
-            ("INPUT" === e.tagName &&
-              /^(text|search|url|email|password|number)$/i.test(
-                e.type || "text",
-              )))) ||
-          ut((e) => {
-            const n = e.undoShortcut || dt.undoShortcut,
-              o = e.redoShortcut || dt.redoShortcut;
-            Kt(t, n)
-              ? (t.preventDefault(), Ft())
-              : Kt(t, o) && (t.preventDefault(), Rt());
-          });
-      }),
-      document.addEventListener("keydown", (t) => {
-        if ((t.ctrlKey || t.metaKey) && "f" === t.key)
-          return (t.preventDefault(), void (N ? Wt() : Vt()));
-        "Escape" === t.key && N && Wt();
-      }),
-      f.addEventListener("click", () => {
-        N ? Wt() : Vt();
-      }),
-      J && J.addEventListener("click", () => Ft()),
-      X && X.addEventListener("click", () => Rt()),
-      Ut(),
-      b.addEventListener("input", () => {
-        Zt(b.value.trim());
-      }),
-      b.addEventListener("keydown", (t) => {
-        ("Enter" === t.key && (t.preventDefault(), t.shiftKey ? oe() : ne()),
-          "Escape" === t.key && Wt());
-      }),
-      document.getElementById("search-prev").addEventListener("click", oe),
-      document.getElementById("search-next").addEventListener("click", ne),
-      document.getElementById("search-close").addEventListener("click", Wt),
-      y.addEventListener("click", () => {
-        B
-          ? ((B = !1),
-            (d.style.display = "none"),
-            (A.style.display = ""),
-            (c.style.display = ""),
-            (y.textContent = "🕐"),
-            (y.title = "View annotation history"),
-            Ot())
-          : ae();
-      }),
-      g.addEventListener("click", () => {
-        M
-          ? ((M = !1),
-            (u.style.display = "none"),
-            (A.style.display = ""),
-            (c.style.display = ""),
-            (g.textContent = "⚙️"),
-            (g.title = "Settings"),
-            g.classList.remove("active"),
-            Ot())
-          : ((M = !0),
-            (B = !1),
-            k && (k.style.display = "none"),
-            N && Wt(),
-            (c.style.display = "none"),
-            (A.style.display = "none"),
-            (d.style.display = "none"),
-            (y.textContent = "🕐"),
-            (y.title = "View annotation history"),
-            (u.style.display = "block"),
-            (g.textContent = "✕"),
-            (g.title = "Close settings"),
-            g.classList.add("active"),
-            s().then(() => ue()));
-      }),
-      h.addEventListener("click", () => {
-        ut((t) => {
-          me(t.buttonActions?.copyBtn?.left || "copyAll", h);
-        });
-      }),
-      h.addEventListener("contextmenu", (t) => {
-        (t.preventDefault(),
-          ut((t) => {
-            me(t.buttonActions?.copyBtn?.right || "cutAll", h);
-          }));
-      }),
-      m.addEventListener("click", () => {
-        ut((t) => {
-          me(t.buttonActions?.clearBtn?.left || "clearAll", m);
-        });
-      }),
-      m.addEventListener("contextmenu", (t) => {
-        (t.preventDefault(),
-          ut((t) => {
-            me(t.buttonActions?.clearBtn?.right || "saveForLater", m);
-          }));
-      }),
-      ye(document.body));
-    const ge = document.getElementById("star-rating"),
-      fe = document.querySelectorAll(".star");
-    (fe.forEach((t, e) => {
-      t.addEventListener("mouseover", () => {
-        fe.forEach((t, n) => t.classList.toggle("star-hover", n <= e));
+        const sel  = getSelector(ann);
+        const note = (ann.comment || '').trim().slice(0, 120);
+        const k2   = nu + '|' + sel + '|' + note;
+        const arr  = selNoteIdx.get(k2) || [];
+        arr.push(id);
+        selNoteIdx.set(k2, arr);
       });
-    }),
-      ge &&
-        (ge.addEventListener("mouseleave", () => {
-          fe.forEach((t) => t.classList.remove("star-hover"));
-        }),
-        ge.addEventListener("click", () => {
-          const t = `https://chromewebstore.google.com/detail/${chrome.runtime.id}/reviews`;
-          chrome.tabs.create({ url: t });
-        })),
-      s().then(() => {
-        St(() => {
-          (bk(() => {
-            Ot();
-          }),
-            chrome.storage.local.get({ annotations: [] }, async (t) => {
-              if (t.annotations.length > 0) return;
-              const e = await (async function () {
-                const t = await new Promise((t) =>
-                    chrome.storage.sync.get(null, t),
-                  ),
-                  e = t[`${q}count`],
-                  n = t[`${q}ts`];
-                if (e && e > 0) {
-                  let o = "";
-                  for (let n = 0; n < e; n++) o += t[`${q}${n}`] || "";
-                  try {
-                    return { ...at(await ct(o)), ts: n, format: "v2" };
-                  } catch (t) {
-                    console.warn("[Annotator] v2 sync parse error:", t);
-                  }
-                }
-                const o = t[`${_}count`],
-                  a = t[`${_}ts`];
-                if (!o || 0 === o) return null;
-                let s = "";
-                for (let e = 0; e < o; e++) s += t[`${_}${e}`] || "";
-                try {
-                  const t = JSON.parse(s);
-                  return {
-                    annotations: Array.isArray(t) ? t : [],
-                    history: [],
-                    copyHistory: [],
-                    savedForLater: [],
-                    settings: {},
-                    ts: a,
-                    format: "v1",
-                  };
-                } catch {
-                  return null;
-                }
-              })();
-              if (!e) return;
-              if (
-                !(
-                  (e.annotations && e.annotations.length > 0) ||
-                  (e.history && e.history.length > 0) ||
-                  (e.savedForLater && e.savedForLater.length > 0)
-                )
-              )
-                return;
-              const n = {};
-              (e.annotations &&
-                e.annotations.length &&
-                (n.annotations = e.annotations),
-                e.history && e.history.length && (n[x] = e.history),
-                e.copyHistory && e.copyHistory.length && (n[S] = e.copyHistory),
-                e.savedForLater &&
-                  e.savedForLater.length &&
-                  (n[L] = e.savedForLater),
-                e.settings &&
-                  Object.keys(e.settings).length &&
-                  (n[$] = e.settings),
-                (n[T] = !1),
-                (n[Bk] = !1),
-                (n[I] = {}),
-                (D = !0),
-                chrome.storage.local.set(n, () => {
-                  ((D = !1),
-                    St(() => {
-                      bk(() => {});
-                      const t = e.annotations || [];
-                      (t.length && (qt(t), t.forEach((t) => Q(t))),
-                        e.settings &&
-                          (void 0 !== e.settings.darkMode &&
-                            ht(e.settings.darkMode),
-                          Nt({ ...dt, ...e.settings })));
-                    }));
-                }));
-            }),
-            setTimeout(() => {
-              ((W = null),
-                z && (clearTimeout(z), (z = null)),
-                (G = Math.max(0, G - 1)),
-                (K = []),
-                (V = []),
-                Ut());
-            }, 50));
-        });
-      }),
-      chrome.storage.local.get({ _popupScrollTarget: null }, (t) => {
-        if (t._popupScrollTarget) {
-          const e = t._popupScrollTarget;
-          (chrome.storage.local.remove("_popupScrollTarget"),
-            setTimeout(() => {
-              const t = c.querySelector(`[data-nav-ann-id="${e}"]`),
-                n = t ? t.closest(".item") : null;
-              n &&
-                (n.scrollIntoView({ behavior: "smooth", block: "center" }),
-                n.classList.add("item-nav-flash"),
-                setTimeout(() => n.classList.remove("item-nav-flash"), 1500));
-            }, 350));
+
+      // Parse one copy-log entry's markdown output into a list of row
+      // descriptors: { sel, xpath, url, note }.
+      function parseRows(output) {
+        if (!output || !output.trim()) return [];
+        const lines = output.split('\n');
+        const rows  = [];
+        let curUrl = '';
+        let i = 0;
+        const URL_RE = /^#{2,3}\s+(.+)$/;
+        // Old format: "N. `sel` | `xpath` → note" (single line)
+        const OLD_RE = /^\d+\.\s+`([^`]*)`\s*(?:\|\s+`([^`]*)`)?\s*(?:→|->)\s*(.*)$/;
+        // New format: "N. `sel`" with sub-items on following "   - …" lines
+        const NEW_RE = /^\d+\.\s+`([^`]*)`\s*$/;
+        while (i < lines.length) {
+          const line = lines[i];
+          const um = line.match(URL_RE);
+          if (um) { curUrl = um[1].trim(); i++; continue; }
+          const om = line.match(OLD_RE);
+          if (om) {
+            rows.push({ sel: om[1], xpath: om[2] || '', url: curUrl, note: (om[3] || '').trim() });
+            i++; continue;
+          }
+          const nm = line.match(NEW_RE);
+          if (nm) {
+            let j = i + 1, note = '';
+            while (j < lines.length && lines[j].startsWith('   - ')) {
+              const content = lines[j].slice(5);
+              const isTs   = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(content);
+              const isUrl  = /^https?:\/\//.test(content);
+              const isText = content.startsWith('_"') && content.endsWith('"_');
+              if (!isTs && !isUrl && !isText) {
+                note = note ? note + '\n' + content : content;
+              }
+              j++;
+            }
+            rows.push({ sel: nm[1], xpath: '', url: curUrl, note });
+            i = j; continue;
+          }
+          i++;
         }
-      }));
+        return rows;
+      }
+
+      let changed = false;
+      const rebuilt = copyHist.map(entry => {
+        if (!entry) return entry;
+        if (Array.isArray(entry.annotationIds) && entry.annotationIds.length) return entry;
+        const rows = parseRows(entry.output);
+        if (!rows.length) return entry;
+        const recovered = [];
+        const used = new Set();
+        rows.forEach(row => {
+          const nu = normUrl(row.url);
+          let id = null;
+          if (row.xpath) id = xpathIdx.get(nu + '|' + row.xpath) || null;
+          if (!id) {
+            const cands = selNoteIdx.get(nu + '|' + row.sel + '|' + row.note.slice(0, 120)) || [];
+            id = cands.find(c => !used.has(c)) || null;
+          }
+          if (id) { recovered.push(id); used.add(id); }
+        });
+        if (!recovered.length) return entry;
+        // Bump refcounts for recovered ids so the store entries aren't garbage
+        // collected later.
+        recovered.forEach(id => {
+          if (store[id]) store[id]._refCount = (store[id]._refCount || 0) + 1;
+        });
+        changed = true;
+        return { ...entry, annotationIds: recovered };
+      });
+
+      if (!changed) {
+        chrome.storage.local.set({ [COPY_LOG_BACKFILL_FLAG]: true }, () => { if (cb) cb(); });
+        return;
+      }
+      chrome.storage.local.set({
+        [COPY_HISTORY_KEY]: rebuilt,
+        [ANN_STORE_KEY]: store,
+        [COPY_LOG_BACKFILL_FLAG]: true,
+      }, () => { if (cb) cb(); });
+    });
+  }
+
+  function renderCopyHistory() {
+    chrome.storage.local.get({ [COPY_HISTORY_KEY]: [], annotations: [], [ANN_STORE_KEY]: {} }, r => {
+      const copyHist = r[COPY_HISTORY_KEY];
+      const store    = r[ANN_STORE_KEY] || {};
+      const currentById = new Map((r.annotations || []).map(a => [a.id, a]));
+
+      if (copyHist.length === 0) {
+        historyEl.innerHTML = historyTabsHTML('copies') +
+          `<p class="empty-msg">No copy history yet.<br>Use the copy button to record an output here.</p>`;
+        attachTabListeners();
+        return;
+      }
+
+      // Build a per-annotation list of selector pieces (main + every
+      // contextElements entry). Multi-element annotations stay as a single
+      // row but show all their selectors joined.
+      function annSelectors(ann) {
+        if (!ann) return [];
+        if (ann.pageLevel || ann.tag === 'page') return ['(whole page)'];
+        const parts = [];
+        const rawId = ann.elId !== undefined
+          ? (ann.elId ? `#${ann.elId}` : '')
+          : (ann.id && ann.id !== 'N/A' && !ann.id.startsWith('ann_') ? ann.id : '');
+        const cls = ann.classes && ann.classes !== 'N/A' ? ann.classes : '';
+        parts.push(`${ann.tag || '?'}${rawId}${cls}`);
+        if (Array.isArray(ann.contextElements)) {
+          ann.contextElements.forEach(ctx => {
+            const cId  = ctx.elId ? `#${ctx.elId}` : '';
+            const cCls = ctx.classes && ctx.classes !== 'N/A' ? ctx.classes : '';
+            parts.push(`${ctx.tag || '?'}${cId}${cCls}`);
+          });
+        }
+        return parts;
+      }
+
+      let html = historyTabsHTML('copies');
+      // Sort newest-first regardless of storage/import order.
+      [...copyHist]
+        .sort((a, b) => {
+          const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+          const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+          return tb - ta;
+        })
+        .forEach(entry => {
+        const ids = Array.isArray(entry.annotationIds) ? entry.annotationIds : [];
+
+        // Resolve each id into its full annotation snapshot, preferring a
+        // current-set match (so any edits to the note since the copy show
+        // through), and falling back to the ref-store snapshot.
+        const resolved = ids
+          .map(id => currentById.get(id) || (store[id] ? stripRefMeta(store[id]) : null))
+          .filter(Boolean);
+
+        // Group resolved annotations by URL, preserving original order.
+        // Every row must resolve to a real annotation id — there is no
+        // markdown-parsing fallback. Legacy entries that couldn't be matched
+        // to any annotation during the one-time backfill simply render with
+        // no rows (the entry's header + Raw button still appear).
+        const groups = [];
+        const groupIdx = new Map();
+        resolved.forEach(ann => {
+          const u = ann.url || '';
+          if (!groupIdx.has(u)) {
+            groupIdx.set(u, groups.length);
+            groups.push({ url: u, items: [] });
+          }
+          groups[groupIdx.get(u)].items.push(ann);
+        });
+
+        // Build a set of ids that are still live for per-row red-minus/restore button.
+        const liveIdSet = new Set(resolved.filter(a => currentById.has(a.id)).map(a => a.id));
+
+        const when     = formatTimestamp(entry.timestamp);
+        const annCount = entry.count != null ? entry.count : resolved.length;
+        const hasRaw   = !!(entry.output && String(entry.output).trim());
+
+        // SFL-style layout for the copy log entry. Adds a "Raw" button to
+        // toggle the verbatim copied output.
+        html += `
+        <div class="sfl-set copy-hist-item" data-set-id="${escHtml(entry.timestamp)}">
+          <div class="sfl-set-header">
+            <span class="sfl-set-meta">📅 ${escHtml(when)} · ${annCount} annotation${annCount !== 1 ? 's' : ''}</span>
+            <div class="sfl-set-actions">
+              ${hasRaw ? `<button class="sfl-set-btn copy-hist-raw-btn" data-ts="${escHtml(entry.timestamp)}" title="View raw output">📄 Raw</button>` : ''}
+              <button class="copy-hist-perm-delete-btn" data-ts="${escHtml(entry.timestamp)}" title="Permanently delete">✕</button>
+            </div>
+          </div>
+          ${groups.map(g => `
+            <div class="sfl-url-group">
+              <div class="sfl-url hist-clickable-text" data-full-text="${escHtml(g.url || '')}" title="${escHtml(g.url)}">${escHtml(g.url || '(no url)')}</div>
+              <ul class="sfl-set-list">
+                ${g.items.map(ann => {
+                  const fullSels = annSelectors(ann).join(', ');
+                  const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
+                  const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
+                  const isLive = ann.id && liveIdSet.has(ann.id);
+                  // Every row resolves to a real annotation id, so we always
+                  // render either the red-minus (live) or restore (history)
+                  // button — no DOM-only fallback exists.
+                  const rowBtn = isLive
+                    ? `<button class="copy-hist-row-remove-btn" data-ann-id="${escHtml(ann.id)}" title="Remove this annotation from current">−</button>`
+                    : `<button class="hist-restore-btn copy-hist-row-restore-btn" data-ann-id="${escHtml(ann.id)}" title="Restore annotation">↺</button>`;
+                  const rowClass = isLive ? ' copy-hist-row--live' : '';
+                  return `<li class="copy-hist-li${rowClass}" title="${escHtml(fullSels)}"><code class="hist-clickable-text" data-full-text="${escHtml(fullSels)}">${escHtml(fullSels)}</code><span class="hist-clickable-text" data-full-text="${escHtml(note)}">${escHtml(noteShort)}</span>${rowBtn}</li>`;
+                }).join('')}
+              </ul>
+            </div>`).join('')}
+          ${hasRaw ? `<pre class="copy-hist-raw-body" data-ts="${escHtml(entry.timestamp)}" style="display:none;">${escHtml(entry.output)}</pre>` : ''}
+        </div>`;
+      });
+
+      historyEl.innerHTML = html;
+      attachTabListeners();
+      attachExternalLinks(historyEl);
+
+      historyEl.querySelectorAll('.copy-hist-perm-delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const ts = btn.dataset.ts;
+          chrome.storage.local.get({ [COPY_HISTORY_KEY]: [], [ANN_STORE_KEY]: {} }, r => {
+            const removed = r[COPY_HISTORY_KEY].filter(c => c.timestamp === ts);
+            const newHist = r[COPY_HISTORY_KEY].filter(c => c.timestamp !== ts);
+            const store   = { ...(r[ANN_STORE_KEY] || {}) };
+            removed.forEach(c => refStoreDec(store, refIds(c.annotationIds)));
+            chrome.storage.local.set({
+              [COPY_HISTORY_KEY]: newHist,
+              [ANN_STORE_KEY]:    store,
+            }, () => renderCopyHistory());
+          });
+        });
+      });
+
+      // Per-row red minus: remove a single annotation from the current list,
+      // staying on the Copy Log tab afterwards.
+      historyEl.querySelectorAll('.copy-hist-row-remove-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          removeAnnotationFromCurrent(btn.dataset.annId);
+        });
+      });
+
+      // Per-row green restore: add annotation back to current set.
+      historyEl.querySelectorAll('.copy-hist-row-restore-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          restoreAnnotationFromCopyLog(btn.dataset.annId);
+        });
+      });
+
+      // "📄 Raw" — toggles the verbatim copied output for that entry.
+      historyEl.querySelectorAll('.copy-hist-raw-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          const ts = btn.dataset.ts;
+          const safeTs = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(ts) : ts;
+          const body = historyEl.querySelector(`.copy-hist-raw-body[data-ts="${safeTs}"]`);
+          if (!body) return;
+          const showing = body.style.display !== 'none';
+          body.style.display = showing ? 'none' : 'block';
+          btn.classList.toggle('active', !showing);
+        });
+      });
+
+      // Re-apply search highlights if search is active
+      if (searchActive && searchInput && searchInput.value.trim()) {
+        applySearch(searchInput.value.trim());
+      }
+    });
+  }
+
+  // Remove a single annotation from the current set without leaving the
+  // history view. Used by the per-row red minus button in the Copy Log tab.
+  function removeAnnotationFromCurrent(annId) {
+    readDedupStorage(r => {
+      const ann = r.annotations.find(a => a.id === annId);
+      if (!ann) {
+        showToast('Annotation not in current set.');
+        renderHistoryTab();
+        return;
+      }
+      const remaining = r.annotations.filter(a => a.id !== annId);
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations: remaining }, () => {
+        isWritingFromPopup = false;
+        broadcastRemove(ann.id, ann.xpath);
+        // Stay on the copy log tab — re-render the active history tab.
+        renderHistoryTab();
+      });
+    });
+  }
+
+  // Restore a single annotation from the copy-log store back into the current
+  // annotation list. Used by the per-row "Restore" button in the Copy Log tab.
+  function restoreAnnotationFromCopyLog(annId) {
+    readDedupStorage(r => {
+      if (r.annotations.some(a => a.id === annId)) {
+        showToast('Annotation is already in current set.');
+        renderHistoryTab();
+        return;
+      }
+      const store = r[ANN_STORE_KEY] || {};
+      const ann = store[annId] ? stripRefMeta(store[annId]) : null;
+      if (!ann) {
+        showToast('Annotation data not available.');
+        renderHistoryTab();
+        return;
+      }
+      const newAnns = [...r.annotations, ann];
+      isWritingFromPopup = true;
+      chrome.storage.local.set({ annotations: newAnns }, () => {
+        isWritingFromPopup = false;
+        broadcastRestore(ann);
+        renderHistoryTab();
+      });
+    });
+  }
+
+  function hideHistory() {
+    historyVisible = false;
+    historyEl.style.display = 'none';
+    footer.style.display    = '';
+    listEl.style.display    = '';
+    historyBtn.textContent  = '🕐';
+    historyBtn.title        = 'View annotation history';
+    load(); // render() re-applies search to listEl automatically
+  }
+
+  historyBtn.addEventListener('click', () => {
+    if (historyVisible) hideHistory();
+    else showHistory();
   });
-})();
+
+  // ── Settings panel ─────────────────────────────────────────────────────────
+  function showSettings() {
+    settingsVisible = true;
+    historyVisible  = false;
+    if (restoreBanner) restoreBanner.style.display = 'none';
+    if (searchActive) closeSearch();
+    listEl.style.display      = 'none';
+    footer.style.display      = 'none';
+    historyEl.style.display   = 'none';
+    historyBtn.textContent    = '🕐';
+    historyBtn.title          = 'View annotation history';
+    settingsEl.style.display  = 'block';
+    settingsBtn.textContent   = '✕';
+    settingsBtn.title         = 'Close settings';
+    settingsBtn.classList.add('active');
+    refreshPremiumStatus().then(() => renderSettings());
+  }
+
+  function hideSettings() {
+    settingsVisible = false;
+    settingsEl.style.display = 'none';
+    footer.style.display     = '';
+    listEl.style.display     = '';
+    settingsBtn.textContent  = '⚙️';
+    settingsBtn.title        = 'Settings';
+    settingsBtn.classList.remove('active');
+    load();
+  }
+
+  function renderSettings() {
+    const premium = isPremium();
+    loadSettings(s => {
+      let licenseSection;
+      if (premium) {
+        chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
+          const lic = r[LICENSE_STORAGE_KEY] || {};
+          const emailLine = lic.email
+            ? `<div class="settings-row"><span class="settings-label">Licensed to</span><span class="settings-value">${escHtml(lic.email)}</span></div>`
+            : '';
+          licenseSection = `
+            <div class="settings-section">
+              <div class="settings-section-title">⭐ Premium</div>
+              <div class="settings-row">
+                <span class="settings-label">Status</span>
+                <span class="settings-value premium-active-badge">✅ Premium Active</span>
+              </div>
+              ${emailLine}
+              <div class="settings-row">
+                <button id="deactivate-license-btn" class="btn-secondary" type="button">Remove license from this device</button>
+              </div>
+            </div>`;
+          buildAndInjectSettings(s, licenseSection, premium);
+        });
+      } else {
+        licenseSection = `
+          <div class="settings-section">
+            <div class="settings-section-title">⭐ Premium</div>
+            <p class="settings-hint">Premium unlocks dark mode, custom prepend/append text on every Markdown export, and all future Premium features. One-time $9.99, no subscription.</p>
+            <div class="settings-row">
+              <button id="get-premium-btn" class="btn-primary" type="button">Get Premium ($9.99)</button>
+            </div>
+            <div class="settings-field">
+              <label class="settings-label" for="license-key-input">License key</label>
+              <input id="license-key-input" type="text" class="settings-input" placeholder="Paste your license key here…" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="settings-row">
+              <button id="activate-license-btn" class="btn-primary" type="button">Activate</button>
+              <span id="license-status" class="settings-value" style="margin-left:8px;"></span>
+            </div>
+          </div>`;
+        buildAndInjectSettings(s, licenseSection, premium);
+      }
+    });
+  }
+
+  function buildAndInjectSettings(s, licenseSection, premium) {
+    const currentMod      = s.shortcut?.modifier || 'alt';
+    const currentLabel    = escHtml(MODIFIER_LABELS[currentMod] || 'Alt');
+    // Per-tab history limits (0 = indefinite). The annotation tab falls back
+    // to the legacy maxHistoryLength so existing installs keep their value.
+    const histAnnLimit   = getHistoryLimit(s, 'annotations');
+    const histSavedLimit = getHistoryLimit(s, 'saved');
+    const histCopyLimit  = getHistoryLimit(s, 'copies');
+    const isIndefAnn     = histAnnLimit   === 0;
+    const isIndefSaved   = histSavedLimit === 0;
+    const isIndefCopy    = histCopyLimit  === 0;
+
+    // Button action current values
+    const btnActions    = s.buttonActions || DEFAULT_SETTINGS.buttonActions;
+    const copyBtnLeft   = btnActions.copyBtn?.left   || 'copyAll';
+    const copyBtnRight  = btnActions.copyBtn?.right  || 'cutAll';
+    const clearBtnLeft  = btnActions.clearBtn?.left  || 'clearAll';
+    const clearBtnRight = btnActions.clearBtn?.right || 'saveForLater';
+
+    // Build <option> list for a given action key
+    const actionOptions = (selected) => Object.entries(BUTTON_ACTIONS)
+      .map(([key, cfg]) =>
+        `<option value="${escHtml(key)}" ${selected === key ? 'selected' : ''}>${cfg.emoji} ${escHtml(cfg.label)}</option>`)
+      .join('');
+
+    // Undo/redo shortcut state for this render.
+    const undoSc  = s.undoShortcut || DEFAULT_SETTINGS.undoShortcut;
+    const redoSc  = s.redoShortcut || DEFAULT_SETTINGS.redoShortcut;
+    const undoMod = undoSc.modifier || 'mod';
+    const undoKey = undoSc.key      || 'z';
+    const redoMod = redoSc.modifier || 'mod';
+    const redoKey = redoSc.key      || 'y';
+    const shortcutModOptions = (selected) => {
+      const mods = [
+        ['mod',   'Ctrl / ⌘ Cmd'],
+        ['ctrl',  'Ctrl'],
+        ['meta',  'Meta / ⌘ Cmd'],
+        ['alt',   'Alt / Option'],
+        ['shift', 'Shift'],
+      ];
+      return mods.map(([v, l]) =>
+        `<option value="${v}" ${selected === v ? 'selected' : ''}>${escHtml(l)}</option>`
+      ).join('');
+    };
+
+    settingsEl.innerHTML = `
+      <!-- ── Annotation Shortcut ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">⌨ Annotation Shortcut</div>
+        <div class="settings-row">
+          <label class="settings-label" for="shortcut-modifier">Modifier key</label>
+          <select id="shortcut-modifier" class="shortcut-select">
+            <option value="alt"  ${currentMod === 'alt'   ? 'selected' : ''}>Alt (default)</option>
+            <option value="ctrl" ${currentMod === 'ctrl'  ? 'selected' : ''}>Ctrl</option>
+            <option value="shift"${currentMod === 'shift' ? 'selected' : ''}>Shift</option>
+            <option value="meta" ${currentMod === 'meta'  ? 'selected' : ''}>Meta / ⌘ Cmd</option>
+          </select>
+        </div>
+        <p class="settings-hint">
+          Hold <strong id="shortcut-preview">${currentLabel}</strong> + Right-Click any element to annotate it.
+        </p>
+        <div class="settings-row" id="open-popup-shortcut-row">
+          <div class="settings-row-label">
+            <div class="settings-row-title">Open popup shortcut</div>
+            <div class="settings-row-sub">
+              Default: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>.
+              Click to customize in Chrome.
+            </div>
+          </div>
+          <button id="open-popup-shortcut-btn" class="btn-secondary">Customize…</button>
+        </div>
+      </div>
+
+      <!-- ── Undo / Redo Shortcuts ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">↶ Undo / Redo</div>
+        <div class="settings-row">
+          <label class="settings-label" for="undo-mod">Undo</label>
+          <div class="shortcut-pair">
+            <select id="undo-mod" class="shortcut-select">${shortcutModOptions(undoMod)}</select>
+            <span class="shortcut-plus">+</span>
+            <input id="undo-key" class="shortcut-key-input" maxlength="1" value="${escHtml(undoKey)}" />
+          </div>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="redo-mod">Redo</label>
+          <div class="shortcut-pair">
+            <select id="redo-mod" class="shortcut-select">${shortcutModOptions(redoMod)}</select>
+            <span class="shortcut-plus">+</span>
+            <input id="redo-key" class="shortcut-key-input" maxlength="1" value="${escHtml(redoKey)}" />
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Button Actions ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">🖱 Button Actions</div>
+        <div class="settings-row">
+          <label class="settings-label" for="copy-btn-left">Left button · left click</label>
+          <select id="copy-btn-left" class="shortcut-select">${actionOptions(copyBtnLeft)}</select>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="copy-btn-right">Left button · right click</label>
+          <select id="copy-btn-right" class="shortcut-select">${actionOptions(copyBtnRight)}</select>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="clear-btn-left">Right button · left click</label>
+          <select id="clear-btn-left" class="shortcut-select">${actionOptions(clearBtnLeft)}</select>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="clear-btn-right">Right button · right click</label>
+          <select id="clear-btn-right" class="shortcut-select">${actionOptions(clearBtnRight)}</select>
+        </div>
+      </div>
+
+      <!-- ── Auto-Backup ── -->
+      <div class="settings-section" id="backup-status-section">
+        <div class="settings-section-title">💾 Auto-Backup</div>
+        <div class="settings-row settings-row--toggle">
+          <span class="settings-label">Enable Auto-Backup</span>
+          <div class="toggle-wrap">
+            <label class="toggle-switch">
+              <input type="checkbox" id="backup-enabled-toggle" ${s.backupEnabled !== false ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Sync backup</span>
+          <span class="settings-value" id="sync-backup-status">Checking…</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Local backup</span>
+          <span class="settings-value" id="file-backup-status">Checking…</span>
+        </div>
+        <p class="settings-hint" style="margin-top:4px;">
+          Annotations and history live on your device (chrome.storage.local). Auto-Backup mirrors a compressed snapshot to Chrome Sync (chrome.storage.sync) so it follows your Google account across signed-in Chrome installs. Sync is end-to-end encrypted by Google when you set a Sync passphrase. Disable Auto-Backup to keep data strictly local.
+        </p>
+        <div class="settings-row" style="justify-content:flex-end;margin-top:4px;">
+          <button id="backup-now-btn" class="btn-history-action">⚡ Backup Now</button>
+        </div>
+      </div>
+
+      <!-- ── History ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">📜 History</div>
+        <p class="settings-hint" style="margin-top:-4px;margin-bottom:8px;">
+          Customize how many entries each history tab keeps. Set Indefinite to keep everything.
+        </p>
+
+        <div class="settings-row">
+          <label class="settings-label" for="max-hist-annotations">
+            Annotation History
+          </label>
+          <div class="history-limit-row">
+            <input
+              type="number"
+              id="max-hist-annotations"
+              class="history-limit-input"
+              min="1"
+              max="10000"
+              value="${isIndefAnn ? 200 : histAnnLimit}"
+              ${isIndefAnn ? 'disabled' : ''}
+            />
+            <label class="history-indefinite-label">
+              <input type="checkbox" id="indef-hist-annotations"
+                ${isIndefAnn ? 'checked' : ''} />
+              Indefinite
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <label class="settings-label" for="max-hist-saved">
+            Saved for Later
+          </label>
+          <div class="history-limit-row">
+            <input
+              type="number"
+              id="max-hist-saved"
+              class="history-limit-input"
+              min="1"
+              max="10000"
+              value="${isIndefSaved ? 20 : histSavedLimit}"
+              ${isIndefSaved ? 'disabled' : ''}
+            />
+            <label class="history-indefinite-label">
+              <input type="checkbox" id="indef-hist-saved"
+                ${isIndefSaved ? 'checked' : ''} />
+              Indefinite
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <label class="settings-label" for="max-hist-copies">
+            Copy Log
+          </label>
+          <div class="history-limit-row">
+            <input
+              type="number"
+              id="max-hist-copies"
+              class="history-limit-input"
+              min="1"
+              max="10000"
+              value="${isIndefCopy ? 50 : histCopyLimit}"
+              ${isIndefCopy ? 'disabled' : ''}
+            />
+            <label class="history-indefinite-label">
+              <input type="checkbox" id="indef-hist-copies"
+                ${isIndefCopy ? 'checked' : ''} />
+              Indefinite
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-row settings-row--btns">
+          <button id="clear-history-settings-btn" class="btn-history-action btn-history-danger">🗑 Clear History</button>
+        </div>
+      </div>
+
+      <!-- ── All Data Export/Import ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">📦 All Data</div>
+        <div class="settings-row settings-row--btns">
+          <button id="export-all-btn" class="btn-history-action">📤 Export All Data</button>
+          <button id="import-all-btn" class="btn-history-action">📥 Import All Data</button>
+        </div>
+        <p class="settings-hint" style="margin-top:4px;">
+          Compressed bundle of every annotation, history entry, saved-for-later set, copy log, and setting. Nothing is truncated.
+        </p>
+        <input type="file" id="import-all-file" accept=".annotator,.gz,.json" style="display:none;" multiple />
+        <div id="sync-truncation-warning" class="sync-truncation-warning" style="display:none;">
+          ⚠ History is being truncated to fit sync storage limits. Your full history is preserved locally and in the latest export.
+        </div>
+      </div>
+
+      ${licenseSection}
+
+      <!-- ── Appearance ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">🌙 Appearance${premium ? '' : ' <span class="premium-lock">🔒 Premium</span>'}</div>
+        <div class="settings-row settings-row--toggle">
+          <span class="settings-label">Dark Mode</span>
+          <div class="toggle-wrap">
+            <label class="toggle-switch">
+              <input type="checkbox" id="dark-mode-toggle" ${s.darkMode ? 'checked' : ''} ${premium ? '' : 'disabled'}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        ${premium ? '' : '<p class="settings-hint">Unlock with Premium ($9.99 one-time).</p>'}
+      </div>
+
+      <!-- ── Markdown Copy ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">📝 Markdown Copy${premium ? '' : ' <span class="premium-lock">🔒 Premium</span>'}</div>
+        <div class="settings-field">
+          <label class="settings-label" for="prepend-text">Prepend Text</label>
+          <textarea
+            id="prepend-text"
+            class="settings-textarea"
+            placeholder="Text added before the markdown output…"
+            ${premium ? '' : 'disabled'}
+          >${escHtml(s.prependText || '')}</textarea>
+        </div>
+        <div class="settings-field">
+          <label class="settings-label" for="append-text">Append Text</label>
+          <textarea
+            id="append-text"
+            class="settings-textarea"
+            placeholder="Text added after the markdown output…"
+            ${premium ? '' : 'disabled'}
+          >${escHtml(s.appendText || '')}</textarea>
+        </div>
+        ${premium ? '' : '<p class="settings-hint">Unlock with Premium ($9.99 one-time).</p>'}
+      </div>
+
+      <div class="settings-github-row">
+        <a href="#" class="meta-link" data-url="https://github.com/asharma2027/ai-dev-annotator/tree/main" title="View source on GitHub">View source on GitHub →</a>
+      </div>
+    `;
+
+    attachExternalLinks(settingsEl);
+
+    // ── Backup status section ─────────────────────────────────────────────
+    chrome.storage.local.get({
+      _lastSyncBackup: null, _lastFileBackup: null,
+      _syncBackupError: null, _fileBackupError: null,
+      _syncTruncated: false,
+    }, bd => {
+      const syncEl = settingsEl.querySelector('#sync-backup-status');
+      const fileEl = settingsEl.querySelector('#file-backup-status');
+      if (syncEl) {
+        if (bd._syncBackupError) {
+          syncEl.textContent = '⚠ ' + bd._syncBackupError;
+          syncEl.style.color = '#dc2626';
+        } else if (bd._lastSyncBackup) {
+          syncEl.textContent = '✅ ' + new Date(bd._lastSyncBackup).toLocaleTimeString();
+        } else {
+          syncEl.textContent = 'Not yet';
+        }
+      }
+      if (fileEl) {
+        if (bd._fileBackupError) {
+          fileEl.textContent = '⚠ Failed';
+          fileEl.style.color = '#dc2626';
+          fileEl.title = bd._fileBackupError;
+        } else if (bd._lastFileBackup) {
+          fileEl.textContent = '✅ ' + new Date(bd._lastFileBackup).toLocaleTimeString();
+        } else {
+          fileEl.textContent = 'Pending (first backup in ~1 min)';
+        }
+      }
+      const truncWarn = settingsEl.querySelector('#sync-truncation-warning');
+      if (truncWarn) truncWarn.style.display = bd._syncTruncated ? 'block' : 'none';
+    });
+
+    settingsEl.querySelector('#backup-now-btn')?.addEventListener('click', e => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = '…';
+      chrome.runtime.sendMessage({ type: 'triggerBackup' }, () => {
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.textContent = '⚡ Backup Now';
+          chrome.storage.local.get({ _lastSyncBackup: null, _lastFileBackup: null }, bd => {
+            const syncEl = settingsEl.querySelector('#sync-backup-status');
+            const fileEl = settingsEl.querySelector('#file-backup-status');
+            if (syncEl && bd._lastSyncBackup) syncEl.textContent = '✅ ' + new Date(bd._lastSyncBackup).toLocaleTimeString();
+            if (fileEl && bd._lastFileBackup) fileEl.textContent = '✅ ' + new Date(bd._lastFileBackup).toLocaleTimeString();
+          });
+        }, 3000);
+      });
+    });
+
+    // ── Shortcut selector ────────────────────────────────────────────────
+    const modSelect = settingsEl.querySelector('#shortcut-modifier');
+    const preview   = settingsEl.querySelector('#shortcut-preview');
+    if (modSelect) {
+      modSelect.addEventListener('change', () => {
+        const mod = modSelect.value;
+        saveSettings({ shortcut: { modifier: mod } });
+        if (preview) preview.textContent = MODIFIER_LABELS[mod] || 'Alt';
+      });
+    }
+
+    // ── Undo / Redo shortcut inputs ──────────────────────────────────────
+    const undoModSel = settingsEl.querySelector('#undo-mod');
+    const undoKeyIn  = settingsEl.querySelector('#undo-key');
+    const redoModSel = settingsEl.querySelector('#redo-mod');
+    const redoKeyIn  = settingsEl.querySelector('#redo-key');
+    function saveUndoShortcut() {
+      const k = (undoKeyIn.value || 'z').trim().slice(0, 1).toLowerCase() || 'z';
+      undoKeyIn.value = k;
+      saveSettings({ undoShortcut: { modifier: undoModSel.value, key: k } });
+    }
+    function saveRedoShortcut() {
+      const k = (redoKeyIn.value || 'y').trim().slice(0, 1).toLowerCase() || 'y';
+      redoKeyIn.value = k;
+      saveSettings({ redoShortcut: { modifier: redoModSel.value, key: k } });
+    }
+    if (undoModSel) undoModSel.addEventListener('change', saveUndoShortcut);
+    if (undoKeyIn)  undoKeyIn.addEventListener('change',  saveUndoShortcut);
+    if (redoModSel) redoModSel.addEventListener('change', saveRedoShortcut);
+    if (redoKeyIn)  redoKeyIn.addEventListener('change',  saveRedoShortcut);
+
+    // ── Button Actions selects ────────────────────────────────────────────
+    // ── Open popup shortcut button ─────────────────────────────────────────
+    document.getElementById('open-popup-shortcut-btn')
+      ?.addEventListener('click', () => {
+        chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+      });
+
+        const selCopyLeft   = settingsEl.querySelector('#copy-btn-left');
+    const selCopyRight  = settingsEl.querySelector('#copy-btn-right');
+    const selClearLeft  = settingsEl.querySelector('#clear-btn-left');
+    const selClearRight = settingsEl.querySelector('#clear-btn-right');
+
+    function saveButtonActions() {
+      const actions = {
+        copyBtn:  { left: selCopyLeft.value,  right: selCopyRight.value  },
+        clearBtn: { left: selClearLeft.value, right: selClearRight.value },
+      };
+      saveSettings({ buttonActions: actions }, ss => updateButtonLabels(ss));
+    }
+    [selCopyLeft, selCopyRight, selClearLeft, selClearRight].forEach(sel => {
+      if (sel) sel.addEventListener('change', saveButtonActions);
+    });
+
+    // ── History settings (per-tab limits) ────────────────────────────────
+    // Each tab gets its own number input + indefinite checkbox. After every
+    // edit we (a) persist via saveSettings (deep-merged on historyLimits),
+    // (b) trim existing data immediately via enforceHistoryLimitInStorage,
+    // and (c) re-render the active history tab if visible.
+    const HIST_TAB_DEFAULTS = { annotations: 200, saved: 20, copies: 50 };
+    const HIST_TAB_LEGACY   = { annotations: true, saved: false, copies: false };
+
+    function wireHistoryLimitTab(tabKey, inputId, chkId) {
+      const inputEl = settingsEl.querySelector('#' + inputId);
+      const chkEl   = settingsEl.querySelector('#' + chkId);
+      if (!inputEl || !chkEl) return;
+
+      const persist = (val) => {
+        const patch = { historyLimits: { [tabKey]: val } };
+        // For the annotations tab also mirror into legacy maxHistoryLength so
+        // content.js (which still reads it) stays in sync.
+        if (HIST_TAB_LEGACY[tabKey]) patch.maxHistoryLength = val;
+        saveSettings(patch, () => {
+          enforceHistoryLimitInStorage(() => {
+            if (historyVisible) renderHistoryTab();
+          });
+        });
+      };
+
+      chkEl.addEventListener('change', () => {
+        if (chkEl.checked) {
+          inputEl.disabled = true;
+          persist(0);
+        } else {
+          inputEl.disabled = false;
+          const val = Math.max(1, parseInt(inputEl.value, 10) || HIST_TAB_DEFAULTS[tabKey]);
+          inputEl.value = val;
+          persist(val);
+        }
+      });
+
+      inputEl.addEventListener('change', () => {
+        const val = Math.max(1, parseInt(inputEl.value, 10) || HIST_TAB_DEFAULTS[tabKey]);
+        inputEl.value = val;
+        persist(val);
+      });
+    }
+
+    wireHistoryLimitTab('annotations', 'max-hist-annotations', 'indef-hist-annotations');
+    wireHistoryLimitTab('saved',       'max-hist-saved',       'indef-hist-saved');
+    wireHistoryLimitTab('copies',      'max-hist-copies',      'indef-hist-copies');
+
+    // ── Export ALL data ───────────────────────────────────────────────────
+    settingsEl.querySelector('#export-all-btn')?.addEventListener('click', async () => {
+      const btn = settingsEl.querySelector('#export-all-btn');
+      const orig = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        const r = await new Promise(res => chrome.storage.local.get({
+          annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
+          [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {}, [ANN_STORE_KEY]: {},
+        }, res));
+        const store = r[ANN_STORE_KEY] || {};
+        // Resolve all references back to full annotation objects so exported
+        // data is portable and self-contained (no raw IDs).
+        const fullHistory = (r[HISTORY_KEY] || []).map(h => {
+          const ann = resolveRef(h, store);
+          if (!ann) return null;
+          return { ...ann, deletedAt: h.deletedAt || ann.deletedAt };
+        }).filter(Boolean);
+        const fullSaved = (r[SAVED_LATER_KEY] || []).map(set => {
+          const anns = Array.isArray(set.annotationIds)
+            ? resolveList(set.annotationIds, store)
+            : (set.annotations || []);
+          return {
+            id:          set.id,
+            savedAt:     set.savedAt,
+            count:       set.count || anns.length,
+            annotations: anns,
+          };
+        });
+        const exportedCopyHist = (r[COPY_HISTORY_KEY] || []).map(c => {
+          // Resolve annotation objects so the export is self-contained:
+          // restore buttons will work correctly after import.
+          const anns = Array.isArray(c.annotationIds)
+            ? c.annotationIds.map(id =>
+                (r.annotations || []).find(a => a.id === id)
+                || (store[id] ? stripRefMeta(store[id]) : null)
+              ).filter(Boolean)
+            : [];
+          return { ...c, annotations: anns };
+        });
+        const bundle = buildBundle({
+          annotations:   r.annotations,
+          history:       fullHistory,
+          copyHistory:   exportedCopyHist,
+          savedForLater: fullSaved,
+          settings:      r[SETTINGS_KEY],
+        });
+        bundle._exported = new Date().toISOString();
+        bundle._version  = '1.0.0';
+        const json = JSON.stringify(bundle);
+        const gz   = await gzipString(json);
+        const blob = new Blob([gz], { type: 'application/gzip' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `annotator-all-${new Date().toISOString().slice(0, 10)}.annotator`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        showToast('Export failed: ' + (e?.message || e), { kind: 'error' });
+      } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    });
+
+    // ── Import ALL data ───────────────────────────────────────────────────
+    const importAllBtn  = settingsEl.querySelector('#import-all-btn');
+    const importAllFile = settingsEl.querySelector('#import-all-file');
+    if (importAllBtn && importAllFile) {
+      importAllBtn.addEventListener('click', () => importAllFile.click());
+      importAllFile.addEventListener('change', async () => {
+        const files = Array.from(importAllFile.files);
+        if (!files.length) return;
+
+        // ── Helper: read one file and return its unpacked bundle ───────────
+        async function readOneFile(file) {
+          const buf = await new Promise((res, rej) => {
+            const reader = new FileReader();
+            reader.onload = e => res(e.target.result);
+            reader.onerror = rej;
+            reader.readAsArrayBuffer(file);
+          });
+          let bundle = null;
+          try {
+            const json = await gunzipToString(new Uint8Array(buf));
+            bundle = JSON.parse(json);
+          } catch {
+            try {
+              const txt = new TextDecoder().decode(new Uint8Array(buf));
+              bundle = JSON.parse(txt);
+            } catch {
+              return null; // signal invalid file
+            }
+          }
+          if (!bundle) return null;
+          if (bundle.v === 2) return unpackBundle(bundle);
+          return {
+            annotations:   Array.isArray(bundle.annotations)       ? bundle.annotations       : [],
+            history:       Array.isArray(bundle.annotationHistory) ? bundle.annotationHistory : [],
+            copyHistory:   Array.isArray(bundle.copyHistory)       ? bundle.copyHistory       : [],
+            savedForLater: Array.isArray(bundle.savedForLater)     ? bundle.savedForLater     : [],
+            settings:      bundle.annotatorSettings && typeof bundle.annotatorSettings === 'object'
+                             ? bundle.annotatorSettings : {},
+          };
+        }
+
+        // ── Parse all selected files ───────────────────────────────────
+        const parsedFiles = [];
+        let invalidCount  = 0;
+        for (const file of files) {
+          const unpacked = await readOneFile(file);
+          if (!unpacked) { invalidCount++; continue; }
+          parsedFiles.push(unpacked);
+        }
+        if (invalidCount > 0) {
+          showToast(`${invalidCount} file(s) were invalid and skipped.`, { kind: 'error' });
+        }
+        if (!parsedFiles.length) { importAllFile.value = ''; return; }
+
+        // ── Merge across all files, deduplicating entries ──────────────
+        const merged = parsedFiles.reduce((acc, u) => {
+          // Annotations: dedup by id
+          const annIds = new Set(acc.annotations.map(a => a.id));
+          u.annotations.forEach(a => { if (a && a.id && !annIds.has(a.id)) { annIds.add(a.id); acc.annotations.push(a); } });
+          // History: dedup by id+deletedAt
+          const histKeys = new Set(acc.history.map(h => h.id + '|' + (h.deletedAt || '')));
+          u.history.forEach(h => {
+            if (!h || !h.id) return;
+            const k = h.id + '|' + (h.deletedAt || '');
+            if (!histKeys.has(k)) { histKeys.add(k); acc.history.push(h); }
+          });
+          // Copy history: dedup by timestamp
+          const copyTs = new Set(acc.copyHistory.map(c => c.timestamp));
+          u.copyHistory.forEach(c => { if (c && c.timestamp && !copyTs.has(c.timestamp)) { copyTs.add(c.timestamp); acc.copyHistory.push(c); } });
+          // Saved-for-later: dedup by id
+          const slIds = new Set(acc.savedForLater.map(s => s.id));
+          u.savedForLater.forEach(s => { if (s && s.id && !slIds.has(s.id)) { slIds.add(s.id); acc.savedForLater.push(s); } });
+          // Settings: merge (later files override earlier)
+          acc.settings = { ...acc.settings, ...u.settings };
+          return acc;
+        }, { annotations: [], history: [], copyHistory: [], savedForLater: [], settings: {} });
+
+        const fileWord = files.length === 1 ? '1 file' : `${files.length} files`;
+        const ok = await showConfirm(
+          `Import ${fileWord}?\n\n` +
+          `• ${merged.annotations.length} active annotation(s)\n` +
+          `• ${merged.history.length} history record(s)\n` +
+          `• ${merged.savedForLater.length} saved-for-later set(s)\n` +
+          `• ${merged.copyHistory.length} copy log(s)\n\n` +
+          `Existing items will be merged (not overwritten). Duplicates across files are automatically skipped.`,
+          { host: settingsEl }
+        );
+        if (!ok) { importAllFile.value = ''; return; }
+
+        chrome.storage.local.get({
+          annotations: [], [HISTORY_KEY]: [], [COPY_HISTORY_KEY]: [],
+          [SAVED_LATER_KEY]: [], [SETTINGS_KEY]: {}, [ANN_STORE_KEY]: {},
+        }, r => {
+          const store = { ...(r[ANN_STORE_KEY] || {}) };
+          // Only import annotations not already present (dedup against existing data)
+          const annIds  = new Set(r.annotations.map(a => a.id));
+          const newAnns = merged.annotations.filter(a => a && a.id && !annIds.has(a.id));
+
+          // Imported history: convert to id-refs, skip duplicates
+          const histKeys = new Set(r[HISTORY_KEY].map(a => a.id + '|' + (a.deletedAt || '')));
+          const newHistRefs = [];
+          merged.history.forEach(h => {
+            if (!h || !h.id) return;
+            const k = h.id + '|' + (h.deletedAt || '');
+            if (histKeys.has(k)) return;
+            if (!store[h.id]) {
+              const { deletedAt, ...rest } = h;
+              store[h.id] = { ...rest, _refCount: 0 };
+            }
+            store[h.id]._refCount = (store[h.id]._refCount || 0) + 1;
+            newHistRefs.push({ id: h.id, deletedAt: h.deletedAt });
+          });
+
+          // Copy history: skip already-present timestamps
+          const copyTs  = new Set(r[COPY_HISTORY_KEY].map(c => c.timestamp));
+          const newCopy = merged.copyHistory
+            .filter(c => c && c.timestamp && !copyTs.has(c.timestamp))
+            .map(c => {
+              const withIds = Array.isArray(c.annotationIds) ? c : { ...c, annotationIds: [] };
+              // Populate _annStore from annotation snapshots bundled in the export
+              // so that restore buttons work correctly after import.
+              if (withIds.annotationIds.length && Array.isArray(c.annotations)) {
+                withIds.annotationIds.forEach(id => {
+                  const ann = c.annotations.find(a => a && a.id === id);
+                  if (!ann) return;
+                  if (!store[id]) store[id] = { ...ann, _refCount: 0 };
+                  else store[id] = { ...store[id], ...ann };
+                  store[id]._refCount = (store[id]._refCount || 0) + 1;
+                });
+              }
+              // Drop the inline `annotations` array — data now lives in _annStore via IDs
+              const { annotations: _snap, ...rest } = withIds;
+              return rest;
+            });
+
+          // Saved-for-later: convert to id-references, skip duplicates
+          const slIds   = new Set(r[SAVED_LATER_KEY].map(s => s.id));
+          const newSL = [];
+          merged.savedForLater.forEach(set => {
+            if (!set || slIds.has(set.id)) return;
+            const setAnns = Array.isArray(set.annotationIds)
+              ? resolveList(set.annotationIds, store)
+              : (set.annotations || []);
+            const ids = setAnns.map(a => a.id).filter(Boolean);
+            ids.forEach(id => {
+              const ann = setAnns.find(a => a.id === id);
+              if (!store[id]) store[id] = { ...ann, _refCount: 0 };
+              store[id]._refCount = (store[id]._refCount || 0) + 1;
+            });
+            newSL.push({
+              id:            set.id,
+              savedAt:       set.savedAt,
+              count:         set.count || ids.length,
+              annotationIds: ids,
+            });
+          });
+
+          chrome.storage.local.set({
+            annotations:        [...r.annotations,       ...newAnns],
+            [HISTORY_KEY]:      [...r[HISTORY_KEY],      ...newHistRefs],
+            [COPY_HISTORY_KEY]: [...r[COPY_HISTORY_KEY], ...newCopy],
+            [SAVED_LATER_KEY]:  [...r[SAVED_LATER_KEY],  ...newSL],
+            [SETTINGS_KEY]:     { ...r[SETTINGS_KEY], ...merged.settings },
+            [ANN_STORE_KEY]:    store,
+            // Imports may carry legacy copy-log entries with no annotationIds;
+            // re-arm the backfill so they get matched on the next pass.
+            [COPY_LOG_BACKFILL_FLAG]: false,
+          }, () => {
+            backfillCopyLogIds(() => {
+              if (historyVisible) renderHistoryTab();
+            });
+            showToast(
+              `Imported: ${newAnns.length} annotation(s) · ${newHistRefs.length} history · ` +
+              `${newSL.length} saved-for-later · ${newCopy.length} copy log(s)`,
+              { kind: 'ok' }
+            );
+            if (merged.settings && merged.settings.darkMode !== undefined) {
+              applyDarkMode(merged.settings.darkMode);
+            }
+          });
+        });
+        importAllFile.value = '';
+      });
+    }
+
+    // ── Clear history ─────────────────────────────────────────────────────
+    settingsEl.querySelector('#clear-history-settings-btn')?.addEventListener('click', async () => {
+      const ok = await showConfirm(
+        'Clear all annotation and copy history? This cannot be undone.',
+        { okLabel: 'Delete', host: settingsEl }
+      );
+      if (ok) {
+        // Decrement refs for everything in history + copy logs.
+        readDedupStorage(r => {
+          const store = { ...(r[ANN_STORE_KEY] || {}) };
+          (r[HISTORY_KEY] || []).forEach(h => h && h.id && refStoreDec(store, [h.id]));
+          (r[COPY_HISTORY_KEY] || []).forEach(c => refStoreDec(store, refIds(c.annotationIds)));
+          chrome.storage.local.set({
+            [HISTORY_KEY]: [],
+            [COPY_HISTORY_KEY]: [],
+            [ANN_STORE_KEY]: store,
+          }, () => {
+            showToast('History cleared.', { kind: 'ok' });
+          });
+        });
+      }
+    });
+
+    // ── Backup enabled toggle ────────────────────────────────────────────
+    const backupEnabledToggle = settingsEl.querySelector('#backup-enabled-toggle');
+    if (backupEnabledToggle) {
+      backupEnabledToggle.addEventListener('change', () => {
+        saveSettings({ backupEnabled: backupEnabledToggle.checked });
+      });
+    }
+
+    // ── Dark mode toggle ──────────────────────────────────────────────────
+    const darkToggle = settingsEl.querySelector('#dark-mode-toggle');
+    if (darkToggle) {
+      darkToggle.addEventListener('change', () => {
+        if (!isPremium()) {
+          darkToggle.checked = false;
+          showToast('Dark mode is a Premium feature. Get Premium for $9.99.');
+          return;
+        }
+        saveSettings({ darkMode: darkToggle.checked }, updated => applyDarkMode(updated.darkMode));
+      });
+    }
+
+    // ── Premium buttons (Get Premium / Activate / Deactivate) ─────────────
+    const getPremiumBtn = settingsEl.querySelector('#get-premium-btn');
+    if (getPremiumBtn) {
+      getPremiumBtn.addEventListener('click', () => {
+        chrome.tabs.create({ url: PREMIUM_PURCHASE_URL });
+      });
+    }
+    const activateBtn   = settingsEl.querySelector('#activate-license-btn');
+    const licenseInput  = settingsEl.querySelector('#license-key-input');
+    const licenseStatus = settingsEl.querySelector('#license-status');
+    if (activateBtn && licenseInput) {
+      const doActivate = async () => {
+        const key = (licenseInput.value || '').trim();
+        if (!key) { if (licenseStatus) licenseStatus.textContent = 'Paste your license key first.'; return; }
+        activateBtn.disabled = true;
+        if (licenseStatus) licenseStatus.textContent = 'Verifying…';
+        const result = await activateLicense(key);
+        activateBtn.disabled = false;
+        if (result.valid) {
+          showToast('Premium activated. Thanks for the support!', { kind: 'success' });
+          renderSettings();
+        } else if (licenseStatus) {
+          licenseStatus.textContent = result.error || 'Invalid license key.';
+        }
+      };
+      activateBtn.addEventListener('click', doActivate);
+      licenseInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); doActivate(); }
+      });
+    }
+    const deactivateBtn = settingsEl.querySelector('#deactivate-license-btn');
+    if (deactivateBtn) {
+      deactivateBtn.addEventListener('click', async () => {
+        await deactivateLicense();
+        showToast('License removed from this device.');
+        renderSettings();
+      });
+    }
+
+    // ── Prepend / append text ─────────────────────────────────────────────
+    let prependTimer, appendTimer;
+    const prependTa = settingsEl.querySelector('#prepend-text');
+    const appendTa  = settingsEl.querySelector('#append-text');
+    if (prependTa) {
+      prependTa.addEventListener('input', () => {
+        clearTimeout(prependTimer);
+        prependTimer = setTimeout(() => saveSettings({ prependText: prependTa.value }), 350);
+      });
+    }
+    if (appendTa) {
+      appendTa.addEventListener('input', () => {
+        clearTimeout(appendTimer);
+        appendTimer = setTimeout(() => saveSettings({ appendText: appendTa.value }), 350);
+      });
+    }
+  }
+
+  settingsBtn.addEventListener('click', () => {
+    if (settingsVisible) hideSettings();
+    else showSettings();
+  });
+
+  // ── Markdown generation helper ─────────────────────────────────────────────
+  function buildMarkdown(annotations, settings) {
+    const anns = annotations.filter(a => a.comment && a.comment.trim());
+    if (anns.length === 0) return null;
+
+    const byUrl = {};
+    anns.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
+    const urls = Object.keys(byUrl);
+
+    let md = '';
+    if (urls.length === 1) {
+      md += `## ${urls[0]}\n`;
+      byUrl[urls[0]].forEach((ann, i) => { md += formatLine(i + 1, ann); });
+    } else {
+      urls.forEach((url, ui) => {
+        if (ui > 0) md += '\n';
+        md += `### ${url}\n`;
+        byUrl[url].forEach((ann, i) => { md += formatLine(i + 1, ann); });
+      });
+    }
+
+    let finalMd = md.trim();
+    if (isPremium() && settings) {
+      if (settings.prependText && settings.prependText.trim()) finalMd = settings.prependText.trim() + '\n\n' + finalMd;
+      if (settings.appendText  && settings.appendText.trim())  finalMd = finalMd + '\n\n' + settings.appendText.trim();
+    }
+    return { md: finalMd, count: anns.length };
+  }
+
+  // ── Button action implementations ─────────────────────────────────────────
+  function doCopyAll(btn) {
+    readDedupStorage(r => {
+      if (r.annotations.length === 0) { showToast('No annotations with notes to copy yet.'); return; }
+      loadSettings(s => {
+        const result = buildMarkdown(r.annotations, s);
+        if (!result) { showToast('No annotations with notes to copy yet.'); return; }
+        navigator.clipboard.writeText(result.md).then(() => {
+          const copyHist = r[COPY_HISTORY_KEY];
+          const store    = { ...(r[ANN_STORE_KEY] || {}) };
+          // Dedup: if an entry with identical output already exists, dec its ref ids.
+          const dups = copyHist.filter(c => (c.output || '').trim() === result.md.trim());
+          dups.forEach(d => refStoreDec(store, refIds(d.annotationIds)));
+          const dedupedCopyHist = copyHist.filter(c => (c.output || '').trim() !== result.md.trim());
+          // Take a snapshot of the annotations that contributed to the markdown
+          // (filtered by buildMarkdown's "has comment" rule).
+          const contribAnns = r.annotations.filter(a => a.comment && a.comment.trim());
+          const contribIds  = contribAnns.map(a => a.id);
+          contribAnns.forEach(ann => {
+            if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+            else store[ann.id] = { ...store[ann.id], ...ann };
+            store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+          });
+          const ts = new Date().toISOString();
+          dedupedCopyHist.push({
+            timestamp: ts,
+            output:    result.md,
+            count:     result.count,
+            annotationIds: contribIds,
+            prependText: (s && s.prependText && s.prependText.trim()) ? s.prependText.trim() : '',
+            appendText:  (s && s.appendText  && s.appendText.trim())  ? s.appendText.trim()  : '',
+          });
+          // ── Copy-All "big box" snapshot ───────────────────────────────────
+          // Group all currently-active annotations (not just contribAnns —
+          // empty-note ones still belong to the visual group) into a single
+          // collapsed snapshot so the user can collapse/expand and act on the
+          // copied set. Annotations stay in r.annotations so future Copy All
+          // calls still pick them up.
+          chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+            const prevSnaps = (snapR[COPY_ALL_SNAPSHOTS_KEY] || []);
+            // Earlier snapshots may already cover some of these annotations.
+            // Subsume any prior snapshot whose annotation set is a subset of
+            // the new one (the new copy includes everything they did, plus
+            // any newer additions) so we don't end up with overlapping boxes.
+            const newIds = new Set(r.annotations.map(a => a.id));
+            const survivors = prevSnaps.filter(snap => {
+              const ids = Array.isArray(snap.annotationIds) ? snap.annotationIds : [];
+              return !ids.every(id => newIds.has(id));
+            });
+            const newSnap = {
+              id: `cas_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+              timestamp: ts,
+              annotationIds: r.annotations.map(a => a.id),
+              expanded: false,
+            };
+            const newSnaps = [...survivors, newSnap];
+            chrome.storage.local.set({
+              [COPY_HISTORY_KEY]: dedupedCopyHist,
+              [ANN_STORE_KEY]: store,
+              [COPY_ALL_SNAPSHOTS_KEY]: newSnaps,
+            }, () => {
+              // Re-render so the new big box appears immediately. Read the
+              // current annotations again (unchanged) and pass them to render.
+              chrome.storage.local.get({ annotations: [] }, rr => render(rr.annotations));
+            });
+          });
+          if (btn) {
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '<span>✅ Copied!</span>';
+            setTimeout(() => (btn.innerHTML = origHtml), 1500);
+          }
+        }).catch(() => showToast('Clipboard write failed. Try again.', { kind: 'error' }));
+      });
+    });
+  }
+
+  function doCutAll(btn) {
+    readDedupStorage(r => {
+      if (r.annotations.length === 0) { showToast('No annotations with notes to copy yet.'); return; }
+      loadSettings(s => {
+        const result = buildMarkdown(r.annotations, s);
+        if (!result) { showToast('No annotations with notes to copy yet.'); return; }
+        navigator.clipboard.writeText(result.md).then(() => {
+          const copyHist = r[COPY_HISTORY_KEY];
+          const store    = { ...(r[ANN_STORE_KEY] || {}) };
+          const contribAnns = r.annotations.filter(a => a.comment && a.comment.trim());
+          const contribIds  = contribAnns.map(a => a.id);
+          // Dedup any prior identical copy log entry (decrement its ids).
+          const dups = copyHist.filter(c => (c.output || '').trim() === result.md.trim());
+          dups.forEach(d => refStoreDec(store, refIds(d.annotationIds)));
+          const dedupedCopyHist = copyHist.filter(c => (c.output || '').trim() !== result.md.trim());
+          // First write the copy-log refs (which need their own snapshot in store).
+          contribAnns.forEach(ann => {
+            if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+            else store[ann.id] = { ...store[ann.id], ...ann };
+            store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+          });
+          dedupedCopyHist.push({
+            timestamp: new Date().toISOString(),
+            output:    result.md,
+            count:     result.count,
+            annotationIds: contribIds,
+            prependText: (s && s.prependText && s.prependText.trim()) ? s.prependText.trim() : '',
+            appendText:  (s && s.appendText  && s.appendText.trim())  ? s.appendText.trim()  : '',
+          });
+          // Then move all annotations into history (refcount each).
+          const now  = new Date().toISOString();
+          let   hist = r[HISTORY_KEY];
+          r.annotations.forEach(ann => {
+            const oldRefs = hist.filter(h => h.id === ann.id);
+            if (oldRefs.length) refStoreDec(store, oldRefs.map(h => h.id));
+            hist = hist.filter(h => h.id !== ann.id);
+            if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+            else store[ann.id] = { ...store[ann.id], ...ann };
+            store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+            hist.push({ id: ann.id, deletedAt: now });
+          });
+          isWritingFromPopup = true;
+          chrome.storage.local.set({
+            annotations: [],
+            [HISTORY_KEY]: hist,
+            [COPY_HISTORY_KEY]: dedupedCopyHist,
+            [ANN_STORE_KEY]: store,
+          }, () => {
+            enforceHistoryLimitInStorage(() => {
+              isWritingFromPopup = false;
+              render([]);
+              r.annotations.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+              showClearUndoBanner(r.annotations, now);
+            });
+          });
+          if (btn) {
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '<span>✅ Cut!</span>';
+            setTimeout(() => (btn.innerHTML = origHtml), 1500);
+          }
+        }).catch(() => showToast('Clipboard write failed. Try again.', { kind: 'error' }));
+      });
+    });
+  }
+
+  function doClearAll() {
+    readDedupStorage(r => {
+      const anns = r.annotations;
+      if (anns.length === 0) return;
+      let   hist  = r[HISTORY_KEY];
+      const store = { ...(r[ANN_STORE_KEY] || {}) };
+      const now   = new Date().toISOString();
+      anns.forEach(ann => {
+        const oldRefs = hist.filter(h => h.id === ann.id);
+        if (oldRefs.length) refStoreDec(store, oldRefs.map(h => h.id));
+        hist = hist.filter(h => h.id !== ann.id);
+        if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+        else store[ann.id] = { ...store[ann.id], ...ann };
+        store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+        hist.push({ id: ann.id, deletedAt: now });
+      });
+      isWritingFromPopup = true;
+      chrome.storage.local.set({
+        annotations: [],
+        [HISTORY_KEY]: hist,
+        [ANN_STORE_KEY]: store,
+      }, () => {
+        enforceHistoryLimitInStorage(() => {
+          isWritingFromPopup = false;
+          render([]);
+          anns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+          showClearUndoBanner(anns, now, 'cleared');
+        });
+      });
+    });
+  }
+
+  function doSaveForLater() {
+    readDedupStorage(r => {
+      const anns = r.annotations;
+      if (anns.length === 0) return;
+      const now   = new Date().toISOString();
+      const setId = `sfl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const ids   = anns.map(a => a.id);
+      const set   = { id: setId, savedAt: now, count: anns.length, annotationIds: ids };
+      const store = { ...(r[ANN_STORE_KEY] || {}) };
+
+      // Dedup: if a previous saved set held identical id list, drop it AND
+      // dec refs for its ids (preserving previous behavior of "merge identical").
+      const newIdsKey = [...ids].sort().join(',');
+      const dropped = [];
+      const dedupedSaved = r[SAVED_LATER_KEY].filter(s => {
+        const sIds = Array.isArray(s.annotationIds) ? s.annotationIds : (s.annotations || []).map(a => a.id);
+        const key  = [...sIds].sort().join(',');
+        if (key === newIdsKey) { dropped.push(s); return false; }
+        return true;
+      });
+      dropped.forEach(d => {
+        const dIds = Array.isArray(d.annotationIds) ? d.annotationIds : (d.annotations || []).map(a => a.id);
+        refStoreDec(store, dIds.filter(Boolean));
+      });
+
+      // Snapshot each annotation into the store and bump refcount.
+      anns.forEach(ann => {
+        if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
+        else store[ann.id] = { ...store[ann.id], ...ann };
+        store[ann.id]._refCount = (store[ann.id]._refCount || 0) + 1;
+      });
+
+      const newSaved = [...dedupedSaved, set];
+      isWritingFromPopup = true;
+      chrome.storage.local.set({
+        annotations: [],
+        [SAVED_LATER_KEY]: newSaved,
+        [ANN_STORE_KEY]: store,
+      }, () => {
+        isWritingFromPopup = false;
+        render([]);
+        anns.forEach(ann => broadcastRemove(ann.id, ann.xpath));
+        showClearUndoBanner(anns, now, 'saved', setId);
+      });
+    });
+  }
+
+  function dispatchBtnAction(action, btn) {
+    if      (action === 'copyAll')      doCopyAll(btn);
+    else if (action === 'cutAll')       doCutAll(btn);
+    else if (action === 'clearAll')     doClearAll();
+    else if (action === 'saveForLater') doSaveForLater();
+  }
+
+  // ── Left footer button (copy-btn) ────────────────────────────────────────
+  copyBtn.addEventListener('click', () => {
+    loadSettings(s => {
+      const action = s.buttonActions?.copyBtn?.left || 'copyAll';
+      dispatchBtnAction(action, copyBtn);
+    });
+  });
+
+  copyBtn.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    loadSettings(s => {
+      const action = s.buttonActions?.copyBtn?.right || 'cutAll';
+      dispatchBtnAction(action, copyBtn);
+    });
+  });
+
+  // ── Right footer button (clear-btn) ──────────────────────────────────────
+  clearBtn.addEventListener('click', () => {
+    loadSettings(s => {
+      const action = s.buttonActions?.clearBtn?.left || 'clearAll';
+      dispatchBtnAction(action, clearBtn);
+    });
+  });
+
+  clearBtn.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    loadSettings(s => {
+      const action = s.buttonActions?.clearBtn?.right || 'saveForLater';
+      dispatchBtnAction(action, clearBtn);
+    });
+  });
+
+  // ── External link handler ──────────────────────────────────────────────────
+  function attachExternalLinks(root) {
+    root.querySelectorAll('[data-url]').forEach(el => {
+      el.addEventListener('click', e => {
+        e.preventDefault();
+        const url = el.dataset.url;
+        if (url && url !== '#') chrome.tabs.create({ url });
+      });
+    });
+  }
+
+  attachExternalLinks(document.body);
+
+  // ── Star rating widget ─────────────────────────────────────────────────────
+  const starContainer = document.getElementById('star-rating');
+  const stars         = document.querySelectorAll('.star');
+
+  stars.forEach((star, idx) => {
+    star.addEventListener('mouseover', () => {
+      stars.forEach((s, i) => s.classList.toggle('star-hover', i <= idx));
+    });
+  });
+  if (starContainer) {
+    starContainer.addEventListener('mouseleave', () => {
+      stars.forEach(s => s.classList.remove('star-hover'));
+    });
+    starContainer.addEventListener('click', () => {
+      const reviewUrl = `https://chromewebstore.google.com/detail/${chrome.runtime.id}/reviews`;
+      chrome.tabs.create({ url: reviewUrl });
+    });
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  // Sync the meta-footer Stripe (tip) link with the canonical TIP_URL so
+  // there is a single source of truth.
+  const _tipLink = document.getElementById('stripe-tip-link');
+  if (_tipLink) _tipLink.setAttribute('data-url', TIP_URL);
+
+  refreshPremiumStatus().then(() => {
+    // Re-apply dark mode now that the real premium status is known.
+    loadSettings(s => applyDarkMode(s.darkMode));
+    // Run one-shot migration (legacy → dedup) before loading the UI.
+    maybeMigrateStorage(() => {
+      // One-time backfill so legacy copy-log entries (stored as raw
+      // markdown only) render with real per-row buttons instead of a
+      // markdown-parsing fallback. Chained before load() so the Copy
+      // Log tab is in its final shape on first render.
+      backfillCopyLogIds(() => {
+        load();
+        checkSyncRestore();
+      });
+      // Init writes are done; allow user actions to start populating the
+      // undo stack. Drain any pending coalesced capture from init.
+      setTimeout(() => {
+        pendingUndoOld = null;
+        if (pendingUndoTask) { clearTimeout(pendingUndoTask); pendingUndoTask = null; }
+        suppressUndoCapture = Math.max(0, suppressUndoCapture - 1);
+        undoStack = [];
+        redoStack = [];
+        updateUndoButtons();
+      }, 50);
+    });
+  });
+
+
+
+  // Handle scroll-to-annotation intent from content.js element label click
+  chrome.storage.local.get({ _popupScrollTarget: null }, r => {
+    if (r._popupScrollTarget) {
+      const targetAnnId = r._popupScrollTarget;
+      chrome.storage.local.remove('_popupScrollTarget');
+      setTimeout(() => {
+        const codeEl = listEl.querySelector(`[data-nav-ann-id="${targetAnnId}"]`);
+        const item = codeEl ? codeEl.closest('.item') : null;
+        if (item) {
+          item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          item.classList.add('item-nav-flash');
+          setTimeout(() => item.classList.remove('item-nav-flash'), 1500);
+        }
+      }, 350);
+    }
+  });
+});

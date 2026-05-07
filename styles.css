@@ -1199,7 +1199,7 @@ button {
 [data-theme="dark"] #clear-btn       { background: #3b1a1a; color: #f87171; }
 [data-theme="dark"] #clear-btn:hover { background: #4a1f1f; }
 
-/* ── Meta-footer (stars + Ko-fi + Hire Me) ───────────────────────────────── */
+/* ── Meta-footer (stars + Stripe + Hire Me) ─────────────────────────────── */
 .meta-footer {
   display: flex;
   align-items: center;
@@ -1237,7 +1237,7 @@ button {
   user-select: none;
 }
 
-/* Meta links (Ko-fi, Hire Me, GitHub, etc.) */
+/* Meta links (Stripe, Hire Me, GitHub, etc.) */
 .meta-links {
   display: flex;
   align-items: center;
@@ -1936,3 +1936,49 @@ button {
   margin-top: 6px;
 }
 
+
+/* ── Premium settings UI (Stripe + license activation) ─────────────────── */
+.btn-primary {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border: 1px solid var(--accent, #2563eb);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-primary:hover { filter: brightness(1.05); }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text, #0f172a);
+  border: 1px solid var(--border, #cbd5e1);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-secondary:hover { background: rgba(0, 0, 0, 0.04); }
+
+.settings-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #cbd5e1);
+  border-radius: 6px;
+  background: var(--bg, #fff);
+  color: var(--text, #0f172a);
+}
+
+.premium-lock {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  margin-left: 6px;
+  vertical-align: middle;
+}

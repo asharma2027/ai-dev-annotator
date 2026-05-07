@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Local secrets — NEVER commit
+LICENSE_KEYPAIR_DO_NOT_COMMIT.txt
+.env
+.env.local
+.dev.vars
+
+# OS / editor
+.DS_Store
+*.swp

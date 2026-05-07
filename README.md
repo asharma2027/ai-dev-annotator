@@ -45,7 +45,7 @@ Typical flow:
 - 📝 **Custom prepend & append text** : automatically wrap every Markdown export with your own headers, footers, or AI system prompts
 - 🚀 **All future premium features**
 
-[**→ Get Premium on Gumroad**](https://arjunsharma10.gumroad.com/l/websiteDevAnnotator)
+[**→ Get Premium ($9.99 one-time)**](https://buy.stripe.com/REPLACE_WITH_PREMIUM_PAYMENT_LINK)
 
 ---
 
@@ -77,10 +77,10 @@ Paste directly into Cursor's chat, Claude, or any AI tool : it already knows whi
 
 ## Activating Premium
 
-1. [Purchase a license key on Gumroad](https://arjunsharma10.gumroad.com/l/websiteDevAnnotator)
-2. Gumroad will email you a license key
+1. [Purchase Premium on Stripe ($9.99 one-time)](https://buy.stripe.com/REPLACE_WITH_PREMIUM_PAYMENT_LINK)
+2. Your license key is emailed to you automatically once Stripe confirms the payment
 3. Open the extension popup → click ⚙️ (Settings) → paste your key in the **Premium** section → click **Activate**
-4. Your license is stored locally and validated against Gumroad's API
+4. Your license is verified locally with an Ed25519 signature — no network call, works fully offline
 
 > **Keep your license key safe** : it's stored in `chrome.storage.local`. If you clear extension data, you'll need to re-enter it (the key itself remains valid indefinitely).
 
@@ -118,16 +118,16 @@ cookies, or storage.
 ```
 ai-dev-annotator/
 ├── manifest.json   : Extension config (Manifest V3)
-├── content.js      : Injected into pages; handles Alt + Right-Click (minified on prod)
+├── content.js      : Injected into pages; handles Alt + Right-Click
 ├── popup.html      : Extension popup UI
-├── popup.js        : Popup logic (annotations, copy, history, settings, premium) (minified on prod)
-├── background.js   : Service worker for auto-backup and alarms (minified on prod)
+├── popup.js        : Popup logic (annotations, copy, history, settings, premium)
 ├── styles.css      : Popup styles (light + dark theme)
 └── icons/
     ├── icon16.png
     ├── icon48.png
     └── icon128.png
 ```
+---
 
 ## Storage keys
 
