@@ -51,7 +51,7 @@ Typical flow:
 
 ## How it works
 
-1. **Annotate** :Alt + Right-Click any element on the page, type a note, and press Esc or click
+1. **Annotate** : Alt + Right-Click any element on the page, type a note, and press Esc or click
    outside to save. Empty notes are auto-discarded.
 2. **Review** : Click the extension icon in the toolbar to see all saved annotations grouped by page URL. Notes are editable inline.
 3. **Navigate** : Click any pink annotation selector or blue URL group label to jump directly to that element on the page — the annotation panel opens automatically.
@@ -143,7 +143,9 @@ ai-dev-annotator/
 
 ## Support & contact
 
-- ☕ **Ko-fi:** [ko-fi.com/asharma2027](https://ko-fi.com/asharma2027) : buy me a coffee if this saves you time
+- 🤝 **Tip Me:** [https://buy.stripe.com/REPLACE_WITH_TIP_PAYMENT_LINK](https://buy.stripe.com/REPLACE_WITH_TIP_PAYMENT_LINK) : Leave an optional tip. Choose any amount you like (min $0.50). Tips are completely voluntary and do not unlock any extra features. The free tier already includes everything most developers need.
+
+
 - 💼 **Hire me:** [linkedin.com/in/asharma2027](https://www.linkedin.com/in/asharma2027/) : available for freelance and full-time opportunities
 
 ---
