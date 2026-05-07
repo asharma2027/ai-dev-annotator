@@ -1,12 +1,6 @@
 // popup.js : AI Website Dev Annotator
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DEV MODE
-// Set DEV_MODE = true in your *local* copy to unlock all premium features
-// during development. Never commit with DEV_MODE = true : it bypasses all
-// license checks and exposes the dev-only UI.
-// ─────────────────────────────────────────────────────────────────────────────
-const DEV_MODE = false;
+// DEV MODE is disabled in production builds.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PREMIUM / LICENSE SYSTEM (Stripe + offline Ed25519)
@@ -69,11 +63,10 @@ const MODIFIER_LABELS = {
 let _premium = false;
 
 function isPremium() {
-  return DEV_MODE || _premium;
+  return _premium;
 }
 
 async function refreshPremiumStatus() {
-  if (DEV_MODE) { _premium = true; return; }
   const stored = await new Promise(resolve =>
     chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r =>
       resolve(r[LICENSE_STORAGE_KEY])));
@@ -3438,21 +3431,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const premium = isPremium();
     loadSettings(s => {
       let licenseSection;
-      if (DEV_MODE) {
-        // DEV_MODE bypasses the license system entirely. This branch is
-        // active on the dev-facing `main` branch so contributors get
-        // every feature unlocked without paying or pasting a key.
-        licenseSection = `
-          <div class="settings-section">
-            <div class="settings-section-title">⭐ Features</div>
-            <div class="settings-row">
-              <span class="settings-label">Status</span>
-              <span class="settings-value premium-active-badge">✅ All Features Enabled (DEV_MODE)</span>
-            </div>
-            <p class="settings-hint">DEV_MODE is on in this build. Set <code>DEV_MODE = false</code> in popup.js to test the real Stripe + license flow.</p>
-          </div>`;
-        buildAndInjectSettings(s, licenseSection, premium);
-      } else if (premium) {
+      if (premium) {
         chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r => {
           const lic = r[LICENSE_STORAGE_KEY] || {};
           const emailLine = lic.email
