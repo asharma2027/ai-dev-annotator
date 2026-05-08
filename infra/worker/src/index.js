@@ -283,12 +283,22 @@ export default {
           } catch (e) { console.error('setSessionMetadata failed', e); }
           if (session.payment_intent) {
             try {
-              await setPaymentIntentDescription(
-                session.payment_intent,
-                `AI Website Dev Annotator Premium\nLicense key: ${licenseKey}\nActivate in extension Settings → Premium → paste key → Activate.`,
-                env.STRIPE_SECRET_KEY,
+              // Fetch the PaymentIntent to get the latest_charge ID,
+              // then update the Charge (not the PaymentIntent) so the
+              // description actually appears in the Stripe receipt email.
+              const pi = await stripeApi(
+                `/payment_intents/${session.payment_intent}`,
+                { secret: env.STRIPE_SECRET_KEY },
               );
-            } catch (e) { console.error('setPaymentIntentDescription failed', e); }
+              const chargeId = pi.latest_charge;
+              if (chargeId) {
+                await stripeApi(`/charges/${chargeId}`, {
+                  method: 'POST',
+                  body: { description: `AI Website Dev Annotator Premium\nLicense key: ${licenseKey}\nActivate in extension Settings → Premium → paste key → Activate.` },
+                  secret: env.STRIPE_SECRET_KEY,
+                });
+              }
+            } catch (e) { console.error('setChargeDescription failed', e); }
           }
         })());
 
