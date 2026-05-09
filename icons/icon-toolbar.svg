@@ -1,17 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
     <linearGradient id="bubbleGrad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#9BB1F1" />
+      <stop offset="0%" stop-color="#BC74AD" />
       <stop offset="50%" stop-color="#3762e3" />
-      <stop offset="100%" stop-color="#9BB1F1" />
+      <stop offset="100%" stop-color="#1BBFFF" />814FAD
     </linearGradient>
   </defs>
 
-  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bubbleGrad)" />
+<rect x="0" y="56" width="512" height="388" rx="96" fill="url(#bubbleGrad)" />
 
   <g fill="none" stroke="#FFFFFF" stroke-width="70" stroke-linecap="round" stroke-linejoin="round">
     <polyline points="151,148 46,256 151,364" />
     <polyline points="361,148 466,256 361,364" />
-    <line x1="300" y1="110" x2="212" y2="402" stroke-width="54" />
+    <line x1="301" y1="105" x2="211" y2="407" stroke-width="58" />
   </g>
 </svg>
