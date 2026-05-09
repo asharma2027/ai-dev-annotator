@@ -11,7 +11,7 @@
 //   2. After payment Stripe redirects the buyer to docs/success.html with
 //      ?session_id=cs_xxx. The page calls our Cloudflare Worker's
 //      /license endpoint and shows the license key with a copy button.
-//      The same key is also stamped into the PaymentIntent description
+//      The same key is also stamped into the Stripe receipt description
 //      so it appears in Stripe's automatic receipt email.
 //   3. The user pastes the key in Settings → Premium → Activate.
 //   4. The extension verifies the signature locally with the public key
@@ -27,9 +27,7 @@
 // transition window.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Stripe Payment Link for the fixed-price $9.99 Premium SKU. Set this to
-// your live Stripe Payment Link URL after creating it (Stripe dashboard →
-// Payment Links → Create payment link → fixed price $9.99).
+// Stripe Payment Link for the fixed-price $9.99 Premium SKU.
 const PREMIUM_PURCHASE_URL = 'https://buy.stripe.com/6oU9AS4Kjc9h6x1bxocfK01';
 
 // Stripe Payment Link for the optional "Leave a tip" flow (custom amount,
@@ -169,7 +167,7 @@ async function deactivateLicense() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
-  // ── Change 13: inline toast + confirm helpers (replaces native alert/confirm) ─
+  // ── Inline toast + confirm helpers ─────────────────────────────────────
   function showToast(msg, opts) {
     opts = opts || {};
     const t = document.createElement('div');
@@ -270,7 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // the snapshot is purely a UI grouping layer over the main list.
   // Schema: { id, timestamp, annotationIds: string[], expanded: boolean }
   const COPY_ALL_SNAPSHOTS_KEY = 'copyAllSnapshots';
-  // ── Change 2: storage dedup ────────────────────────────────────────────────
+  // ── Storage dedup ───────────────────────────────────────────────────────
   // Central reference store: history, copy logs, and saved-for-later sets all
   // store annotation IDs that point into _annStore instead of duplicating the
   // full annotation objects. Each entry is { ...ann, _refCount }. When refCount
@@ -473,7 +471,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
-  // ── Change 1: formatLine — format a single annotation as a Markdown bullet ─
+  // ── Markdown formatting ────────────────────────────────────────────────
   // Used by copy-all, cut-all, copy-by-url, and export flows.
   function formatLine(index, ann) {
     const sel  = getSelector(ann);   // uses existing getSelector helper
@@ -909,7 +907,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Change 2: storage dedup helpers ──────────────────────────────────────
+  // ── Storage dedup helpers ───────────────────────────────────────────────
   // Read raw storage with all dedup-related keys.
   function readDedupStorage(cb) {
     chrome.storage.local.get({
@@ -1029,8 +1027,8 @@ document.addEventListener('DOMContentLoaded', () => {
           });
 
           // Copy logs: legacy entries had no annotation id linkage. Leave
-          // annotationIds empty for legacy entries — Change 1's button will
-          // simply find nothing to remove for those, which is correct.
+          // annotationIds empty for legacy entries. Remove actions will simply
+          // find nothing to remove for those, which is correct.
           const copyHistory = (r[COPY_HISTORY_KEY] || []).map(c => {
             if (!c) return c;
             if (Array.isArray(c.annotationIds)) return c;

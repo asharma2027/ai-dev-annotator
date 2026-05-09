@@ -87,8 +87,10 @@ Paste directly into Cursor's chat, Claude, or any AI tool : it already knows whi
 
 ## Privacy
 
-AI Website Dev Annotator does not send your data anywhere. There is no
-server, no analytics, and no telemetry.
+AI Website Dev Annotator does not send annotation data to an app server.
+There is no analytics and no telemetry. Premium checkout and license
+delivery use Stripe plus the project's Cloudflare Worker, but the
+Extension verifies license keys locally.
 
 | Data                              | Where it lives                              | Leaves your device?                                  |
 |-----------------------------------|---------------------------------------------|------------------------------------------------------|
@@ -116,15 +118,15 @@ cookies, or storage.
 
 ```
 ai-dev-annotator/
-├── manifest.json   : Extension config (Manifest V3)
-├── content.js      : Injected into pages; handles Alt + Right-Click
-├── popup.html      : Extension popup UI
-├── popup.js        : Popup logic (annotations, copy, history, settings, premium)
-├── styles.css      : Popup styles (light + dark theme)
-└── icons/
-    ├── icon16.png
-    ├── icon48.png
-    └── icon128.png
+├── manifest.json        : Extension config (Manifest V3)
+├── content.js           : Injected into pages; handles Alt + Right-Click
+├── background.js        : Auto-backup alarm and background message handling
+├── popup.html           : Extension popup UI
+├── popup.js             : Popup logic (annotations, copy, history, settings, premium)
+├── styles.css           : Popup styles (light + dark theme)
+├── docs/                : GitHub Pages landing, success, terms, and refund pages
+├── infra/worker/        : Cloudflare Worker for Stripe webhooks and license lookup
+└── icons/               : Extension icon assets
 ```
 ---
 

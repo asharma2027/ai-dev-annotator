@@ -1,17 +1,18 @@
 # License Worker — AI Website Dev Annotator
 
 A Cloudflare Worker that issues Ed25519-signed license keys after a
-successful Stripe checkout. **No email infrastructure required** — the
-license key reaches the buyer through two Stripe-native channels:
+successful Stripe checkout. **No separate email infrastructure is
+required** — the license key reaches the buyer through two
+Stripe-native channels:
 
 1. **The success page** (`docs/success.html`, served from GitHub
    Pages). Stripe's Payment Link redirects buyers there with the
    checkout session ID; the page calls this Worker's `/license`
    endpoint and shows the key prominently with a copy button.
 2. **The Stripe receipt email** that Stripe already sends
-   automatically. The Worker stamps the key into the PaymentIntent's
-   `description` field, which Stripe shows in the receipt PDF and in
-   the receipt email body.
+   automatically. The Worker stamps the key into the successful
+   Charge's `description` field, which Stripe shows in the receipt PDF
+   and receipt email body.
 
 Cost at typical extension scale: **$0/month** (Cloudflare free tier).
 
@@ -20,7 +21,7 @@ Cost at typical extension scale: **$0/month** (Cloudflare free tier).
 | Path | Method | Auth | Purpose |
 |---|---|---|---|
 | `/health` | GET | — | Returns `ok` |
-| `/stripe/webhook` | POST | Stripe HMAC | Receives `checkout.session.completed`, stamps license key onto session metadata + PaymentIntent description |
+| `/stripe/webhook` | POST | Stripe HMAC | Receives `checkout.session.completed`, stamps the license key onto session metadata and the successful Charge description |
 | `/license?session_id=cs_xxx` | GET | None (public) | Looks up the Stripe session, re-derives the deterministic Ed25519 license key, returns it as JSON |
 
 The `/license` endpoint is safe to expose publicly — it only returns a

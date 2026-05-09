@@ -106,7 +106,7 @@
         <button class="copy-btn" id="copy-btn" type="button">Copy</button>
       </div>
       <div class="save-warning">
-        <strong>Save this key now.</strong> It is also included in your Stripe receipt email (look for "License key:" in the description). If you lose both, reply to that receipt email and we can help recover it.
+        <strong>Save this key now.</strong> It is also included in your Stripe receipt email (look for "License key:" in the receipt description). If you lose both, reply to that receipt email and we can help recover it.
       </div>
 
       <div class="next-steps" style="margin-top:28px;">
@@ -135,9 +135,9 @@
 </main>
 
 <script>
-  // Hard-coded Worker URL. Replace with your real deployed Worker URL after
-  // running `npx wrangler deploy` in infra/worker/. Leave the
-  // `/license` path; only swap the hostname.
+  // Public license lookup endpoint served by the Cloudflare Worker.
+  // The success page passes Stripe's checkout session ID to this endpoint;
+  // the Worker verifies payment with Stripe before returning a license key.
   const LICENSE_LOOKUP_URL = 'https://ai-dev-annotator-licenses-testing.arjun-sharma122005.workers.dev/license';
 
   function qs(name) {

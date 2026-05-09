@@ -1,13 +1,12 @@
 // Cloudflare Worker — license issuer for AI Website Dev Annotator.
 //
-// Option B (no email infrastructure): after a successful Stripe checkout,
-// this Worker generates an Ed25519-signed license key and exposes it in
-// two places that Stripe already shows the customer:
+// After a successful Stripe checkout, this Worker generates an
+// Ed25519-signed license key and exposes it in two places the buyer
+// already sees:
 //
-//   1. The Stripe-hosted receipt email — we set the PaymentIntent's
-//      `description` field to "AI Website Dev Annotator Premium —
-//      License key: <key>". Stripe automatically emails the receipt;
-//      the description appears prominently in it.
+//   1. The Stripe-hosted receipt email. We set the successful Charge's
+//      `description` field to include "License key: <key>", and Stripe
+//      automatically includes that description in the receipt.
 //   2. A success page hosted on GitHub Pages
 //      (docs/success.html). Stripe's Payment Link redirects buyers to
 //      `success.html?session_id={CHECKOUT_SESSION_ID}` after payment.
@@ -21,10 +20,10 @@
 //                                       what the buyer themselves owns)
 //   GET  /health           — returns "ok"
 //
-// No DB. No email service. No third-party dependency at runtime besides
-// Stripe. The license key is deterministically re-derived on every
-// request: Ed25519 signatures over the same payload are identical, so
-// (email, session_id) → license is stable across calls.
+// No DB and no separate email service. The license key is
+// deterministically re-derived on every request: Ed25519 signatures over
+// the same payload are identical, so (email, session_id) -> license is
+// stable across calls.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // base64url + utf8 helpers
@@ -157,12 +156,6 @@ async function setSessionMetadata(sessionId, metadata, secret) {
   });
 }
 
-async function setPaymentIntentDescription(paymentIntentId, description, secret) {
-  return stripeApi(`/payment_intents/${encodeURIComponent(paymentIntentId)}`, {
-    method: 'POST', body: { description }, secret,
-  });
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Premium classification
 //   - If session.metadata.tier === 'premium' → premium
@@ -269,11 +262,10 @@ export default {
         const issuedAt = session.created || Math.floor(Date.now() / 1000);
         const licenseKey = await signLicense({ email, sessionId, issuedAt }, privKey);
 
-        // Best-effort: stamp the key onto the session metadata + the
-        // PaymentIntent description so it shows up in Stripe's auto
-        // receipt email and dashboard. Both are best-effort: if either
-        // call fails (e.g. transient Stripe error), the success page
-        // still works because /license re-derives the key on demand.
+        // Best-effort: stamp the key onto session metadata and the
+        // successful Charge description so it appears in Stripe's auto
+        // receipt email and dashboard. If either call fails, the success
+        // page still works because /license re-derives the key on demand.
         ctx.waitUntil((async () => {
           try {
             await setSessionMetadata(sessionId, {

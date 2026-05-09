@@ -1485,7 +1485,7 @@ button {
   border-bottom: none !important;
 }
 
-/* ── Change 14: toast + confirm banner styles ─────────────────────────── */
+/* ── Toast + confirm banner styles ─────────────────────────────────────── */
 .ann-toast {
   position: fixed;
   left: 50%;
