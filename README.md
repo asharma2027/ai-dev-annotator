@@ -1,6 +1,6 @@
 # AI Website Dev Annotator: AI Notes & Markdown Export
 
-> **One-sentence pitch:** Alt + Right-Click any web element to annotate it, then export all your notes as clean Markdown for AI tools like Cursor, Claude, and ChatGPT.
+> **One-sentence pitch:** Hold **Alt** (or your chosen modifier) + Right-Click any web element to annotate it, then export all your notes as clean Markdown for AI tools.
 
 ---
 
@@ -16,8 +16,8 @@ model has enough context to find and fix the issue without a screenshot.
 
 Typical flow:
 1. Open the site you’re reviewing.
-2. Alt + Right-Click an element, type an annotation, repeat.
-3. Hit “Copy All” and paste into your AI assistant.
+2. Hold **Alt** (or your chosen modifier in Settings) and **Right-Click** an element, type an annotation, repeat.
+3. Hit **Copy All** (or **Cut All** via right-click on that button) and paste into your AI assistant.
 4. The agent ships a PR.
 
 ---
@@ -25,20 +25,22 @@ Typical flow:
 ## Features
 
 ### Free
-- **Alt + Right-Click** gesture annotates any element : captures tag, ID, classes, XPath, URL, and your note
+- **Modifier + Right-Click** (default **Alt**) annotates any element : captures tag, ID, classes, XPath, URL, and your note. Change the modifier in Settings → Shortcuts.
+- **Open popup** : Chrome command **Alt+Shift+A** (customizable in `chrome://extensions/shortcuts`)
 - Unlimited annotations, grouped by page URL in the popup
 - Per-row inline note editing with **auto-expanding textboxes** (auto-saves as you type)
 - Per-row delete button : moves annotation to history rather than erasing it
-- **✂ Cut All** : one-click export + clear of all notes in a clean, AI-ready format
-  - *Right-click Cut All* to copy only (without clearing)
+- **Footer export buttons** (labels are customizable in Settings) : by default, **📋 Copy All** copies Markdown without clearing; **right-click** the same button runs **✂ Cut All** (copy + clear). **🗑 Clear All** clears with a 5-second **Undo** banner; **right-click** it runs **💾 Save for Later** instead.
+- **↶ / ↷** in the popup header : multi-step undo and redo for recent storage changes
 - **🕐 History view** : deleted annotations with timestamps, including restore
 - **Copy Log** : copy events with full output preview
+- **Saved for Later** : stash the current list and restore it from the History panel
 - **Search** (⌘/Ctrl+F) : works over both the main annotation list and the history panel
 - Click any annotation selector (pink text) or URL group (blue text) to navigate directly to the annotated element on the page
-- **Clear All** shows an undo banner instead of a confirmation dialog — click Undo within 5 seconds to restore
+- **Clear All** (footer) shows an undo banner instead of a confirmation dialog — click Undo within 5 seconds to restore. Clearing a **single URL group** still asks for confirmation first.
 - Annotations persist in `chrome.storage.local` across page reloads and browser restarts
 - Inline panel on the page : edit or delete annotations without opening the popup
-- Auto-backup to `chrome.storage.sync` (cloud) and a local in-browser snapshot every 15 min — no download prompts
+- **Auto-Backup** is **on by default** : mirrors a compressed bundle to `chrome.storage.sync` (your Google Account) and writes a local in-browser snapshot about every **15 minutes** — no download prompts. Turn it off in Settings to keep data only on this device.
 
 ### Premium : $9.99 one-time
 - 🌙 **Dark mode** : a polished dark theme for the popup
@@ -51,13 +53,13 @@ Typical flow:
 
 ## How it works
 
-1. **Annotate** : Alt + Right-Click any element on the page, type a note, and press Esc or click
+1. **Annotate** : Hold your chosen modifier (default **Alt**) and **Right-Click** any element on the page, type a note, and press Esc or click
    outside to save. Empty notes are auto-discarded.
-2. **Review** : Click the extension icon in the toolbar to see all saved annotations grouped by page URL. Notes are editable inline.
+2. **Review** : Open the popup (toolbar icon or **Alt+Shift+A**) to see all saved annotations grouped by page URL. Notes are editable inline.
 3. **Navigate** : Click any pink annotation selector or blue URL group label to jump directly to that element on the page — the annotation panel opens automatically.
-4. **Cut** : Click **✂ Cut All** to copy a clean, structured Markdown payload to the clipboard and clear the current list. Right-click **✂ Cut All** to copy only, without clearing. An undo banner appears briefly so you can reverse the clear.
+4. **Copy / cut** : By default, **📋 Copy All** copies Markdown and leaves your list intact; **right-click** that button for **✂ Cut All** (copy + clear). An undo banner appears after a cut-style clear so you can reverse it within 5 seconds.
 5. **History** : Click 🕐 to browse past annotations, including deleted ones, with timestamps. Click `+` to restore any entry. Search works inside the history view too (⌘/Ctrl+F).
-6. **Settings** : Click ⚙️ to toggle dark mode (Premium), configure prepend/append text (Premium), or enter a license key.
+6. **Settings** : Click ⚙️ for shortcuts, footer button actions, Auto-Backup toggle, dark mode (Premium), prepend/append text (Premium), or license key activation.
 
 ---
 
@@ -96,16 +98,15 @@ Extension verifies license keys locally.
 |-----------------------------------|---------------------------------------------|------------------------------------------------------|
 | Annotations, notes, element text  | `chrome.storage.local`                      | No.                                                  |
 | Copy / annotation history         | `chrome.storage.local`                      | No.                                                  |
-| Settings (theme, shortcuts, etc.) | `chrome.storage.local`                      | No.                                                  |
-| Auto-Backup snapshot (optional)   | `chrome.storage.sync`                       | Synced through your Google Account to other Chromes. |
+| Settings (theme, shortcuts, backup, …) | `chrome.storage.local`                      | No.                                                  |
+| Auto-Backup mirror (on by default; off in Settings) | `chrome.storage.sync`                       | Only when enabled; synced via your Google Account. |
 | License / receipt info            | `chrome.storage.local`                      | No.                                                  |
 
-Auto-Backup is opt-in. When enabled, a compressed bundle of your
-annotations is mirrored into `chrome.storage.sync` so a fresh Chrome
-install signed into the same Google account restores your work. Google
-encrypts Sync data in transit and at rest, and end-to-end if you set a
-Sync passphrase. Turn Auto-Backup off in Settings to keep everything
-strictly on this device.
+Auto-Backup is **on by default**. A compressed bundle of your annotations
+is mirrored into `chrome.storage.sync` so a fresh Chrome install signed
+into the same Google account can restore your work. Google encrypts Sync
+data in transit and at rest, and end-to-end if you set a Sync passphrase.
+Turn Auto-Backup off in Settings to keep everything strictly on this device.
 
 The extension reads the page’s DOM only when you actively annotate, and
 only to compute a stable CSS selector and capture up to 240 characters
@@ -137,9 +138,13 @@ ai-dev-annotator/
 | `annotations` | Active (non-deleted) annotations |
 | `annotationHistory` | Past annotations with `deletedAt` timestamp |
 | `copyHistory` | Log of every copy event |
-| `annotatorSettings` | User preferences (dark mode, prepend/append text) |
+| `copyAllSnapshots` | Grouped “Copy All” snapshots for the Copy Log UI |
+| `savedForLater` | Saved-for-later sets (references into `_annStore`) |
+| `_annStore` | Deduplicated annotation bodies referenced by history, copy log, and saved sets |
+| `annotatorSettings` | User preferences (theme, shortcuts, backup toggle, button actions, …) |
 | `license` | Validated license key info (premium) |
 | `_localBackupSnapshot` | Latest local in-browser backup snapshot |
+| `annv2_*` / `annv2_count` (sync) | Chunked gzip backup in `chrome.storage.sync` when Auto-Backup is enabled |
 
 ---
 

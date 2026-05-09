@@ -11,8 +11,9 @@ does and does not do with your data.
 
 For annotation data, AI Website Dev Annotator is local-first. Notes,
 selectors, history, settings, and saved-for-later items stay on your
-device unless you explicitly enable Auto-Backup, in which case a
-compressed snapshot is mirrored to your own Google Account via Chrome
+device. Auto-Backup to Chrome Sync is **on by default**; you can turn it
+off anytime in Settings so nothing is mirrored to your Google Account.
+When Auto-Backup is enabled, a compressed snapshot is synced via Chrome
 Sync.
 
 Locally (`chrome.storage.local`), the Extension stores:
@@ -26,8 +27,9 @@ Locally (`chrome.storage.local`), the Extension stores:
   including the license key, licensed email address, and activation
   timestamp.
 
-Optionally synced to your Google Account via Chrome Sync
-(`chrome.storage.sync`) when Auto-Backup is enabled:
+Synced to your Google Account via Chrome Sync (`chrome.storage.sync`)
+when Auto-Backup is enabled (default on; disable in Settings for a
+strictly local device):
 - A compressed bundle of the data above, so a new Chrome install
   signed in to the same Google Account can restore your work.
 
@@ -47,8 +49,6 @@ It does not read other elements, scripts, or storage on the page.
   optionally to Chrome Sync.
 - `scripting` — to inject the annotation overlay when you open the
   Extension on a page.
-- `contextMenus` — to add the right-click "Annotate this element"
-  entry.
 - `notifications` — to show local toast notifications (e.g.
   "Backup restored").
 - `tabs` — to open annotated pages, focus the current tab, and launch
@@ -63,8 +63,8 @@ It does not read other elements, scripts, or storage on the page.
 There are no third-party SDKs, analytics, ad networks, tracking pixels,
 or remote code in the Extension.
 
-The optional Auto-Backup feature uses Chrome Sync, controlled by your
-Google Account. Premium purchases are handled by Stripe Checkout, and
+The Auto-Backup feature (Chrome Sync) is on by default and can be
+disabled in Settings. Premium purchases are handled by Stripe Checkout, and
 license issuance uses a Cloudflare Worker operated for this project.
 
 ## 5. Payments (premium build only)
@@ -101,5 +101,4 @@ release notes on GitHub.
 
 ## 9. Contact
 
-Arjun Sharma — asharma27@uchicago.edu
-Source code: https://github.com/asharma2027/ai-dev-annotator
+Arjun Sharma — arjun.sharma122005@gmail.com

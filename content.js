@@ -7,7 +7,7 @@ function showContextInvalidatedNotice() {
       const e = document.createElement("div");
       ((e.id = "aiann-context-dead"),
         (e.textContent =
-          "AI Dev Annotator was updated — refresh this page to keep annotating."),
+          "AI Website Dev Annotator was updated — refresh this page to keep annotating."),
         (e.style.cssText = [
           "position:fixed",
           "bottom:16px",

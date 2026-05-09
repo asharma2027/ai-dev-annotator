@@ -1173,7 +1173,7 @@ button {
   transition: background 0.15s;
 }
 
-/* Cut All / Clear All buttons: flex-column for icon text + hint text */
+/* Footer export buttons (#copy-btn, #clear-btn): stacked label + right-click hint */
 .cut-btn,
 .clear-btn {
   display: flex !important;

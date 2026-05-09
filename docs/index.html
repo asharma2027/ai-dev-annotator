@@ -75,8 +75,8 @@
         <span>annotate any element</span>
       </div>
       <div class="strip-item">
-        <strong>Cut as Markdown</strong>
-        <span>one click export</span>
+        <strong>Export as Markdown</strong>
+        <span>copy or cut all annotations</span>
       </div>
       <div class="strip-item">
         <strong>History &amp; Undo</strong>
@@ -108,8 +108,8 @@
           <p>Edit any note directly in the popup. Auto-expanding textboxes save as you type. Per-row delete moves notes to History instead of erasing them.</p>
         </div>
         <div class="feature-card">
-          <h3>Cut as Markdown</h3>
-          <p>Hit Cut All to copy a clean Markdown bundle and clear the list. Right-click Cut All to copy without clearing. The format is tuned for paste-into-AI use.</p>
+          <h3>Export as Markdown</h3>
+          <p>By default, <strong>Copy All</strong> copies a clean Markdown bundle without clearing your list. Right-click the same button for <strong>Cut All</strong> (copy and clear). You can remap both footer buttons in Settings.</p>
         </div>
         <div class="feature-card">
           <h3>History view</h3>
@@ -125,11 +125,11 @@
         </div>
         <div class="feature-card">
           <h3>Undo, not confirm</h3>
-          <p>Clear All shows a 5 second undo banner instead of a confirmation dialog. Recover from mistakes without breaking flow.</p>
+          <p>The main <strong>Clear All</strong> action shows a 5 second undo banner instead of a confirmation dialog. Clearing a single URL group still asks once, so you do not wipe part of a page by accident.</p>
         </div>
         <div class="feature-card">
           <h3>Auto backup</h3>
-          <p>Optional backup to chrome.storage.sync plus a local in-browser snapshot every 15 minutes. No download prompts, fully opt-in.</p>
+          <p>Chrome Sync mirror plus a local in-browser snapshot about every 15 minutes. No download prompts. Auto-Backup is on by default; turn it off in Settings for a strictly local device.</p>
         </div>
       </div>
     </div>
@@ -163,8 +163,8 @@
         <li>
           <span class="step-num">4</span>
           <div>
-            <h3>Cut as Markdown, paste into your AI tool</h3>
-            <p>Hit Cut All. A clean Markdown payload lands on your clipboard. Paste it into Cursor, Claude, ChatGPT, Copilot, or v0. The agent ships the PR.</p>
+            <h3>Copy or cut Markdown, paste into your AI tool</h3>
+            <p>Use <strong>Copy All</strong> to put a clean Markdown payload on your clipboard while keeping your notes. Use <strong>Cut All</strong> (right-click the copy button by default) when you want the list cleared after export. Paste into Cursor, Claude, ChatGPT, Copilot, or v0. The agent ships the PR.</p>
           </div>
         </li>
       </ol>
@@ -184,15 +184,15 @@
             <p class="price-sub">All the essentials, forever</p>
           </div>
           <ul class="price-list">
-            <li>Alt + Right-Click annotation gesture</li>
+            <li>Modifier + Right-Click annotation (default Alt)</li>
             <li>Unlimited annotations grouped by URL</li>
-            <li>Cut as Markdown, formatted for AI tools</li>
+            <li>Markdown export: Copy All by default; Cut All on right-click</li>
             <li>Inline editing with auto-save</li>
             <li>History view with restore</li>
             <li>Copy log of every export event</li>
             <li>Search across notes and history</li>
-            <li>Undo banner on Clear All</li>
-            <li>Auto backup to chrome.storage.sync (optional)</li>
+            <li>Undo banner on Clear All (footer)</li>
+            <li>Auto backup to chrome.storage.sync (on by default; off in Settings)</li>
           </ul>
           <a class="btn btn-secondary btn-block" href="https://chromewebstore.google.com/detail/ai-website-dev-annotator/" rel="noopener">Install free</a>
         </div>
@@ -235,7 +235,7 @@
       <div class="faq-grid">
         <div class="faq-item">
           <h3>Does the extension send my data anywhere?</h3>
-          <p>No annotation data is sent to an app server. There is no analytics and no telemetry. Annotations live in chrome.storage.local on your device. The optional Auto Backup mirrors a compressed bundle into chrome.storage.sync, which Google encrypts in transit and at rest. Premium checkout and license delivery use Stripe plus the project's Cloudflare Worker.</p>
+          <p>No annotation data is sent to an app server. There is no analytics and no telemetry. Annotations live in chrome.storage.local on your device. Auto-Backup mirrors a compressed bundle into chrome.storage.sync (on by default; disable in Settings). Google encrypts Sync data in transit and at rest. Premium checkout and license delivery use Stripe plus the project's Cloudflare Worker.</p>
         </div>
         <div class="faq-item">
           <h3>What does it read from the page?</h3>

@@ -1,15 +1,26 @@
-const BACKUP_ALARM = "annotatorAutoBackup",
-  BACKUP_INTERVAL = 15,
-  SYNC_PREFIX = "ann_sync_",
-  SYNC_V2_PREFIX = "annv2_",
-  SYNC_CHUNK_SIZE = 7e3,
-  SYNC_MAX_BYTES = 95e3,
-  VERSION = "1.0.0",
-  HISTORY_KEY = "annotationHistory",
-  COPY_HISTORY_KEY = "copyHistory",
-  SETTINGS_KEY = "annotatorSettings",
-  SAVED_LATER_KEY = "savedForLater",
-  ANN_STORE_KEY = "_annStore";
+/**
+ * MV3 service worker: periodic backup to chrome.storage.sync + local snapshot,
+ * and small message handlers (debounced backup, open popup for scroll target).
+ *
+ * Sync writes are skipped when Settings → Auto-Backup is turned off
+ * (`annotatorSettings.backupEnabled === false`). Content scripts request a
+ * debounced backup via `scheduleBackup` after annotation changes.
+ */
+
+const BACKUP_ALARM = "annotatorAutoBackup";
+/** Matches `periodInMinutes` passed to chrome.alarms.create. */
+const BACKUP_INTERVAL = 15;
+const SYNC_PREFIX = "ann_sync_";
+const SYNC_V2_PREFIX = "annv2_";
+const SYNC_CHUNK_SIZE = 7e3;
+const SYNC_MAX_BYTES = 95e3;
+const VERSION = "1.0.0";
+const HISTORY_KEY = "annotationHistory";
+const COPY_HISTORY_KEY = "copyHistory";
+const SETTINGS_KEY = "annotatorSettings";
+const SAVED_LATER_KEY = "savedForLater";
+const ANN_STORE_KEY = "_annStore";
+
 function resolveRefBg(t, e) {
   return t
     ? "string" == typeof t
@@ -34,29 +45,30 @@ function setupAlarm() {
     t ||
       chrome.alarms.create(BACKUP_ALARM, {
         delayInMinutes: 1,
-        periodInMinutes: 15,
+        periodInMinutes: BACKUP_INTERVAL,
       });
   });
 }
-(chrome.runtime.onInstalled.addListener(async ({ reason: t }) => {
+chrome.runtime.onInstalled.addListener(async () => {
   setupAlarm();
   try {
-    const { annotations: t = [] } =
+    const { annotations: annotationsList = [] } =
       await chrome.storage.local.get("annotations");
-    let e = !1;
-    for (const n of t)
-      if ("string" == typeof n.url && /[?#]/.test(n.url))
+    let didStrip = false;
+    for (const ann of annotationsList)
+      if ("string" == typeof ann.url && /[?#]/.test(ann.url))
         try {
-          const t = new URL(n.url);
-          ((n.url = t.origin + t.pathname), (e = !0));
-        } catch (t) {}
-    e && (await chrome.storage.local.set({ annotations: t }));
-  } catch (t) {}
-}),
-  chrome.runtime.onStartup.addListener(setupAlarm),
-  chrome.alarms.onAlarm.addListener((t) => {
-    t.name === BACKUP_ALARM && performBackup();
-  }));
+          const u = new URL(ann.url);
+          ((ann.url = u.origin + u.pathname), (didStrip = true));
+        } catch (_err) {}
+    didStrip &&
+      (await chrome.storage.local.set({ annotations: annotationsList }));
+  } catch (_err) {}
+});
+chrome.runtime.onStartup.addListener(setupAlarm);
+chrome.alarms.onAlarm.addListener((t) => {
+  t.name === BACKUP_ALARM && performBackup();
+});
 const ANN_SHORT_KEYS = {
   id: "i",
   url: "u",
@@ -178,19 +190,20 @@ async function writeToSyncStorage(t) {
         savedForLater: a,
         settings: s,
       });
-      if (((i = await compressBundle(t)), i.length <= 95e3)) break;
+      if (((i = await compressBundle(t)), i.length <= SYNC_MAX_BYTES)) break;
       if (0 === o.length) break;
       const n = Math.max(1, Math.floor(0.1 * o.length));
       ((o = o.slice(n)), (c = !0));
     }
-    if (i.length > 95e3)
+    if (i.length > SYNC_MAX_BYTES)
       return void chrome.storage.local.set({
         _syncBackupError:
           "Data still exceeds sync storage limit even after truncation.",
         _syncTruncated: c,
       });
     const l = [];
-    for (let t = 0; t < i.length; t += 7e3) l.push(i.slice(t, t + 7e3));
+    for (let t = 0; t < i.length; t += SYNC_CHUNK_SIZE)
+      l.push(i.slice(t, t + SYNC_CHUNK_SIZE));
     const u = await new Promise((t) => chrome.storage.sync.get(null, t)),
       p = Object.keys(u).filter(
         (t) => t.startsWith("ann_sync_") || t.startsWith("annv2_"),
@@ -247,7 +260,7 @@ function writeToLocalSnapshot(t) {
     }),
     a = {
       _type: "annotator-backup",
-      _version: "1.0.0",
+      _version: VERSION,
       _saved: new Date().toISOString(),
       annotations: t.annotations || [],
       annotationHistory: n,

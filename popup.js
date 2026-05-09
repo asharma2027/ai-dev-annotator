@@ -1,7 +1,5 @@
 // popup.js : AI Website Dev Annotator
 
-// DEV MODE is disabled in production builds.
-
 // ─────────────────────────────────────────────────────────────────────────────
 // PREMIUM / LICENSE SYSTEM (Stripe + offline Ed25519)
 //
@@ -17,9 +15,6 @@
 //   4. The extension verifies the signature locally with the public key
 //      embedded below — no network call, no allow-list lookup, no
 //      runtime dependency on any third party. Works fully offline.
-//
-// No email service, no DB — just Stripe + Cloudflare Worker + GitHub Pages.
-//
 // Security model: same as any signed-license system (1Password, Tana,
 // Sublime Text, etc.). The private key never leaves the Worker.
 // If it ever leaks, rotate the keypair, ship a new extension version
