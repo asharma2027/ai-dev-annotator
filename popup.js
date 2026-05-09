@@ -3602,7 +3602,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="settings-value" id="file-backup-status">Checking…</span>
         </div>
         <p class="settings-hint" style="margin-top:4px;">
-          Annotations and history live on your device (chrome.storage.local). Auto-Backup mirrors a compressed snapshot to Chrome Sync (chrome.storage.sync) so it follows your Google account across signed-in Chrome installs. Sync is end-to-end encrypted by Google when you set a Sync passphrase. Disable Auto-Backup to keep data strictly local.
+          Annotations and history live on your device (chrome.storage.local). Auto-Backup mirrors a compressed snapshot to Chrome Sync (chrome.storage.sync) so it follows your Google account across signed-in Chrome installs. Sync is end-to-end encrypted by Google when you set a Sync passphrase. Disable Auto-Backup to stop syncing to your Google account; data remains on this device and the local snapshot still refreshes periodically.
         </p>
         <div class="settings-row" style="justify-content:flex-end;margin-top:4px;">
           <button id="backup-now-btn" class="btn-history-action">⚡ Backup Now</button>

@@ -40,7 +40,7 @@ Typical flow:
 - **Clear All** (footer) shows an undo banner instead of a confirmation dialog — click Undo within 5 seconds to restore. Clearing a **single URL group** still asks for confirmation first.
 - Annotations persist in `chrome.storage.local` across page reloads and browser restarts
 - Inline panel on the page : edit or delete annotations without opening the popup
-- **Auto-Backup** is **on by default** : mirrors a compressed bundle to `chrome.storage.sync` (your Google Account) and writes a local in-browser snapshot about every **15 minutes** — no download prompts. Turn it off in Settings to keep data only on this device.
+- **Auto-Backup** is **on by default** : mirrors a compressed bundle to `chrome.storage.sync` (your Google Account) and writes a local in-browser snapshot about every **15 minutes** — no download prompts. Turn it off in Settings to stop the Chrome Sync mirror (data stays on this device); the local snapshot still refreshes on the same schedule for recovery on this install.
 
 ### Premium : $9.99 one-time
 - 🌙 **Dark mode** : a polished dark theme for the popup
@@ -98,7 +98,7 @@ Extension verifies license keys locally.
 |-----------------------------------|---------------------------------------------|------------------------------------------------------|
 | Annotations, notes, element text  | `chrome.storage.local`                      | No.                                                  |
 | Copy / annotation history         | `chrome.storage.local`                      | No.                                                  |
-| Settings (theme, shortcuts, backup, …) | `chrome.storage.local`                      | No.                                                  |
+| Settings (theme, shortcuts, backup, footer buttons, history limits, …) | `chrome.storage.local`                      | No.                                                  |
 | Auto-Backup mirror (on by default; off in Settings) | `chrome.storage.sync`                       | Only when enabled; synced via your Google Account. |
 | License / receipt info            | `chrome.storage.local`                      | No.                                                  |
 
@@ -106,7 +106,9 @@ Auto-Backup is **on by default**. A compressed bundle of your annotations
 is mirrored into `chrome.storage.sync` so a fresh Chrome install signed
 into the same Google account can restore your work. Google encrypts Sync
 data in transit and at rest, and end-to-end if you set a Sync passphrase.
-Turn Auto-Backup off in Settings to keep everything strictly on this device.
+Turn Auto-Backup off in Settings to stop syncing to your Google account;
+notes remain on this device, and the extension still refreshes a local
+snapshot periodically for recovery on this install.
 
 The extension reads the page’s DOM only when you actively annotate, and
 only to compute a stable CSS selector and capture up to 240 characters
@@ -141,7 +143,7 @@ ai-dev-annotator/
 | `copyAllSnapshots` | Grouped “Copy All” snapshots for the Copy Log UI |
 | `savedForLater` | Saved-for-later sets (references into `_annStore`) |
 | `_annStore` | Deduplicated annotation bodies referenced by history, copy log, and saved sets |
-| `annotatorSettings` | User preferences (theme, shortcuts, backup toggle, button actions, …) |
+| `annotatorSettings` | User preferences (theme, shortcuts, backup toggle, footer buttons, history limits, …) |
 | `license` | Validated license key info (premium) |
 | `_localBackupSnapshot` | Latest local in-browser backup snapshot |
 | `annv2_*` / `annv2_count` (sync) | Chunked gzip backup in `chrome.storage.sync` when Auto-Backup is enabled |

@@ -21,15 +21,16 @@ Locally (`chrome.storage.local`), the Extension stores:
   text snippet (up to 240 characters), the page URL (origin + path
   only — query strings and hashes are stripped), and a timestamp.
 - Annotation history and copy history.
-- Your settings (theme, shortcuts, auto-backup toggle).
+- Your settings (theme, shortcuts, auto-backup toggle, footer button
+  actions, per-tab history limits).
 - Saved-for-later items.
 - License key metadata if you have purchased the premium version,
   including the license key, licensed email address, and activation
   timestamp.
 
 Synced to your Google Account via Chrome Sync (`chrome.storage.sync`)
-when Auto-Backup is enabled (default on; disable in Settings for a
-strictly local device):
+when Auto-Backup is enabled (default on; disable in Settings to stop
+mirroring to your Google account while keeping data on this device):
 - A compressed bundle of the data above, so a new Chrome install
   signed in to the same Google Account can restore your work.
 
@@ -101,4 +102,4 @@ release notes on GitHub.
 
 ## 9. Contact
 
-Arjun Sharma — arjun.sharma122005@gmail.com
+Arjun Sharma — aiwebdevannotator@gmail.com

@@ -33,6 +33,37 @@ function showContextInvalidatedNotice() {
   }
 }
 let cachedShortcut = { modifier: "alt" };
+/** Matches popup.js DEFAULT_HISTORY_LIMITS.annotations when unset. */
+const DEFAULT_ANNOTATION_HISTORY_LIMIT = 200;
+function modifierKeyLabel(shortcut) {
+  const t = String((shortcut && shortcut.modifier) || "alt").toLowerCase();
+  return (
+    { alt: "Alt", ctrl: "Ctrl", shift: "Shift", meta: "⌘ / Meta" }[t] || "Alt"
+  );
+}
+function isShortcutModifierHeld(e, t) {
+  const n = String((t && t.modifier) || "alt").toLowerCase();
+  return !!{ alt: e.altKey, ctrl: e.ctrlKey, shift: e.shiftKey, meta: e.metaKey }[
+    n
+  ];
+}
+function getAnnotationHistoryLimit(e) {
+  const t = e || {},
+    n = t.historyLimits || {};
+  if (
+    Object.prototype.hasOwnProperty.call(n, "annotations") &&
+    null != n.annotations
+  )
+    return Math.max(0, parseInt(n.annotations, 10) || 0);
+  if (void 0 !== t.maxHistoryLength && null !== t.maxHistoryLength)
+    return Math.max(0, parseInt(t.maxHistoryLength, 10) || 0);
+  return DEFAULT_ANNOTATION_HISTORY_LIMIT;
+}
+function updateContextElementHint() {
+  const e = document.getElementById(`${ANN}-context-hint`);
+  e &&
+    (e.textContent = `${modifierKeyLabel(cachedShortcut)}+click any element to add it to this annotation`);
+}
 function loadShortcut() {
   try {
     chrome.storage.local.get({ annotatorSettings: {} }, (e) => {
@@ -44,7 +75,8 @@ function loadShortcut() {
       )
         return void showContextInvalidatedNotice();
       const t = e.annotatorSettings || {};
-      cachedShortcut = t.shortcut || { modifier: "alt" };
+      ((cachedShortcut = t.shortcut || { modifier: "alt" }),
+        updateContextElementHint());
     });
   } catch (e) {
     if (String(e && e.message).includes("Extension context invalidated"))
@@ -54,8 +86,9 @@ function loadShortcut() {
 try {
   chrome.storage.onChanged.addListener((e, t) => {
     if ("local" === t && e.annotatorSettings) {
-      const t = e.annotatorSettings.newValue || {};
-      cachedShortcut = t.shortcut || { modifier: "alt" };
+      const next = (e.annotatorSettings && e.annotatorSettings.newValue) || {};
+      ((cachedShortcut = next.shortcut || { modifier: "alt" }),
+        updateContextElementHint());
     }
   });
 } catch (e) {}
@@ -154,10 +187,7 @@ function enforceHistoryLimit() {
         )
           return void showContextInvalidatedNotice();
         const t = e.annotatorSettings || {},
-          n =
-            void 0 !== t.maxHistoryLength && null !== t.maxHistoryLength
-              ? t.maxHistoryLength
-              : 100;
+          n = getAnnotationHistoryLimit(t);
         if (n <= 0) return;
         const o = e[HISTORY_KEY];
         if (!(o.length <= n))
@@ -215,7 +245,7 @@ function buildPanel() {
   const e = document.createElement("div");
   return (
     (e.id = `${ANN}-panel`),
-    (e.innerHTML = `\n    <div id="${ANN}-panel-header">\n      <span id="${ANN}-element-label" title="Click to open in popup" style="cursor:pointer;color:#db2777;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">...</span>\n      <span id="${ANN}-page-label" title="Page annotation" style="display:none;color:#2563eb;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;"></span>\n      <button class="${ANN}-label-copy-btn" title="Copy selector(s) to clipboard">📋</button>\n      <button id="${ANN}-close-btn" title="Close">✕</button>\n    </div>\n    <textarea id="${ANN}-textarea"></textarea>\n    <div class="aiann-panel-hint">Empty notes auto-discarded. Esc to save &amp; close</div>\n    <div style="font-size:9px;opacity:0.5;margin-top:2px;font-family:system-ui,sans-serif;color:#6b7280;">Alt+click any element to add it to this annotation</div>\n    <div id="${ANN}-panel-footer">\n      <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Page Note</button>\n      <span id="${ANN}-save-status"></span>\n      <button id="${ANN}-delete-btn">🗑 Delete</button>\n    </div>`),
+    (e.innerHTML = `\n    <div id="${ANN}-panel-header">\n      <span id="${ANN}-element-label" title="Click to open in popup" style="cursor:pointer;color:#db2777;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">...</span>\n      <span id="${ANN}-page-label" title="Page annotation" style="display:none;color:#2563eb;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;"></span>\n      <button class="${ANN}-label-copy-btn" title="Copy selector(s) to clipboard">📋</button>\n      <button id="${ANN}-close-btn" title="Close">✕</button>\n    </div>\n    <textarea id="${ANN}-textarea"></textarea>\n    <div class="aiann-panel-hint">Empty notes auto-discarded. Esc to save &amp; close</div>\n    <div id="${ANN}-context-hint" style="font-size:9px;opacity:0.5;margin-top:2px;font-family:system-ui,sans-serif;color:#6b7280;"></div>\n    <div id="${ANN}-panel-footer">\n      <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Page Note</button>\n      <span id="${ANN}-save-status"></span>\n      <button id="${ANN}-delete-btn">🗑 Delete</button>\n    </div>`),
     document.body.appendChild(e),
     e.querySelector(`#${ANN}-textarea`).addEventListener("input", (e) => {
       (setSaveStatus("Saving…"),
@@ -337,12 +367,13 @@ function buildPanel() {
           !t.contains(e.target) &&
           !e.target.closest(`.${ANN}-chip`)
         ) {
-          if (e.altKey) return;
+          if (isShortcutModifierHeld(e, cachedShortcut)) return;
           closePanel();
         }
       },
       !0,
     ),
+    updateContextElementHint(),
     e
   );
 }
@@ -401,7 +432,10 @@ function openPanel(e, t) {
             ? "Currently: whole-page — click to revert to element-specific"
             : "Mark as whole-page annotation (not element-specific)"));
       }
-      ((activeChip = e), (activeAnnId = t), s.focus());
+      (updateContextElementHint(),
+        (activeChip = e),
+        (activeAnnId = t),
+        s.focus());
     }));
 }
 function positionPanel(e, t) {
@@ -978,7 +1012,7 @@ try {
   document.addEventListener(
     "click",
     (e) => {
-      if (!e.altKey) return;
+      if (!isShortcutModifierHeld(e, cachedShortcut)) return;
       if (!activeAnnId) return;
       const t = document.getElementById(`${ANN}-panel`);
       if (!t || "block" !== t.style.display) return;

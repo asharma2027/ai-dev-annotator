@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AI Website Dev Annotator: Annotate Any Web Element, Export Markdown for AI</title>
-<meta name="description" content="A Chrome extension for developers using AI coding assistants. Alt + Right-Click any web element to annotate, then export clean Markdown for Cursor, Claude, ChatGPT, and Copilot." />
+<meta name="description" content="A Chrome extension for developers using AI coding assistants. Default: Alt + Right-Click any web element to make an annotation. Export clean Markdown for any AI tool (Cursor, Claude, Gemini, etc.)." />
 <link rel="icon" type="image/png" sizes="48x48" href="icons/icon48.png" />
 <link rel="icon" type="image/png" sizes="128x128" href="icons/icon128.png" />
 <link rel="stylesheet" href="styles.css" />
@@ -35,7 +35,7 @@
       <div class="hero-text">
         <span class="eyebrow">Chrome Extension for Developers</span>
         <h1>Annotate any web element. Made for developers who paste a lot into AI agents.</h1>
-        <p class="lede">Alt + Right-Click any element on any website to leave a note. Export every note as a clean, structured Markdown payload that pastes straight into Cursor, Claude, ChatGPT, Copilot, or v0. Your AI agent gets a stable selector, the element text, your note, and the URL, no screenshots required.</p>
+        <p class="lede">Alt + Right-Click any element on any website to leave a note (default shortcut; change the modifier under the extension’s Settings → Shortcuts). Export every note as a clean, structured Markdown payload that pastes straight into Cursor, Claude, ChatGPT, Copilot, or v0. Your AI agent gets a stable selector, the element text, your note, and the URL, no screenshots required.</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/ai-website-dev-annotator/" rel="noopener">Install on Chrome</a>
           <a class="btn btn-secondary" href="#pricing">See pricing</a>
@@ -72,7 +72,7 @@
     <div class="container strip-row">
       <div class="strip-item">
         <strong>Alt + Right-Click</strong>
-        <span>annotate any element</span>
+        <span>annotate (default; change in Settings)</span>
       </div>
       <div class="strip-item">
         <strong>Export as Markdown</strong>
@@ -129,7 +129,7 @@
         </div>
         <div class="feature-card">
           <h3>Auto backup</h3>
-          <p>Chrome Sync mirror plus a local in-browser snapshot about every 15 minutes. No download prompts. Auto-Backup is on by default; turn it off in Settings for a strictly local device.</p>
+          <p>Chrome Sync mirror plus a local in-browser snapshot about every 15 minutes. No download prompts. Auto-Backup is on by default; turn it off in Settings to stop syncing to your Google account (data stays on this device; a local snapshot still refreshes for recovery on this install).</p>
         </div>
       </div>
     </div>
@@ -149,8 +149,8 @@
         <li>
           <span class="step-num">2</span>
           <div>
-            <h3>Alt + Right-Click any element</h3>
-            <p>Type a note, press Esc or click outside to save. Empty notes are auto-discarded.</p>
+            <h3>Alt + Right-Click any element (default)</h3>
+            <p>Type a note, press Esc or click outside to save. Empty notes are auto-discarded. You can change the modifier key in the extension’s Settings → Shortcuts.</p>
           </div>
         </li>
         <li>
@@ -192,7 +192,7 @@
             <li>Copy log of every export event</li>
             <li>Search across notes and history</li>
             <li>Undo banner on Clear All (footer)</li>
-            <li>Auto backup to chrome.storage.sync (on by default; off in Settings)</li>
+            <li>Auto backup to chrome.storage.sync (on by default; off in Settings stops the sync mirror; data stays on this device)</li>
           </ul>
           <a class="btn btn-secondary btn-block" href="https://chromewebstore.google.com/detail/ai-website-dev-annotator/" rel="noopener">Install free</a>
         </div>
@@ -235,7 +235,7 @@
       <div class="faq-grid">
         <div class="faq-item">
           <h3>Does the extension send my data anywhere?</h3>
-          <p>No annotation data is sent to an app server. There is no analytics and no telemetry. Annotations live in chrome.storage.local on your device. Auto-Backup mirrors a compressed bundle into chrome.storage.sync (on by default; disable in Settings). Google encrypts Sync data in transit and at rest. Premium checkout and license delivery use Stripe plus the project's Cloudflare Worker.</p>
+          <p>No annotation data is sent to an app server. There is no analytics and no telemetry. Annotations live in chrome.storage.local on your device. Auto-Backup mirrors a compressed bundle into chrome.storage.sync (on by default; disable in Settings to stop syncing to your Google account while keeping data on this device). Google encrypts Sync data in transit and at rest. Premium checkout and license delivery use Stripe plus the project's Cloudflare Worker.</p>
         </div>
         <div class="faq-item">
           <h3>What does it read from the page?</h3>

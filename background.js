@@ -1,10 +1,13 @@
 /**
- * MV3 service worker: periodic backup to chrome.storage.sync + local snapshot,
+ * MV3 service worker: periodic local snapshot + optional Chrome Sync mirror,
  * and small message handlers (debounced backup, open popup for scroll target).
  *
- * Sync writes are skipped when Settings → Auto-Backup is turned off
- * (`annotatorSettings.backupEnabled === false`). Content scripts request a
- * debounced backup via `scheduleBackup` after annotation changes.
+ * `writeToSyncStorage` runs only when Settings → Auto-Backup is on
+ * (`annotatorSettings.backupEnabled !== false`). The 15-minute alarm, manual
+ * "Backup Now", and `triggerBackup` all respect that. `writeToLocalSnapshot`
+ * still runs so `_localBackupSnapshot` refreshes on the same schedule for
+ * same-device recovery. Content scripts request a debounced backup via
+ * `scheduleBackup` after annotation changes.
  */
 
 const BACKUP_ALARM = "annotatorAutoBackup";
@@ -151,7 +154,9 @@ async function compressBundle(t) {
 }
 function performBackup() {
   chrome.storage.local.get(null, (t) => {
-    (writeToSyncStorage(t), writeToLocalSnapshot(t));
+    const backupOn = (t[SETTINGS_KEY] || {}).backupEnabled !== false;
+    backupOn && writeToSyncStorage(t);
+    writeToLocalSnapshot(t);
   });
 }
 async function writeToSyncStorage(t) {
