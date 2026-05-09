@@ -138,7 +138,7 @@
   // Public license lookup endpoint served by the Cloudflare Worker.
   // The success page passes Stripe's checkout session ID to this endpoint;
   // the Worker verifies payment with Stripe before returning a license key.
-  const LICENSE_LOOKUP_URL = 'https://ai-dev-annotator-licenses-testing.arjun-sharma122005.workers.dev/license';
+  const LICENSE_LOOKUP_URL = 'https://ai-dev-annotator-licenses.arjun-sharma122005.workers.dev/license';
 
   function qs(name) {
     const m = new URLSearchParams(window.location.search).get(name);
