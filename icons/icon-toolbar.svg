@@ -1,21 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
     <linearGradient id="bubbleGrad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#ca3b76" />
+      <stop offset="0%" stop-color="#9BB1F1" />
       <stop offset="50%" stop-color="#3762e3" />
-      <stop offset="100%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#9BB1F1" />
     </linearGradient>
   </defs>
 
-  <!-- Bubble fills almost the entire 512 canvas -->
-  <rect x="8" y="56" width="496" height="360" rx="96" fill="url(#bubbleGrad)" />
-  <!-- Bubble tail -->
-  <path d="M 150 410 L 90 500 L 250 420 Z" fill="url(#bubbleGrad)" />
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bubbleGrad)" />
 
-  <!-- Enlarged </> glyph -->
-  <g fill="none" stroke="#FFFFFF" stroke-width="56" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="180,150 90,236 180,322" />
-    <polyline points="332,150 422,236 332,322" />
-    <line x1="296" y1="120" x2="216" y2="352" stroke-width="50" />
+  <g fill="none" stroke="#FFFFFF" stroke-width="70" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="151,148 46,256 151,364" />
+    <polyline points="361,148 466,256 361,364" />
+    <line x1="300" y1="110" x2="212" y2="402" stroke-width="54" />
   </g>
 </svg>
