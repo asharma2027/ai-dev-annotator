@@ -7,6 +7,9 @@ LICENSE_KEYPAIR_DO_NOT_COMMIT.txt
 .env.local
 .dev.vars
 
+# Wrangler local cache (account metadata); regenerate via `wrangler login`
+infra/worker/.wrangler/
+
 # OS / editor
 .DS_Store
 *.swp
