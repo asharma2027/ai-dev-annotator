@@ -26,6 +26,7 @@ Typical flow:
 
 ### Free
 - **Modifier + Right-Click** (default **Alt**) annotates any element : captures tag, ID, classes, XPath, URL, and your note. Change the modifier in Settings → Shortcuts.
+- While the inline edit panel is open, **modifier + click** other elements to attach them as extra selector context on the same note (shown as comma-separated selectors in the popup).
 - **Open popup** : Chrome command **Alt+Shift+A** (customizable in `chrome://extensions/shortcuts`)
 - Unlimited annotations, grouped by page URL in the popup
 - Per-row inline note editing with **auto-expanding textboxes** (auto-saves as you type)
@@ -35,7 +36,7 @@ Typical flow:
 - **🕐 History view** : deleted annotations with timestamps, including restore
 - **Copy Log** : copy events with full output preview
 - **Saved for Later** : stash the current list and restore it from the History panel
-- **Search** (⌘/Ctrl+F) : works over both the main annotation list and the history panel
+- **Search** (⌘/Ctrl+F or the 🔍 button) : searches the view you have open — current annotations list, History (any of its tabs), or Settings
 - Click any annotation selector (pink text) or URL group (blue text) to navigate directly to the annotated element on the page
 - **Clear All** (footer) shows an undo banner instead of a confirmation dialog — click Undo within 5 seconds to restore. Clearing a **single URL group** still asks for confirmation first.
 - Annotations persist in `chrome.storage.local` across page reloads and browser restarts
@@ -58,7 +59,7 @@ Typical flow:
 2. **Review** : Open the popup (toolbar icon or **Alt+Shift+A**) to see all saved annotations grouped by page URL. Notes are editable inline.
 3. **Navigate** : Click any pink annotation selector or blue URL group label to jump directly to that element on the page — the annotation panel opens automatically.
 4. **Copy / cut** : By default, **📋 Copy All** copies Markdown and leaves your list intact; **right-click** that button for **✂ Cut All** (copy + clear). An undo banner appears after a cut-style clear so you can reverse it within 5 seconds.
-5. **History** : Click 🕐 to browse past annotations, including deleted ones, with timestamps. Click `+` to restore any entry. Search works inside the history view too (⌘/Ctrl+F).
+5. **History** : Click 🕐 to browse past annotations, including deleted ones, with timestamps. Click `+` to restore any entry.
 6. **Settings** : Click ⚙️ for shortcuts, footer button actions, Auto-Backup toggle, dark mode (Premium), prepend/append text (Premium), or license key activation.
 
 ---
@@ -112,8 +113,9 @@ snapshot periodically for recovery on this install.
 
 The extension reads the page’s DOM only when you actively annotate, and
 only to compute a stable CSS selector and capture up to 240 characters
-of the clicked element’s text. It does not read passwords, form values,
-cookies, or storage.
+of the clicked element’s text (plus up to 120 characters per companion
+element if you attach extras with modifier + click). It does not read
+passwords, form values, cookies, or storage.
 
 ---
 
@@ -146,7 +148,8 @@ ai-dev-annotator/
 | `annotatorSettings` | User preferences (theme, shortcuts, backup toggle, footer buttons, history limits, …) |
 | `license` | Validated license key info (premium) |
 | `_localBackupSnapshot` | Latest local in-browser backup snapshot |
-| `annv2_*` / `annv2_count` (sync) | Chunked gzip backup in `chrome.storage.sync` when Auto-Backup is enabled |
+| `annv2_*` / `annv2_count` / `annv2_ts` / `annv2_ver` (sync) | Chunked gzip backup in `chrome.storage.sync` when Auto-Backup is enabled |
+| Legacy `ann_sync_*` (sync) | Older chunked JSON backups may still exist from prior versions; they are cleared when a new v2 backup runs |
 
 ---
 

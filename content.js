@@ -1,3 +1,13 @@
+/**
+ * Content script — annotation UI injected into normal web pages (MV3
+ * content_scripts and host permission `<all_urls>`).
+ *
+ * Gestures:
+ *   - Modifier + context menu (right-click) on an element → new annotation.
+ *   - While the edit panel is open: modifier + click → add that element as
+ *     extra selector context on the active note (contextElements).
+ * Chips anchor to elements or the page; storage keys align with popup.js.
+ */
 const ANN = "aiann";
 let __aiann_contextDead = !1;
 function showContextInvalidatedNotice() {

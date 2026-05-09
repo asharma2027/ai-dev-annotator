@@ -42,22 +42,21 @@ browsing history, IP addresses, identifiers, analytics, or telemetry.
 The Extension only reads the DOM of a page when you actively
 annotate. It computes a stable CSS selector for the element you
 click and reads up to 240 characters of that element's `innerText`.
-It does not read other elements, scripts, or storage on the page.
+If you attach extra elements to the same note (modifier + click while
+the edit panel is open), each stores up to 120 characters of text for
+labeling. It does not read other elements, scripts, or storage on the
+page except as described above.
 
 ## 3. Permissions
 
 - `storage` — to save annotations and settings on your device and
   optionally to Chrome Sync.
-- `scripting` — to inject the annotation overlay when you open the
-  Extension on a page.
-- `notifications` — to show local toast notifications (e.g.
-  "Backup restored").
 - `tabs` — to open annotated pages, focus the current tab, and launch
   external purchase/support links when you click them.
 - `alarms` — to schedule the optional local/Chrome Sync Auto-Backup.
-- Host permissions — required to inject the annotation overlay on
-  the sites you choose to annotate. Granted at install time per the
-  manifest.
+- Host access (`<all_urls>`) — the manifest injects a content script
+  on pages you visit so the annotation UI can run when you use the
+  extension. Grant applies at install time.
 
 ## 4. Third parties
 
