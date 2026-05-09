@@ -7,11 +7,11 @@
     </linearGradient>
   </defs>
 
-<rect x="0" y="56" width="512" height="388" rx="96" fill="url(#bubbleGrad)" />
+<rect x="0" y="0" width="512" height="512" rx="128" fill="url(#bubbleGrad)" />
 
-  <g fill="none" stroke="#FFFFFF" stroke-width="70" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="151,148 46,256 151,364" />
-    <polyline points="361,148 466,256 361,364" />
-    <line x1="301" y1="105" x2="211" y2="407" stroke-width="58" />
+  <g fill="none" stroke="#FFFFFF" stroke-width="60" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="160,170 60,256 160,342" />
+    <polyline points="352,170 452,256 352,342" />
+    <line x1="290" y1="120" x2="222" y2="392" stroke-width="50" />
   </g>
 </svg>
