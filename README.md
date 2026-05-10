@@ -22,6 +22,16 @@ Typical flow:
 
 ---
 
+## Why this matters
+
+Models change. Interfaces get redesigned. Pricing shifts. Whoever wins next
+quarter wants you inside *their* webpage, talking to *their* agent, on
+*their* terms.
+
+Your notes shouldn’t have to follow. Annotations save locally in real time as
+plain text. Easily export as plain Markdown with one click — paste them into Cursor today, Claude tomorrow, ChatGPT next week, whatever ships. Just do the thing. Use whatever credits you got. Same workflow for all models.
+---
+
 ## Features
 
 ### Free
