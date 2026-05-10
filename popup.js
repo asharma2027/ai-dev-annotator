@@ -474,9 +474,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Multi-note helpers ─────────────────────────────────────────────────
   // Premium users can attach more than one note to a single annotation. The
   // first note lives in `ann.comment` (back-compat with all existing data);
-  // any extras live in `ann.extraComments` (string[]). Free users only ever
-  // see/edit `ann.comment`, but if a user downgrades from premium their
-  // existing extras stay readable so no data is silently lost.
+  // any extras live in `ann.extraComments` (string[]). Free users cannot add
+  // new extra notes, but existing extras stay visible/editable so no data is
+  // silently lost after a downgrade.
 
   // Return [primary, ...extras] without trimming. Always at least one entry.
   function getAnnNotes(ann) {

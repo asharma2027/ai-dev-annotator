@@ -26,7 +26,7 @@ Typical flow:
 
 ### Free
 - **Modifier + Right-Click** (default **Alt**) annotates any element : captures tag, ID, classes, XPath, URL, and your note. Change the modifier in Settings → Shortcuts.
-- While the inline edit panel is open, **modifier + click** other elements to attach them as extra selector context on the same note (shown as comma-separated selectors in the popup).
+- While the inline edit panel is open, **modifier + click** other elements to attach them as extra selector context on the same annotation (shown as comma-separated selectors in the popup).
 - **Open popup** : Chrome command **Alt+Shift+A** (customizable in `chrome://extensions/shortcuts`)
 - Unlimited annotations, grouped by page URL in the popup
 - Per-row inline note editing with **auto-expanding textboxes** (auto-saves as you type)
@@ -70,8 +70,18 @@ Typical flow:
 ```markdown
 ## https://example.com/dashboard
 
-1. `button#submit-btn` → Make this button larger and change color to green
-2. `div.sidebar` | `body/div[2]/div[1]` → Reduce width to 200px and add a top border
+1. `button#submit-btn`
+   - Make this button larger and change color to green
+   - Add a loading state while the request is pending
+   - _"Submit"_
+   - https://example.com/dashboard
+   - 2026-05-09T19:30:00.000Z
+
+2. `div.sidebar`
+   - Reduce width to 200px and add a top border
+   - _"Navigation Settings Billing"_
+   - https://example.com/dashboard
+   - 2026-05-09T19:31:00.000Z
 ```
 
 Paste directly into Cursor's chat, Claude, or any AI tool : it already knows which element, where it lives, and what you want changed.

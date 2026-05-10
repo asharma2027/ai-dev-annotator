@@ -57,13 +57,20 @@
         <pre class="code"><code>## https://example.com/dashboard
 
 1. `button#submit-btn`
-   Make this button larger and change color to green
+   - Make this button larger and change color to green
+   - Add a loading state while the request is pending
+   - _"Submit"_
+   - https://example.com/dashboard
 
 2. `div.sidebar` | `body/div[2]/div[1]`
-   Reduce width to 200px and add a top border
+   - Reduce width to 200px and add a top border
+   - _"Navigation Settings Billing"_
+   - https://example.com/dashboard
 
 3. `header nav a[href="/pricing"]`
-   Wrong active state on this link</code></pre>
+   - Wrong active state on this link
+   - _"Pricing"_
+   - https://example.com/dashboard</code></pre>
       </div>
     </div>
   </section>
@@ -101,7 +108,7 @@
         </div>
         <div class="feature-card">
           <h3>Unlimited annotations</h3>
-          <p>Annotations are grouped by page URL in the popup. Add as many as you want. Free tier has no limits on the number of notes you can take.</p>
+          <p>Annotations are grouped by page URL in the popup. Add as many as you want. Premium users can add multiple note fields to am annotation (which may include one or more elements).</p>
         </div>
         <div class="feature-card">
           <h3>Inline editing</h3>
@@ -174,7 +181,7 @@
   <section id="pricing" class="section">
     <div class="container">
       <h2>Pricing</h2>
-      <p class="section-lede">Free forever for the core workflow. One-time Premium unlocks a polished dark theme and custom export wrappers.</p>
+      <p class="section-lede">Free forever for the core workflow. One-time Premium unlocks a polished dark theme, custom prepend/append export text, and multiple notes per element.</p>
 
       <div class="pricing-grid">
         <div class="price-card">
@@ -210,6 +217,7 @@
           <ul class="price-list">
             <li>Polished dark mode for the popup</li>
             <li>Custom prepend and append text on every Markdown export</li>
+            <li>Multiple notes per element, each exported as its own bullet under the selector</li>
             <li>Wrap exports with your own AI system prompts, headers, or footers</li>
             <li>All future Premium features included</li>
             <li>License key, no subscription, no recurring charges</li>
@@ -239,7 +247,7 @@
         </div>
         <div class="faq-item">
           <h3>What does it read from the page?</h3>
-          <p>Only when you actively annotate, it computes a stable CSS selector and captures up to 240 characters of the primary element's text. If you add companion elements to the same note, each stores up to 120 characters. It does not read passwords, form values, cookies, or storage.</p>
+          <p>Only when you actively annotate, it computes a stable CSS selector and captures up to 240 characters of the primary element's text. If you add companion elements to the same annotation, each stores up to 120 characters. It does not read passwords, form values, cookies, or storage.</p>
         </div>
         <div class="faq-item">
           <h3>Is Premium a subscription?</h3>

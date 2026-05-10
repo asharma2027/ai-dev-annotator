@@ -42,8 +42,8 @@ browsing history, IP addresses, identifiers, analytics, or telemetry.
 The Extension only reads the DOM of a page when you actively
 annotate. It computes a stable CSS selector for the element you
 click and reads up to 240 characters of that element's `innerText`.
-If you attach extra elements to the same note (modifier + click while
-the edit panel is open), each stores up to 120 characters of text for
+If you attach extra elements to the same annotation (modifier + click
+while the edit panel is open), each stores up to 120 characters of text for
 labeling. It does not read other elements, scripts, or storage on the
 page except as described above.
 
