@@ -18,7 +18,6 @@
       <span>AI Website Dev Annotator</span>
     </a>
     <nav class="nav">
-      <a href="#why">Why</a>
       <a href="#features">Features</a>
       <a href="#how-it-works">How it works</a>
       <a href="#pricing">Pricing</a>
@@ -147,79 +146,6 @@
       <div class="strip-item">
         <strong>Local-first</strong>
         <span>no servers, no analytics</span>
-      </div>
-    </div>
-  </section>
-
-  <section id="why" class="why">
-    <div class="container why-inner">
-      <span class="eyebrow">Why this matters</span>
-      <h2>You pick the model. You pick the moment.</h2>
-      <p class="why-lede">You shouldn&rsquo;t have to be locked into one company&rsquo;s chat UI. Models change. Interfaces get redesigned. Pricing shifts. Whoever wins next quarter wants you inside <em>their</em> sidebar, talking to <em>their</em> agent, on <em>their</em> terms.</p>
-      <p class="why-lede">Your notes shouldn&rsquo;t have to follow. Annotations live on your device as plain text and export as plain Markdown &mdash; paste them into Cursor today, Claude tomorrow, ChatGPT next week, whatever ships next year. The extension is just the bridge between the web and whichever AI you trust this week. Same workflow, any model, no UI gatekeeper.</p>
-      <ul class="why-points">
-        <li><strong>Portable</strong> &mdash; plain Markdown works in every AI tool, today and tomorrow.</li>
-        <li><strong>Local-first</strong> &mdash; your annotations never touch our servers; we don&rsquo;t have any.</li>
-        <li><strong>No lock-in</strong> &mdash; switch AI tools without reformatting, re-exporting, or starting over.</li>
-        <li><strong>No UI tax</strong> &mdash; you control where the context lands, not someone&rsquo;s product team.</li>
-      </ul>
-    </div>
-  </section>
-
-  <section id="features" class="section">
-    <div class="container">
-      <h2>Built for the AI coding workflow</h2>
-      <p class="section-lede">Stop screenshotting. Stop copying CSS selectors by hand. Click elements, type notes, paste a clean payload into your AI agent, ship the PR.</p>
-
-      <div class="feature-grid">
-        <div class="feature-card">
-          <h3>Stable selectors</h3>
-          <p>Every annotation captures tag, ID, classes, XPath, the URL, and a snippet of the clicked element's text, so your AI tool can locate the element without ambiguity.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Unlimited annotations</h3>
-          <p>Annotations are grouped by page URL in the popup. Add as many as you want. Premium users can attach multiple notes to a single annotation (one or more elements).</p>
-        </div>
-        <div class="feature-card">
-          <h3>Multi-element annotations</h3>
-          <p>While the inline edit panel is open, hold your modifier (default Alt) and click other elements to attach them as extra selector context on the same note &mdash; great for &ldquo;align this with that&rdquo; style feedback.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Inline editing</h3>
-          <p>Edit any note directly in the popup. Auto-expanding textboxes save as you type. Per-row delete moves notes to History instead of erasing them.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Export as Markdown</h3>
-          <p>By default, <strong>Copy All</strong> copies a clean Markdown bundle without clearing your list. Right-click the same button for <strong>Cut All</strong> (copy and clear). You can remap both footer buttons in Settings.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Multi-step Undo / Redo</h3>
-          <p>The popup header has &#8624; and &#8625; buttons that walk back through recent storage changes &mdash; restore deleted notes, reverse edits, or roll back a Clear All without leaving the popup.</p>
-        </div>
-        <div class="feature-card">
-          <h3>History &amp; Save for Later</h3>
-          <p>Deleted annotations are kept with timestamps (subject to per-tab history limits in Settings). Right-click <strong>Clear All</strong> to <strong>Save for Later</strong> instead &mdash; stash the current list as a named set you can restore from History.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Copy log</h3>
-          <p>Every export event is logged with a full output preview, so you can see exactly what you sent to your AI agent and re-copy any past payload.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Search the current view</h3>
-          <p>Hit &#8984; or Ctrl + F (or the search icon) to find text in the panel you are looking at: the current annotation list, History, Saved for Later, the Copy Log, or Settings.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Click to navigate</h3>
-          <p>Click a pink selector or a blue URL group to jump straight to the annotated element on the page. The annotation panel opens automatically.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Undo, not confirm</h3>
-          <p>The main <strong>Clear All</strong> action shows a 5 second undo banner instead of a confirmation dialog. Clearing a single URL group still asks once, so you do not wipe part of a page by accident.</p>
-        </div>
-        <div class="feature-card">
-          <h3>Auto backup</h3>
-          <p>Chrome Sync mirror plus a local in-browser snapshot about every 15 minutes. No download prompts. Auto-Backup is on by default; turn it off in Settings to stop syncing to your Google account (data stays on this device; a local snapshot still refreshes for recovery on this install).</p>
-        </div>
       </div>
     </div>
   </section>
@@ -397,6 +323,77 @@
     </div>
   </section>
 
+  <section id="features" class="section">
+    <div class="container">
+      <div class="features-header">
+        <div>
+          <h2>Built for the AI coding workflow</h2>
+          <p class="section-lede">Stop screenshotting. Stop copying CSS selectors by hand. Click elements, type notes, paste a clean payload into your AI agent, ship the PR.</p>
+        </div>
+        <div id="why" class="why-card">
+          <p class="why-card-title">Why plain Markdown?</p>
+          <p class="why-card-body">Pick any model. Switch any time. Notes stay local and export as plain text &mdash; paste into Cursor, Claude, ChatGPT, whatever ships next.</p>
+          <ul class="why-card-list">
+            <li><strong>Portable</strong> &mdash; works in every AI tool</li>
+            <li><strong>Local-first</strong> &mdash; no servers, no telemetry</li>
+            <li><strong>No lock-in</strong> &mdash; switch models without reformatting</li>
+            <li><strong>No UI tax</strong> &mdash; you control where context lands</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <h3>Stable selectors</h3>
+          <p>Every annotation captures tag, ID, classes, XPath, the URL, and a snippet of the clicked element's text, so your AI tool can locate the element without ambiguity.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Unlimited annotations</h3>
+          <p>Annotations are grouped by page URL in the popup. Add as many as you want. Premium users can attach multiple notes to a single annotation (one or more elements).</p>
+        </div>
+        <div class="feature-card">
+          <h3>Multi-element annotations</h3>
+          <p>While the inline edit panel is open, hold your modifier (default Alt) and click other elements to attach them as extra selector context on the same note &mdash; great for &ldquo;align this with that&rdquo; style feedback.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Inline editing</h3>
+          <p>Edit any note directly in the popup. Auto-expanding textboxes save as you type. Per-row delete moves notes to History instead of erasing them.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Export as Markdown</h3>
+          <p>By default, <strong>Copy All</strong> copies a clean Markdown bundle without clearing your list. Right-click the same button for <strong>Cut All</strong> (copy and clear). You can remap both footer buttons in Settings.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Multi-step Undo / Redo</h3>
+          <p>The popup header has &#8624; and &#8625; buttons that walk back through recent storage changes &mdash; restore deleted notes, reverse edits, or roll back a Clear All without leaving the popup.</p>
+        </div>
+        <div class="feature-card">
+          <h3>History &amp; Save for Later</h3>
+          <p>Deleted annotations are kept with timestamps (subject to per-tab history limits in Settings). Right-click <strong>Clear All</strong> to <strong>Save for Later</strong> instead &mdash; stash the current list as a named set you can restore from History.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Copy log</h3>
+          <p>Every export event is logged with a full output preview, so you can see exactly what you sent to your AI agent and re-copy any past payload.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Search the current view</h3>
+          <p>Hit &#8984; or Ctrl + F (or the search icon) to find text in the panel you are looking at: the current annotation list, History, Saved for Later, the Copy Log, or Settings.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Click to navigate</h3>
+          <p>Click a pink selector or a blue URL group to jump straight to the annotated element on the page. The annotation panel opens automatically.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Undo, not confirm</h3>
+          <p>The main <strong>Clear All</strong> action shows a 5 second undo banner instead of a confirmation dialog. Clearing a single URL group still asks once, so you do not wipe part of a page by accident.</p>
+        </div>
+        <div class="feature-card">
+          <h3>Auto backup</h3>
+          <p>Chrome Sync mirror plus a local in-browser snapshot about every 15 minutes. No download prompts. Auto-Backup is on by default; turn it off in Settings to stop syncing to your Google account (data stays on this device; a local snapshot still refreshes for recovery on this install).</p>
+        </div>
+      </div>
+    </div>
+  </section>
   <section id="pricing" class="section">
     <div class="container">
       <h2>Pricing</h2>

@@ -308,71 +308,60 @@ a:hover { color: #fff; }
 .strip-item strong { font-size: 14px; }
 .strip-item span { font-size: 12px; color: var(--muted); }
 
-/* Why this matters */
+/* Features section header with inline why card */
 
-.why {
-  padding: 84px 0;
-  background:
-    radial-gradient(700px 280px at 50% 0%, rgba(78,201,176,0.10), transparent 60%),
-    radial-gradient(600px 240px at 50% 100%, rgba(124,92,255,0.10), transparent 60%),
-    var(--bg);
-  border-bottom: 1px solid var(--border);
-}
-
-.why-inner {
-  max-width: 760px;
-  margin: 0 auto;
-  text-align: center;
-}
-
-.why-inner .eyebrow {
-  margin-bottom: 18px;
-}
-
-.why h2 {
-  font-size: clamp(28px, 3.6vw, 40px);
-  letter-spacing: -0.015em;
-  margin-bottom: 18px;
-}
-
-.why-lede {
-  color: var(--muted);
-  font-size: 17px;
-  line-height: 1.65;
-  max-width: 62ch;
-  margin: 0 auto 16px;
-}
-
-.why-lede em {
-  color: var(--text);
-  font-style: italic;
-}
-
-.why-points {
-  list-style: none;
+.features-header {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-  margin: 28px auto 0;
-  max-width: 720px;
-  text-align: left;
+  grid-template-columns: 1fr 280px;
+  gap: 28px;
+  align-items: start;
+  margin-bottom: 36px;
 }
 
-@media (max-width: 600px) { .why-points { grid-template-columns: 1fr; } }
+.features-header .section-lede { margin-bottom: 0; }
 
-.why-points li {
+@media (max-width: 860px) {
+  .features-header { grid-template-columns: 1fr; }
+}
+
+.why-card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 16px;
-  font-size: 14.5px;
+  padding: 18px 20px;
+}
+
+.why-card-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  margin-bottom: 10px;
+}
+
+.why-card-body {
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin-bottom: 12px;
+}
+
+.why-card-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.why-card-list li {
+  font-size: 13px;
   color: var(--muted);
 }
 
-.why-points li strong {
+.why-card-list li strong {
   color: var(--text);
-  display: inline-block;
-  margin-right: 6px;
+  margin-right: 4px;
 }
 
 /* Sections */
