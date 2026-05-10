@@ -253,7 +253,6 @@ export default {
 
       if (!isPremiumPurchase(session)) {
         // Tip — log and acknowledge
-        console.log('Tip received:', { email, sessionId, amount: session.amount_total });
         return new Response('tip ok', { status: 200 });
       }
 
