@@ -45,6 +45,40 @@ function showContextInvalidatedNotice() {
 let cachedShortcut = { modifier: "alt" };
 /** Matches popup.js DEFAULT_HISTORY_LIMITS.annotations when unset. */
 const DEFAULT_ANNOTATION_HISTORY_LIMIT = 200;
+/**
+ * Cached premium status. Populated from chrome.storage.local['license'].valid
+ * which the popup writes after verifying the Ed25519 signature on every open.
+ * Used to gate the in-page "+ Add note" button (Premium "multiple notes per
+ * element" feature). Soft enforcement only — the popup is the source of
+ * truth for verification.
+ */
+let cachedPremium = false;
+/**
+ * Multi-note helpers (mirror popup.js definitions). The first note lives in
+ * `ann.comment` (back-compat); extras live in `ann.extraComments` (string[]).
+ */
+function getAnnNotes(ann) {
+  if (!ann) return [""];
+  const out = [ann.comment || ""];
+  if (Array.isArray(ann.extraComments)) {
+    for (const c of ann.extraComments) out.push(c == null ? "" : String(c));
+  }
+  return out;
+}
+function getCombinedNoteText(ann) {
+  return getAnnNotes(ann)
+    .map((n) => (n || "").trim())
+    .filter(Boolean)
+    .join(" • ");
+}
+function annHasAnyNote(ann) {
+  if (!ann) return false;
+  if (ann.comment && ann.comment.trim()) return true;
+  return (
+    Array.isArray(ann.extraComments) &&
+    ann.extraComments.some((c) => c && String(c).trim())
+  );
+}
 function modifierKeyLabel(shortcut) {
   const t = String((shortcut && shortcut.modifier) || "alt").toLowerCase();
   return (
@@ -93,12 +127,36 @@ function loadShortcut() {
       return void showContextInvalidatedNotice();
   }
 }
+function loadPremium() {
+  try {
+    chrome.storage.local.get({ license: null }, (r) => {
+      if (
+        chrome.runtime.lastError &&
+        String(chrome.runtime.lastError.message).includes(
+          "Extension context invalidated",
+        )
+      )
+        return void showContextInvalidatedNotice();
+      cachedPremium = !!(r && r.license && r.license.valid);
+      updateAddNoteButtonVisibility();
+    });
+  } catch (e) {
+    if (String(e && e.message).includes("Extension context invalidated"))
+      return void showContextInvalidatedNotice();
+  }
+}
 try {
   chrome.storage.onChanged.addListener((e, t) => {
-    if ("local" === t && e.annotatorSettings) {
+    if ("local" !== t) return;
+    if (e.annotatorSettings) {
       const next = (e.annotatorSettings && e.annotatorSettings.newValue) || {};
       ((cachedShortcut = next.shortcut || { modifier: "alt" }),
         updateContextElementHint());
+    }
+    if (e.license) {
+      const next = e.license.newValue || null;
+      cachedPremium = !!(next && next.valid);
+      updateAddNoteButtonVisibility();
     }
   });
 } catch (e) {}
@@ -106,7 +164,7 @@ function injectStyles() {
   if (document.getElementById(`${ANN}-styles`)) return;
   const e = document.createElement("style");
   ((e.id = `${ANN}-styles`),
-    (e.textContent = `\n    /* Highlighted annotated element */\n    .${ANN}-hl {\n      outline: 2px solid #f59e0b !important;\n      background-color: rgba(253, 230, 138, 0.3) !important;\n      border-radius: 2px;\n    }\n    /* Chip badge rendered in the overlay */\n    .${ANN}-chip {\n      display: inline-flex;\n      align-items: center;\n      cursor: pointer;\n      background: #fbbf24;\n      color: #78350f;\n      font: 700 11px/1 system-ui, sans-serif;\n      padding: 2px 7px;\n      border-radius: 12px;\n      vertical-align: middle;\n      margin: 0 4px;\n      user-select: none;\n      white-space: nowrap;\n      box-shadow: 0 1px 4px rgba(0,0,0,0.18);\n      transition: background 0.12s;\n      position: relative;\n      z-index: 2147483600;\n    }\n    .${ANN}-chip:hover { background: #d97706; color: #fff; }\n    .${ANN}-chip.has-note { background: #f59e0b; }\n\n    /* Page-level annotation chip: fixed position, blue tint */\n    #${ANN}-page-chips {\n      position: fixed;\n      bottom: 16px;\n      right: 16px;\n      z-index: 2147483647;\n      display: flex;\n      flex-direction: column-reverse;\n      gap: 6px;\n      align-items: flex-end;\n      pointer-events: none;\n    }\n    .${ANN}-page-chip {\n      pointer-events: all;\n      background: #3b82f6 !important;\n      color: #fff !important;\n      font-size: 13px !important;\n    }\n    .${ANN}-page-chip:hover { background: #1d4ed8 !important; color: #fff !important; }\n    .${ANN}-page-chip.has-note { background: #2563eb !important; }\n\n    /* Shared editing panel : fixed, appended to body */\n    #${ANN}-panel {\n      position: fixed;\n      width: 272px;\n      background: #fff;\n      border: 1.5px solid #fbbf24;\n      border-radius: 10px;\n      box-shadow: 0 8px 32px rgba(0,0,0,0.18);\n      padding: 12px;\n      z-index: 2147483647;\n      display: none;\n      font-family: system-ui, sans-serif;\n    }\n    #${ANN}-panel-header {\n      display: flex;\n      justify-content: space-between;\n      align-items: center;\n      gap: 4px;\n      margin-bottom: 8px;\n      font: 700 11px system-ui, sans-serif;\n      color: #78350f;\n      letter-spacing: 0.04em;\n      text-transform: uppercase;\n    }\n    .${ANN}-label-copy-btn {\n      flex: 0 0 auto;\n      opacity: 0;\n      pointer-events: none;\n      background: none;\n      border: 1px solid transparent;\n      color: #9ca3af;\n      font-size: 11px;\n      padding: 0 3px;\n      cursor: pointer;\n      border-radius: 4px;\n      line-height: 1;\n      transition: opacity 0.15s, color 0.12s, background 0.12s;\n    }\n    #${ANN}-panel-header:hover .${ANN}-label-copy-btn {\n      opacity: 1;\n      pointer-events: auto;\n    }\n    .${ANN}-label-copy-btn:hover {\n      color: #374151;\n      background: #f3f4f6;\n      border-color: #d1d5db;\n    }\n    #${ANN}-close-btn {\n      background: none;\n      border: none;\n      color: #9ca3af;\n      font-size: 14px;\n      line-height: 1;\n      cursor: pointer;\n      padding: 0 2px;\n    }\n    #${ANN}-close-btn:hover { color: #374151; }\n    #${ANN}-textarea {\n      width: 100%;\n      min-height: 160px;\n      border: 1px solid #d1d5db;\n      border-radius: 6px;\n      padding: 7px 9px;\n      font: 12.5px/1.5 system-ui, sans-serif;\n      resize: vertical;\n      box-sizing: border-box;\n      outline: none;\n      color: #111827;\n    }\n    #${ANN}-textarea:focus {\n      border-color: #f59e0b;\n      box-shadow: 0 0 0 2px rgba(251,191,36,0.25);\n    }\n    #${ANN}-panel-footer {\n      display: flex;\n      justify-content: space-between;\n      align-items: center;\n      margin-top: 7px;\n      gap: 6px;\n    }\n    #${ANN}-save-status {\n      flex: 1;\n      font-size: 10px;\n      color: #9ca3af;\n      font-family: system-ui, sans-serif;\n      text-align: center;\n    }\n    #${ANN}-delete-btn {\n      flex: 0 0 auto;\n      background: none;\n      border: none;\n      color: #ef4444;\n      font: 600 11px system-ui, sans-serif;\n      cursor: pointer;\n      padding: 2px 7px;\n      border-radius: 4px;\n    }\n    #${ANN}-delete-btn:hover { background: #fee2e2; }\n\n    /* Page-level toggle button */\n    #${ANN}-page-btn {\n      flex: 0 0 auto;\n      background: none;\n      border: 1px solid #d1d5db;\n      color: #6b7280;\n      font: 600 11px system-ui, sans-serif;\n      cursor: pointer;\n      padding: 3px 8px;\n      border-radius: 4px;\n      white-space: nowrap;\n      transition: background 0.15s, border-color 0.15s, color 0.15s;\n    }\n    #${ANN}-page-btn:hover {\n      border-color: #f59e0b;\n      color: #92400e;\n      background: #fef3c7;\n    }\n    #${ANN}-page-btn.${ANN}-page-btn--active {\n      background: #dbeafe !important;\n      border-color: #3b82f6 !important;\n      color: #1d4ed8 !important;\n    }\n\n    /* Panel hint */\n    .aiann-panel-hint {\n      font-size: 10px;\n      white-space: nowrap;\n      overflow: hidden;\n      opacity: 0.65;\n      margin-top: 4px;\n      line-height: 1.35;\n      font-family: system-ui, sans-serif;\n      color: #6b7280;\n    }\n  `),
+    (e.textContent = `\n    /* Highlighted annotated element */\n    .${ANN}-hl {\n      outline: 2px solid #f59e0b !important;\n      background-color: rgba(253, 230, 138, 0.3) !important;\n      border-radius: 2px;\n    }\n    /* Chip badge rendered in the overlay */\n    .${ANN}-chip {\n      display: inline-flex;\n      align-items: center;\n      cursor: pointer;\n      background: #fbbf24;\n      color: #78350f;\n      font: 700 11px/1 system-ui, sans-serif;\n      padding: 2px 7px;\n      border-radius: 12px;\n      vertical-align: middle;\n      margin: 0 4px;\n      user-select: none;\n      white-space: nowrap;\n      box-shadow: 0 1px 4px rgba(0,0,0,0.18);\n      transition: background 0.12s;\n      position: relative;\n      z-index: 2147483600;\n    }\n    .${ANN}-chip:hover { background: #d97706; color: #fff; }\n    .${ANN}-chip.has-note { background: #f59e0b; }\n\n    /* Page-level annotation chip: fixed position, blue tint */\n    #${ANN}-page-chips {\n      position: fixed;\n      bottom: 16px;\n      right: 16px;\n      z-index: 2147483647;\n      display: flex;\n      flex-direction: column-reverse;\n      gap: 6px;\n      align-items: flex-end;\n      pointer-events: none;\n    }\n    .${ANN}-page-chip {\n      pointer-events: all;\n      background: #3b82f6 !important;\n      color: #fff !important;\n      font-size: 13px !important;\n    }\n    .${ANN}-page-chip:hover { background: #1d4ed8 !important; color: #fff !important; }\n    .${ANN}-page-chip.has-note { background: #2563eb !important; }\n\n    /* Shared editing panel : fixed, appended to body */\n    #${ANN}-panel {\n      position: fixed;\n      width: 272px;\n      background: #fff;\n      border: 1.5px solid #fbbf24;\n      border-radius: 10px;\n      box-shadow: 0 8px 32px rgba(0,0,0,0.18);\n      padding: 12px;\n      z-index: 2147483647;\n      display: none;\n      font-family: system-ui, sans-serif;\n    }\n    #${ANN}-panel-header {\n      display: flex;\n      justify-content: space-between;\n      align-items: center;\n      gap: 4px;\n      margin-bottom: 8px;\n      font: 700 11px system-ui, sans-serif;\n      color: #78350f;\n      letter-spacing: 0.04em;\n      text-transform: uppercase;\n    }\n    .${ANN}-label-copy-btn {\n      flex: 0 0 auto;\n      opacity: 0;\n      pointer-events: none;\n      background: none;\n      border: 1px solid transparent;\n      color: #9ca3af;\n      font-size: 11px;\n      padding: 0 3px;\n      cursor: pointer;\n      border-radius: 4px;\n      line-height: 1;\n      transition: opacity 0.15s, color 0.12s, background 0.12s;\n    }\n    #${ANN}-panel-header:hover .${ANN}-label-copy-btn {\n      opacity: 1;\n      pointer-events: auto;\n    }\n    .${ANN}-label-copy-btn:hover {\n      color: #374151;\n      background: #f3f4f6;\n      border-color: #d1d5db;\n    }\n    #${ANN}-close-btn {\n      background: none;\n      border: none;\n      color: #9ca3af;\n      font-size: 14px;\n      line-height: 1;\n      cursor: pointer;\n      padding: 0 2px;\n    }\n    #${ANN}-close-btn:hover { color: #374151; }\n    .${ANN}-note {\n      width: 100%;\n      min-height: 160px;\n      border: 1px solid #d1d5db;\n      border-radius: 6px;\n      padding: 7px 9px;\n      font: 12.5px/1.5 system-ui, sans-serif;\n      resize: vertical;\n      box-sizing: border-box;\n      outline: none;\n      color: #111827;\n      display: block;\n    }\n    .${ANN}-note:focus {\n      border-color: #f59e0b;\n      box-shadow: 0 0 0 2px rgba(251,191,36,0.25);\n    }\n    /* Extra notes belong to the same selector — keep them visually grouped */\n    /* but separate enough that a user can tell where one ends and the next begins. */\n    .${ANN}-note--extra {\n      margin-top: 8px;\n      min-height: 60px;\n      border-top: 2px dashed #fbcfe8;\n    }\n    #${ANN}-notes-container {\n      display: block;\n    }\n    #${ANN}-add-note-btn {\n      display: none; /* shown only when premium status is true */\n      margin-top: 6px;\n      width: 100%;\n      background: #fdf2f8;\n      border: 1px dashed #f9a8d4;\n      color: #9d174d;\n      font: 600 11px system-ui, sans-serif;\n      padding: 5px 7px;\n      border-radius: 5px;\n      cursor: pointer;\n      transition: background 0.12s, border-color 0.12s, color 0.12s;\n    }\n    #${ANN}-add-note-btn:hover:not(:disabled) {\n      background: #fce7f3;\n      border-color: #db2777;\n      color: #831843;\n    }\n    #${ANN}-add-note-btn:disabled {\n      opacity: 0.5;\n      cursor: not-allowed;\n    }\n    #${ANN}-panel-footer {\n      display: flex;\n      justify-content: space-between;\n      align-items: center;\n      margin-top: 7px;\n      gap: 6px;\n    }\n    #${ANN}-save-status {\n      flex: 1;\n      font-size: 10px;\n      color: #9ca3af;\n      font-family: system-ui, sans-serif;\n      text-align: center;\n    }\n    #${ANN}-delete-btn {\n      flex: 0 0 auto;\n      background: none;\n      border: none;\n      color: #ef4444;\n      font: 600 11px system-ui, sans-serif;\n      cursor: pointer;\n      padding: 2px 7px;\n      border-radius: 4px;\n    }\n    #${ANN}-delete-btn:hover { background: #fee2e2; }\n\n    /* Page-level toggle button */\n    #${ANN}-page-btn {\n      flex: 0 0 auto;\n      background: none;\n      border: 1px solid #d1d5db;\n      color: #6b7280;\n      font: 600 11px system-ui, sans-serif;\n      cursor: pointer;\n      padding: 3px 8px;\n      border-radius: 4px;\n      white-space: nowrap;\n      transition: background 0.15s, border-color 0.15s, color 0.15s;\n    }\n    #${ANN}-page-btn:hover {\n      border-color: #f59e0b;\n      color: #92400e;\n      background: #fef3c7;\n    }\n    #${ANN}-page-btn.${ANN}-page-btn--active {\n      background: #dbeafe !important;\n      border-color: #3b82f6 !important;\n      color: #1d4ed8 !important;\n    }\n\n    /* Panel hint */\n    .aiann-panel-hint {\n      font-size: 10px;\n      white-space: nowrap;\n      overflow: hidden;\n      opacity: 0.65;\n      margin-top: 4px;\n      line-height: 1.35;\n      font-family: system-ui, sans-serif;\n      color: #6b7280;\n    }\n  `),
     document.head.appendChild(e));
 }
 function getXPath(e) {
@@ -144,6 +202,7 @@ function resolveXPath(e) {
   }
 }
 loadShortcut();
+loadPremium();
 const STORE_KEY = "annotations",
   HISTORY_KEY = "annotationHistory";
 function getAll(e) {
@@ -211,8 +270,23 @@ function enforceHistoryLimit() {
 const __aiann_pageKey = window.location.origin + window.location.pathname;
 let activeChip = null,
   activeAnnId = null,
+  /**
+   * Legacy single-timer alias kept around for code paths that still call
+   * `clearTimeout(saveTimer)` (e.g. closePanel). Modern per-textarea timers
+   * live in `__aiann_saveTimers` keyed by `${annId}::${noteIdx}` so concurrent
+   * edits to the primary note + Premium extras don't clobber each other.
+   */
   saveTimer = null,
   originalAnnData = null;
+const __aiann_saveTimers = {};
+function __aiann_clearAllSaveTimersFor(annId) {
+  Object.keys(__aiann_saveTimers).forEach((k) => {
+    if (k.startsWith(annId + "::")) {
+      clearTimeout(__aiann_saveTimers[k]);
+      delete __aiann_saveTimers[k];
+    }
+  });
+}
 function getAnnSelector(e) {
   if (!e) return "(unknown)";
   if (e.pageLevel || "page" === e.tag) return "(whole page)";
@@ -255,16 +329,56 @@ function buildPanel() {
   const e = document.createElement("div");
   return (
     (e.id = `${ANN}-panel`),
-    (e.innerHTML = `\n    <div id="${ANN}-panel-header">\n      <span id="${ANN}-element-label" title="Click to open in popup" style="cursor:pointer;color:#db2777;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">...</span>\n      <span id="${ANN}-page-label" title="Page annotation" style="display:none;color:#2563eb;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;"></span>\n      <button class="${ANN}-label-copy-btn" title="Copy selector(s) to clipboard">📋</button>\n      <button id="${ANN}-close-btn" title="Close">✕</button>\n    </div>\n    <textarea id="${ANN}-textarea"></textarea>\n    <div class="aiann-panel-hint">Empty notes auto-discarded. Esc to save &amp; close</div>\n    <div id="${ANN}-context-hint" style="font-size:9px;opacity:0.5;margin-top:2px;font-family:system-ui,sans-serif;color:#6b7280;"></div>\n    <div id="${ANN}-panel-footer">\n      <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Page Note</button>\n      <span id="${ANN}-save-status"></span>\n      <button id="${ANN}-delete-btn">🗑 Delete</button>\n    </div>`),
+    (e.innerHTML = `\n    <div id="${ANN}-panel-header">\n      <span id="${ANN}-element-label" title="Click to open in popup" style="cursor:pointer;color:#db2777;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">...</span>\n      <span id="${ANN}-page-label" title="Page annotation" style="display:none;color:#2563eb;font-family:'Menlo','Consolas',monospace;font-size:11px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;"></span>\n      <button class="${ANN}-label-copy-btn" title="Copy selector(s) to clipboard">📋</button>\n      <button id="${ANN}-close-btn" title="Close">✕</button>\n    </div>\n    <div id="${ANN}-notes-container"></div>\n    <button id="${ANN}-add-note-btn" type="button" title="Add another note for this element">+ Add another note</button>\n    <div class="aiann-panel-hint">Empty notes auto-discarded. Esc to save &amp; close</div>\n    <div id="${ANN}-context-hint" style="font-size:9px;opacity:0.5;margin-top:2px;font-family:system-ui,sans-serif;color:#6b7280;"></div>\n    <div id="${ANN}-panel-footer">\n      <button id="${ANN}-page-btn" title="Mark as whole-page annotation (not element-specific)">🌐 Page Note</button>\n      <span id="${ANN}-save-status"></span>\n      <button id="${ANN}-delete-btn">🗑 Delete</button>\n    </div>`),
     document.body.appendChild(e),
-    e.querySelector(`#${ANN}-textarea`).addEventListener("input", (e) => {
-      (setSaveStatus("Saving…"),
-        clearTimeout(saveTimer),
-        (saveTimer = setTimeout(
-          () => persistNote(activeAnnId, e.target.value),
-          400,
-        )));
-    }),
+    // Delegated input/blur on the notes container so it works for any
+    // textarea — the primary one and any Premium "+ Add note" extras alike.
+    e
+      .querySelector(`#${ANN}-notes-container`)
+      .addEventListener("input", (ev) => {
+        const ta = ev.target;
+        if (!ta || !ta.classList || !ta.classList.contains(`${ANN}-note`))
+          return;
+        const idx = parseInt(ta.dataset.noteIdx, 10) || 0;
+        setSaveStatus("Saving…");
+        // Per-(annId, idx) debounce so editing the primary note doesn't
+        // cancel a pending save for an extra (and vice versa).
+        const annId = activeAnnId;
+        if (!annId) return;
+        const key = `${annId}::${idx}`;
+        clearTimeout(__aiann_saveTimers[key]);
+        __aiann_saveTimers[key] = setTimeout(() => {
+          delete __aiann_saveTimers[key];
+          persistNote(annId, ta.value, idx);
+        }, 400);
+        updateAddNoteButtonVisibility();
+      }),
+    e
+      .querySelector(`#${ANN}-notes-container`)
+      .addEventListener(
+        "blur",
+        (ev) => {
+          const ta = ev.target;
+          if (!ta || !ta.classList || !ta.classList.contains(`${ANN}-note`))
+            return;
+          const idx = parseInt(ta.dataset.noteIdx, 10) || 0;
+          // Auto-prune empty extras on blur so the panel doesn't accumulate
+          // empty stacks. The primary note (idx 0) is left alone — the
+          // "all-empty → delete" check happens in closePanel.
+          if (idx > 0 && !ta.value.trim()) {
+            pruneEmptyExtrasInPanel(activeAnnId);
+          }
+        },
+        true,
+      ),
+    e
+      .querySelector(`#${ANN}-add-note-btn`)
+      .addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (!cachedPremium) return; // soft enforcement
+        panelAddNote(activeAnnId);
+      }),
     e
       .querySelector(`#${ANN}-delete-btn`)
       .addEventListener("click", () => deleteAnnotation(activeAnnId)),
@@ -290,7 +404,7 @@ function buildPanel() {
                     `#${ANN}-page-chips .${ANN}-chip[data-ann-id="${t.id}"]`,
                   );
                   (n && n.remove(),
-                    injectChip(e, t.id, t.comment || ""),
+                    injectChip(e, t.id, getCombinedNoteText(t)),
                     (activeChip = __aiann_chipMap.get(t.id) || null));
                 }
               }
@@ -310,7 +424,7 @@ function buildPanel() {
               (n &&
                 !n.closest(`#${ANN}-page-chips`) &&
                 (removeChip(t.id),
-                injectPageChip(t.id, t.comment || ""),
+                injectPageChip(t.id, getCombinedNoteText(t)),
                 (activeChip = document.querySelector(
                   `#${ANN}-page-chips .${ANN}-chip[data-ann-id="${t.id}"]`,
                 ))),
@@ -415,11 +529,173 @@ function renderContextChips(e, t) {
           o.appendChild(a));
       }));
 }
+/**
+ * Render N textareas (one per saved note) into the panel's notes container.
+ * Used both when openPanel() runs and after auto-prune mutations re-shape
+ * `extraComments`. Always preserves the per-textarea data-note-idx so the
+ * saveTimer / persistNote routing stays correct.
+ */
+function renderNotesIntoContainer(ann) {
+  const container = document.getElementById(`${ANN}-notes-container`);
+  if (!container) return;
+  const notes = getAnnNotes(ann);
+  container.innerHTML = "";
+  notes.forEach((n, idx) => {
+    const ta = document.createElement("textarea");
+    ta.className = `${ANN}-note${idx > 0 ? " " + ANN + "-note--extra" : ""}`;
+    ta.dataset.noteIdx = String(idx);
+    ta.placeholder = idx === 0 ? "" : "Add another note…";
+    ta.value = n;
+    container.appendChild(ta);
+  });
+  updateAddNoteButtonVisibility();
+}
+
+/**
+ * Show / hide and enable / disable the "+ Add another note" button based on
+ * the current cachedPremium status and the contents of the LAST textarea
+ * (so users can't pile up empty stacks).
+ */
+function updateAddNoteButtonVisibility() {
+  const btn = document.getElementById(`${ANN}-add-note-btn`);
+  if (!btn) return;
+  if (!cachedPremium) {
+    btn.style.display = "none";
+    return;
+  }
+  btn.style.display = "block";
+  const tas = document.querySelectorAll(
+    `#${ANN}-notes-container .${ANN}-note`,
+  );
+  const last = tas[tas.length - 1];
+  const enabled = !last || !!last.value.trim();
+  btn.disabled = !enabled;
+  btn.title = enabled
+    ? "Add another note for this element"
+    : "Fill the current note first";
+}
+
+/**
+ * Append a fresh empty extra to `extraComments` and re-render the notes
+ * container so the new textarea appears (auto-focused). Premium-only.
+ *
+ * Snapshots in-flight DOM textarea values BEFORE re-rendering so a quick
+ * type-then-click-Add sequence never loses the just-typed text (the
+ * debounced save may not have fired yet).
+ */
+function panelAddNote(annId) {
+  if (!annId || activeAnnId !== annId) return;
+  // 1. Snapshot every textarea's current value — these are the source of
+  //    truth (more recent than what's in storage).
+  const liveTas = Array.from(
+    document.querySelectorAll(`#${ANN}-notes-container .${ANN}-note`),
+  );
+  const liveValues = liveTas.map((ta) => ta.value || "");
+  // 2. Cancel pending debounced saves for this annotation; we'll persist
+  //    everything atomically below.
+  __aiann_clearAllSaveTimersFor(annId);
+  getAll((anns) => {
+    const ann = anns.find((a) => a.id === annId);
+    if (!ann) return;
+    // 3. Apply the in-flight values onto the stored annotation so the
+    //    re-render shows what the user actually typed.
+    if (liveValues.length > 0) {
+      ann.comment = liveValues[0] || "";
+      const extras = liveValues.slice(1);
+      if (extras.length > 0) ann.extraComments = extras;
+      else delete ann.extraComments;
+    }
+    if (!Array.isArray(ann.extraComments)) ann.extraComments = [];
+    let targetIdx;
+    const lastIdx = ann.extraComments.length - 1;
+    if (lastIdx >= 0 && !String(ann.extraComments[lastIdx] || "").trim()) {
+      targetIdx = lastIdx + 1;
+    } else {
+      ann.extraComments.push("");
+      targetIdx = ann.extraComments.length;
+    }
+    setAll(anns, () => {
+      renderNotesIntoContainer(ann);
+      const sel = `#${ANN}-notes-container .${ANN}-note[data-note-idx="${targetIdx}"]`;
+      const target = document.querySelector(sel);
+      if (target) target.focus();
+      // Update the chip too (combined-note may have changed by overlaying
+      // the in-flight values).
+      const chip = document.querySelector(
+        `.${ANN}-chip[data-ann-id="${annId}"]`,
+      );
+      if (chip) {
+        const combined = getCombinedNoteText(ann);
+        chip.title = combined ? combined.slice(0, 80) : "(no note)";
+        chip.classList.toggle("has-note", !!combined);
+      }
+    });
+  });
+}
+
+/**
+ * Drop empty/whitespace-only entries from extraComments and re-render the
+ * notes container. Called from blur of an empty extra. Safe to call when no
+ * pruning is needed (no-op).
+ *
+ * Captures in-flight DOM values from sibling textareas first so the
+ * just-blurred empty extra doesn't accidentally roll back a half-typed
+ * primary note that hadn't hit the debounce yet.
+ */
+function pruneEmptyExtrasInPanel(annId) {
+  if (!annId || activeAnnId !== annId) return;
+  // Snapshot live DOM values + cancel pending debounced saves so we don't
+  // lose anything when we re-render.
+  const liveTas = Array.from(
+    document.querySelectorAll(`#${ANN}-notes-container .${ANN}-note`),
+  );
+  const liveValues = liveTas.map((ta) => ta.value || "");
+  __aiann_clearAllSaveTimersFor(annId);
+  getAll((anns) => {
+    const ann = anns.find((a) => a.id === annId);
+    if (!ann) return;
+    // Apply live values first so the prune operates on the freshest data.
+    if (liveValues.length > 0) {
+      ann.comment = liveValues[0] || "";
+      const extras = liveValues.slice(1);
+      if (extras.length > 0) ann.extraComments = extras;
+      else delete ann.extraComments;
+    }
+    if (!Array.isArray(ann.extraComments)) {
+      updateAddNoteButtonVisibility();
+      // Still might need to write the primary if it changed.
+      setAll(anns);
+      return;
+    }
+    const before = ann.extraComments.length;
+    ann.extraComments = ann.extraComments.filter(
+      (c) => c && String(c).trim(),
+    );
+    if (ann.extraComments.length === 0) delete ann.extraComments;
+    setAll(anns, () => {
+      // Only re-render if the visible textarea count actually changed.
+      const after = Array.isArray(ann.extraComments)
+        ? ann.extraComments.length
+        : 0;
+      if (after !== before) renderNotesIntoContainer(ann);
+      else updateAddNoteButtonVisibility();
+      // Reflect the (possibly) shorter combined note on the chip.
+      const chip = document.querySelector(
+        `.${ANN}-chip[data-ann-id="${ann.id}"]`,
+      );
+      if (chip) {
+        const combined = getCombinedNoteText(ann);
+        chip.title = combined ? combined.slice(0, 80) : "(no note)";
+        chip.classList.toggle("has-note", !!combined);
+      }
+    });
+  });
+}
+
 function openPanel(e, t) {
   (activeAnnId && activeAnnId !== t && closePanel(),
     getAll((n) => {
-      const o = n.find((e) => e.id === t),
-        a = (o && o.comment) || "";
+      const o = n.find((e) => e.id === t);
       o &&
         !o.pageLevel &&
         (originalAnnData = {
@@ -430,8 +706,9 @@ function openPanel(e, t) {
         });
       const i = getPanel();
       (positionPanel(i, e), (i.style.display = "block"));
-      const s = i.querySelector(`#${ANN}-textarea`);
-      ((s.value = a), s.removeAttribute("placeholder"), setSaveStatus(""));
+      // Render every note (primary + Premium extras) into the container.
+      renderNotesIntoContainer(o || {});
+      setSaveStatus("");
       const l = i.querySelector(`#${ANN}-element-label`);
       l && o && ((l.dataset.annId = t), updatePanelLabel(o));
       const r = i.querySelector(`#${ANN}-page-btn`);
@@ -444,8 +721,13 @@ function openPanel(e, t) {
       }
       (updateContextElementHint(),
         (activeChip = e),
-        (activeAnnId = t),
-        s.focus());
+        (activeAnnId = t));
+      // Focus the first textarea so the existing UX (panel opens → start
+      // typing immediately) is preserved.
+      const firstTa = i.querySelector(
+        `#${ANN}-notes-container .${ANN}-note[data-note-idx="0"]`,
+      );
+      if (firstTa) firstTa.focus();
     }));
 }
 function positionPanel(e, t) {
@@ -459,55 +741,101 @@ function positionPanel(e, t) {
 }
 function closePanel() {
   const e = activeAnnId,
-    t = document.getElementById(`${ANN}-panel`),
-    n = t ? t.querySelector(`#${ANN}-textarea`) : null,
-    o = n ? n.value : "",
-    a = !o || !o.trim();
+    t = document.getElementById(`${ANN}-panel`);
+  // Snapshot every textarea's current value (primary + Premium extras) so the
+  // close path can either save them all or — if every one is empty — drop
+  // the annotation entirely (preserves the original "blank → discarded" UX).
+  const tas = t
+    ? Array.from(
+        t.querySelectorAll(`#${ANN}-notes-container .${ANN}-note`),
+      )
+    : [];
+  const values = tas.map((ta) => ta.value || "");
+  const allEmpty = values.every((v) => !v || !v.trim());
   (t && (t.style.display = "none"),
     (activeChip = null),
     (activeAnnId = null),
     e &&
       (clearTimeout(saveTimer),
+      __aiann_clearAllSaveTimersFor(e),
       getAll((t) => {
         const n = t.find((t) => t.id === e);
         if (n)
-          if (a) {
+          if (allEmpty) {
+            // Whole annotation has no text in any note → discard it (and
+            // any chip / highlight that goes with it).
             if ((removeChip(e), !n.pageLevel)) {
               const e = resolveXPath(n.xpath);
               e && e.classList.remove(`${ANN}-hl`);
             }
             setAll(t.filter((t) => t.id !== e));
-          } else
-            n.comment !== o &&
-              ((n.comment = o),
+          } else {
+            // Save primary + extras (filtering empty extras as we go so the
+            // panel re-opens with a clean stack next time).
+            const newPrimary = values[0] || "";
+            const newExtras = values.slice(1).filter((v) => v && v.trim());
+            const oldExtras = Array.isArray(n.extraComments)
+              ? n.extraComments
+              : [];
+            const sameExtras =
+              newExtras.length === oldExtras.length &&
+              newExtras.every((v, i) => v === oldExtras[i]);
+            const samePrimary = (n.comment || "") === newPrimary;
+            if (!samePrimary || !sameExtras) {
+              n.comment = newPrimary;
+              if (newExtras.length === 0) delete n.extraComments;
+              else n.extraComments = newExtras;
               setAll(t, () => {
-                const t = document.querySelector(
+                const chip = document.querySelector(
                   `.${ANN}-chip[data-ann-id="${e}"]`,
                 );
-                t &&
-                  ((t.title = o.trim().slice(0, 80)),
-                  t.classList.toggle("has-note", !0));
-              }));
+                if (chip) {
+                  const combined = getCombinedNoteText(n);
+                  chip.title = combined ? combined.slice(0, 80) : "(no note)";
+                  chip.classList.toggle("has-note", !!combined);
+                }
+              });
+            }
+          }
       })));
 }
 function setSaveStatus(e) {
   const t = document.getElementById(`${ANN}-save-status`);
   t && (t.textContent = e);
 }
-function persistNote(e, t) {
-  e &&
-    getAll((n) => {
-      const o = n.find((t) => t.id === e);
-      o &&
-        ((o.comment = t),
-        setAll(n, () => {
-          setSaveStatus("Saved ✓");
-          const n = document.querySelector(`.${ANN}-chip[data-ann-id="${e}"]`);
-          n &&
-            ((n.title = t.trim() ? t.trim().slice(0, 80) : "(no note)"),
-            n.classList.toggle("has-note", !!t.trim()));
-        }));
+/**
+ * Persist a single textarea's content. noteIdx 0 → ann.comment (back-compat
+ * with all existing data); noteIdx >= 1 → ann.extraComments[idx-1] (the
+ * Premium "multiple notes per element" feature). Updates the chip's tooltip
+ * + has-note state to reflect the *combined* note text so the chip stays
+ * accurate when extras carry the only content.
+ */
+function persistNote(annId, value, noteIdx) {
+  if (!annId) return;
+  const idx = parseInt(noteIdx, 10) || 0;
+  getAll((anns) => {
+    const ann = anns.find((a) => a.id === annId);
+    if (!ann) return;
+    if (idx === 0) {
+      ann.comment = value;
+    } else {
+      if (!Array.isArray(ann.extraComments)) ann.extraComments = [];
+      const arrIdx = idx - 1;
+      while (ann.extraComments.length <= arrIdx) ann.extraComments.push("");
+      ann.extraComments[arrIdx] = value;
+    }
+    setAll(anns, () => {
+      setSaveStatus("Saved ✓");
+      const chip = document.querySelector(
+        `.${ANN}-chip[data-ann-id="${annId}"]`,
+      );
+      if (chip) {
+        const combined = getCombinedNoteText(ann);
+        chip.title = combined ? combined.slice(0, 80) : "(no note)";
+        chip.classList.toggle("has-note", !!combined);
+      }
     });
+  });
 }
 function deleteAnnotation(e) {
   if (!e) return;
@@ -756,11 +1084,14 @@ function restoreAnnotations() {
         }
       })
       .forEach((e) => {
+        // Use combined-note text so chips show ALL note content (primary +
+        // Premium extras) in their tooltip / has-note state from the start.
+        const combined = getCombinedNoteText(e);
         if (e.pageLevel || "page" === e.tag)
-          injectPageChip(e.id, e.comment || "");
+          injectPageChip(e.id, combined);
         else {
           const t = resolveXPath(e.xpath);
-          t && injectChip(t, e.id, e.comment);
+          t && injectChip(t, e.id, combined);
         }
       }),
       consumeNavIntent());
@@ -953,11 +1284,12 @@ try {
     if ("restoreAnnotation" === e.type) {
       const t = e.ann;
       if (!t) return;
+      const combined = getCombinedNoteText(t);
       if (t.pageLevel || "page" === t.tag)
-        injectPageChip(t.id, t.comment || "");
+        injectPageChip(t.id, combined);
       else if (t.xpath) {
         const e = resolveXPath(t.xpath);
-        e && injectChip(e, t.id, t.comment || "");
+        e && injectChip(e, t.id, combined);
       }
     }
     if ("focusAnnotation" === e.type) {

@@ -433,6 +433,63 @@ body {
 }
 .item-note-edit::placeholder { color: var(--text-muted); font-style: italic; }
 
+/* ── Multi-note (Premium "Multiple notes per element") ────────────────────── */
+/* All notes for one annotation live inside .item-notes so they visibly belong
+   to the same selector. Extras get a thin pink top border + small gap so the
+   user can tell where one ends and the next begins, but the border colour
+   matches the pink selector chip — anchoring the group visually to its
+   element label. */
+.item-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.item-note-edit--extra {
+  margin-top: 6px;
+  border-top: 2px dashed #fbcfe8; /* same pink family as the selector chips */
+}
+[data-theme="dark"] .item-note-edit--extra {
+  border-top-color: #831843;
+}
+.item--multi-note > .item-sel > code.ann-code--clickable {
+  /* When more than one note is attached, give the selector a subtle accent
+     so users scanning the list can immediately spot multi-note items. */
+  box-shadow: inset 0 -2px 0 #fbcfe8;
+}
+[data-theme="dark"] .item--multi-note > .item-sel > code.ann-code--clickable {
+  box-shadow: inset 0 -2px 0 #831843;
+}
+.item-add-note-btn {
+  margin-top: 6px;
+  width: 100%;
+  background: transparent;
+  border: 1px dashed #f9a8d4;
+  color: #9d174d;
+  font: 600 11px system-ui, -apple-system, sans-serif;
+  padding: 4px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.item-add-note-btn:hover:not(:disabled) {
+  background: #fdf2f8;
+  border-color: #db2777;
+  color: #831843;
+}
+.item-add-note-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+[data-theme="dark"] .item-add-note-btn {
+  border-color: #831843;
+  color: #f9a8d4;
+}
+[data-theme="dark"] .item-add-note-btn:hover:not(:disabled) {
+  background: rgba(157, 23, 77, 0.18);
+  border-color: #db2777;
+  color: #fbcfe8;
+}
+
 code {
   background: var(--code-bg);
   padding: 1px 5px;

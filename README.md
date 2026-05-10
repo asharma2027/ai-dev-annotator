@@ -46,6 +46,7 @@ Typical flow:
 ### Premium : $9.99 one-time
 - 🌙 **Dark mode** : a polished dark theme for the popup
 - 📝 **Custom prepend & append text** : automatically wrap every Markdown export with your own headers, footers, or AI system prompts
+- 🗒️ **Multiple notes per element** : attach more than one note to the same element (each renders as its own bullet under the element selector in Markdown output)
 - 🚀 **All future premium features**
 
 [**→ Get Premium ($9.99 one-time)**](https://buy.stripe.com/6oU9AS4Kjc9h6x1bxocfK01)

@@ -370,6 +370,8 @@ document.addEventListener('DOMContentLoaded', () => {
     id: 'i', url: 'u', tag: 'g', elId: 'e', classes: 'c',
     xpath: 'x', comment: 't', timestamp: 's', pageLevel: 'p', deletedAt: 'd',
     text: 'tx',
+    // Premium "multiple notes per element" feature: extras live in a string[].
+    extraComments: 'et',
   };
   const ANN_LONG_KEYS = Object.fromEntries(
     Object.entries(ANN_SHORT_KEYS).map(([l, s]) => [s, l])
@@ -379,6 +381,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const out = {};
     for (const [k, v] of Object.entries(ann)) {
       if (v === null || v === undefined || v === '') continue;
+      // Skip empty arrays (e.g. extraComments [], contextElements []) so we
+      // don't waste sync bytes on metadata-free fields.
+      if (Array.isArray(v) && v.length === 0) continue;
       const sk = ANN_SHORT_KEYS[k] || k;
       out[sk] = v;
     }
@@ -466,18 +471,61 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
+  // ── Multi-note helpers ─────────────────────────────────────────────────
+  // Premium users can attach more than one note to a single annotation. The
+  // first note lives in `ann.comment` (back-compat with all existing data);
+  // any extras live in `ann.extraComments` (string[]). Free users only ever
+  // see/edit `ann.comment`, but if a user downgrades from premium their
+  // existing extras stay readable so no data is silently lost.
+
+  // Return [primary, ...extras] without trimming. Always at least one entry.
+  function getAnnNotes(ann) {
+    if (!ann) return [''];
+    const out = [ann.comment || ''];
+    if (Array.isArray(ann.extraComments)) {
+      for (const c of ann.extraComments) out.push(c == null ? '' : String(c));
+    }
+    return out;
+  }
+
+  // True when the annotation has any non-whitespace note (primary OR extras).
+  function hasAnyNote(ann) {
+    if (!ann) return false;
+    if (ann.comment && ann.comment.trim()) return true;
+    return Array.isArray(ann.extraComments)
+      && ann.extraComments.some(c => c && String(c).trim());
+  }
+
+  // For chip tooltips, history previews, etc.: a single string combining
+  // every note. Empty notes are skipped; multiple notes are joined with " • ".
+  function getCombinedNoteText(ann) {
+    return getAnnNotes(ann)
+      .map(n => (n || '').trim())
+      .filter(Boolean)
+      .join(' • ');
+  }
+
   // ── Markdown formatting ────────────────────────────────────────────────
   // Used by copy-all, cut-all, copy-by-url, and export flows.
   function formatLine(index, ann) {
     const sel  = getSelector(ann);   // uses existing getSelector helper
-    const note = (ann.comment || '').trim();
     const text = (ann.text    || '').trim();
     const url  = (ann.url     || '').trim();
     const ts   = ann.timestamp ? new Date(ann.timestamp).toISOString() : '';
 
     // Escape pipes and backticks for inline code spans.
-    const safeSel   = sel.replace(/`/g, '\\`');
-    const noteBlock = note ? `\n   - ${note.replace(/\n/g, '\n     ')}` : '';
+    const safeSel = sel.replace(/`/g, '\\`');
+
+    // Each non-empty note (primary + extras) becomes its own bullet under the
+    // selector — never repeats the element context. This is the visible
+    // contract for the Premium "multiple notes per element" feature.
+    const notes = getAnnNotes(ann)
+      .map(n => (n || '').trim())
+      .filter(Boolean);
+    const noteBlock = notes
+      .map(n => `\n   - ${n.replace(/\n/g, '\n     ')}`)
+      .join('');
+
     const textBlock = text ? `\n   - _"${text.replace(/\n/g, ' ').slice(0, 240)}"_` : '';
     const urlBlock  = url  ? `\n   - ${url}` : '';
     const tsBlock   = ts   ? `\n   - ${ts}` : '';
@@ -1046,17 +1094,30 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Save a single annotation's comment ────────────────────────────────────
+  // ── Save a single annotation's note (primary or extra) ───────────────────
+  // For the Premium "multiple notes per element" feature: noteIdx 0 maps to
+  // ann.comment (back-compat); noteIdx >= 1 maps to ann.extraComments[idx-1].
+  // We key the debounce timer per (annId, noteIdx) so concurrent edits to
+  // different notes on the same annotation don't clobber each other.
   const saveTimers = {};
-  function saveComment(annId, value) {
-    clearTimeout(saveTimers[annId]);
-    saveTimers[annId] = setTimeout(() => {
+  function saveComment(annId, value, noteIdx) {
+    const idx = parseInt(noteIdx, 10) || 0;
+    const key = `${annId}::${idx}`;
+    clearTimeout(saveTimers[key]);
+    saveTimers[key] = setTimeout(() => {
       isWritingFromPopup = true;
       chrome.storage.local.get({ annotations: [] }, r => {
         const anns = r.annotations;
         const ann  = anns.find(a => a.id === annId);
         if (ann) {
-          ann.comment = value;
+          if (idx === 0) {
+            ann.comment = value;
+          } else {
+            if (!Array.isArray(ann.extraComments)) ann.extraComments = [];
+            const arrIdx = idx - 1;
+            while (ann.extraComments.length <= arrIdx) ann.extraComments.push('');
+            ann.extraComments[arrIdx] = value;
+          }
           chrome.storage.local.set({ annotations: anns }, () => { isWritingFromPopup = false; });
         } else {
           isWritingFromPopup = false;
@@ -1064,6 +1125,147 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }, 350);
   }
+
+  // Atomically commit a textarea's value and (optionally) prune an empty
+  // extra note. Returns a Promise so blur handlers can chain side-effects.
+  // Used both by the snapshot-blur ungroup flow and by the empty-extra
+  // auto-prune flow so we never end up with double writes that race.
+  //
+  // To avoid races with sibling textareas that have pending debounced saves,
+  // we snapshot EVERY textarea's live DOM value for this annotation and
+  // overlay them into the write — and we cancel every saveTimer for this
+  // annotation. That way no later write can clobber the just-typed values.
+  function commitNoteOnBlur(annId, noteIdx, value, opts = {}) {
+    const idx        = parseInt(noteIdx, 10) || 0;
+    const removeSnap = !!opts.removeFromSnapshots;
+    const pruneIfEmpty = idx > 0 && !value.trim();
+    const wantsNewSnaps = removeSnap;
+    // 1. Capture every sibling textarea's value for this annotation BEFORE
+    //    the storage round-trip so concurrent debounced saves can't undo
+    //    typed-but-not-saved edits in other notes.
+    const safeId = annId.replace(/"/g, '\\"');
+    const sample = listEl.querySelector(`.item-note-edit[data-ann-id="${safeId}"]`);
+    const item   = sample ? sample.closest('.item') : null;
+    const liveTas = item ? Array.from(item.querySelectorAll('.item-note-edit')) : [];
+    const liveValues = liveTas.length > 0
+      ? liveTas.map(t => t.value || '')
+      : null;
+    // 2. Cancel ALL pending debounced saves for this annotation so they
+    //    can't fire after our atomic write and clobber the freshest data.
+    Object.keys(saveTimers).forEach(k => {
+      if (k.startsWith(annId + '::')) {
+        clearTimeout(saveTimers[k]);
+        delete saveTimers[k];
+      }
+    });
+    return new Promise(resolve => {
+      isWritingFromPopup = true;
+      const reads = { annotations: [] };
+      if (wantsNewSnaps) reads[COPY_ALL_SNAPSHOTS_KEY] = [];
+      chrome.storage.local.get(reads, r => {
+        const anns = r.annotations.slice();
+        const ann  = anns.find(a => a.id === annId);
+        const toStore = {};
+        if (ann) {
+          // Apply live DOM values first (covers all notes atomically).
+          if (liveValues) {
+            ann.comment = liveValues[0] || '';
+            const extras = liveValues.slice(1);
+            if (extras.length > 0) ann.extraComments = extras;
+            else delete ann.extraComments;
+          }
+          // Then apply this textarea's authoritative value (in case
+          // liveValues missed it — e.g. element already detached).
+          if (idx === 0) {
+            ann.comment = value;
+          } else {
+            if (!Array.isArray(ann.extraComments)) ann.extraComments = [];
+            const arrIdx = idx - 1;
+            while (ann.extraComments.length <= arrIdx) ann.extraComments.push('');
+            ann.extraComments[arrIdx] = value;
+            if (pruneIfEmpty) {
+              ann.extraComments.splice(arrIdx, 1);
+              if (ann.extraComments.length === 0) delete ann.extraComments;
+            }
+          }
+          toStore.annotations = anns;
+        }
+        if (wantsNewSnaps) {
+          const snaps = r[COPY_ALL_SNAPSHOTS_KEY] || [];
+          const newSnaps = snaps
+            .map(s => ({ ...s, annotationIds: (s.annotationIds || []).filter(id => id !== annId) }))
+            .filter(s => (s.annotationIds || []).length > 0);
+          toStore[COPY_ALL_SNAPSHOTS_KEY] = newSnaps;
+        }
+        if (Object.keys(toStore).length === 0) {
+          isWritingFromPopup = false;
+          resolve(false);
+          return;
+        }
+        chrome.storage.local.set(toStore, () => {
+          isWritingFromPopup = false;
+          resolve(true);
+        });
+      });
+    });
+  }
+
+  // Append a new empty extra note slot to an annotation and re-render so the
+  // popup grows a new textarea (auto-focused). Premium-only — callers should
+  // gate with isPremium() before invoking.
+  //
+  // Carefully folds in any in-flight DOM textarea values that haven't yet
+  // been flushed by the debounced saveComment timers, so a quick
+  // type-then-click-Add sequence never loses the just-typed text.
+  function addExtraNote(annId) {
+    // 1. Snapshot every textarea's current DOM value for this annotation
+    //    BEFORE the re-render so we don't drop an in-flight typed value.
+    const safeId = annId.replace(/"/g, '\\"');
+    const sample = listEl.querySelector(`.item-note-edit[data-ann-id="${safeId}"]`);
+    const item   = sample ? sample.closest('.item') : null;
+    const liveTas = item ? Array.from(item.querySelectorAll('.item-note-edit')) : [];
+    const liveValues = liveTas.map(ta => ta.value || '');
+    // 2. Cancel any pending debounced saves for this annotation — we'll
+    //    persist the canonical DOM values atomically below.
+    Object.keys(saveTimers).forEach(k => {
+      if (k.startsWith(annId + '::')) {
+        clearTimeout(saveTimers[k]);
+        delete saveTimers[k];
+      }
+    });
+    isWritingFromPopup = true;
+    chrome.storage.local.get({ annotations: [] }, r => {
+      const anns = r.annotations.slice();
+      const ann  = anns.find(a => a.id === annId);
+      if (!ann) { isWritingFromPopup = false; return; }
+      // 3. Overlay the in-flight DOM values onto the stored annotation so
+      //    the post-render textareas reflect what the user actually typed.
+      if (liveValues.length > 0) {
+        ann.comment = liveValues[0] || '';
+        const extras = liveValues.slice(1);
+        if (extras.length > 0) ann.extraComments = extras;
+        else delete ann.extraComments;
+      }
+      if (!Array.isArray(ann.extraComments)) ann.extraComments = [];
+      // Re-use a trailing empty slot if there is one (clicking "+" twice in a
+      // row should still only land you on a single empty textarea).
+      let targetIdx;
+      const lastIdx = ann.extraComments.length - 1;
+      if (lastIdx >= 0 && !String(ann.extraComments[lastIdx] || '').trim()) {
+        targetIdx = lastIdx + 1; // textarea index = 1 + extras index
+      } else {
+        ann.extraComments.push('');
+        targetIdx = ann.extraComments.length; // new textarea index
+      }
+      _focusNoteAfterRender = { annId, noteIdx: targetIdx };
+      chrome.storage.local.set({ annotations: anns }, () => {
+        isWritingFromPopup = false;
+        render(anns);
+      });
+    });
+  }
+  // After the next render, focus the matching textarea (used after Add Note).
+  let _focusNoteAfterRender = null;
 
   // ── Delete a single annotation ────────────────────────────────────────────
   function deleteAnnotation(annId) {
@@ -1102,7 +1304,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Copy a single group's annotations as Markdown ─────────────────────────
   function copyGroup(url) {
     chrome.storage.local.get({ annotations: [] }, r => {
-      const anns = r.annotations.filter(a => a.url === url && a.comment && a.comment.trim());
+      const anns = r.annotations.filter(a => a.url === url && hasAnyNote(a));
       if (anns.length === 0) {
         showToast('No annotations with notes in this group.');
         return;
@@ -1426,18 +1628,35 @@ document.addEventListener('DOMContentLoaded', () => {
         const codeTitle = isMulti
           ? `Click to navigate to this annotation\n${sel}`
           : 'Click to navigate to this annotation';
+        const notes = getAnnNotes(ann);
+        const isMultiNote = notes.length > 1;
+        // Render one textarea per note. Extras get a thin pink top border (CSS)
+        // so it's visually clear they all belong to the same selector. The
+        // selector header is rendered once, never repeated per note.
+        const notesHtml = notes.map((n, idx) => `
+            <textarea
+              class="item-note-edit${idx > 0 ? ' item-note-edit--extra' : ''}"
+              data-ann-id="${escHtml(ann.id)}"
+              data-note-idx="${idx}"
+              placeholder="${idx === 0 ? 'Add a note…' : 'Add another note…'}"
+            >${escHtml(n)}</textarea>`).join('');
+        // The "+ Add note" button is Premium-only. Disabled while the last
+        // textarea is empty so users can't accumulate empty stacks.
+        const lastNote = notes[notes.length - 1] || '';
+        const addDisabled = !lastNote.trim();
+        const addBtnHtml = isPremium()
+          ? `<button class="item-add-note-btn" data-ann-id="${escHtml(ann.id)}"${addDisabled ? ' disabled aria-disabled="true"' : ''} title="${addDisabled ? 'Fill the current note first' : 'Add another note for this element'}">+ Add note</button>`
+          : '';
         html += `
-        <div class="item${isPageLevel ? ' item--page-level' : ''}">
+        <div class="item${isPageLevel ? ' item--page-level' : ''}${isMultiNote ? ' item--multi-note' : ''}">
           <div class="item-sel">
             <code class="ann-code--clickable${isMulti ? ' ann-code--multi' : ''}" data-nav-ann-id="${escHtml(ann.id)}" title="${escHtml(codeTitle)}">${escHtml(sel)}</code>
             <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋</button>
             <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Clear annotation">🗑</button>
           </div>
-          <textarea
-            class="item-note-edit"
-            data-ann-id="${escHtml(ann.id)}"
-            placeholder="Add a note…"
-          >${escHtml(ann.comment || '')}</textarea>
+          <div class="item-notes">${notesHtml}
+          </div>
+          ${addBtnHtml}
         </div>`;
       });
       if (accordion) html += `</div>`;
@@ -1579,46 +1798,70 @@ document.addEventListener('DOMContentLoaded', () => {
 
     listEl.querySelectorAll('.item-note-edit').forEach(ta => {
       let _dirtyInSnap = false;
+      const annId   = ta.dataset.annId;
+      const noteIdx = parseInt(ta.dataset.noteIdx, 10) || 0;
       ta.addEventListener('input', () => {
-        saveComment(ta.dataset.annId, ta.value);
+        saveComment(annId, ta.value, noteIdx);
         autoResizeTextarea(ta);
         // Track whether this note was edited while inside a Copy-All snapshot
         if (!_dirtyInSnap && ta.closest('.copy-all-snapshot')) _dirtyInSnap = true;
+        // Toggle the sibling "+ Add note" button enabled state in real-time
+        // so the user gets immediate feedback as they fill / clear notes.
+        const addBtn = ta.closest('.item')?.querySelector('.item-add-note-btn');
+        if (addBtn) {
+          // Find the LAST textarea in this item — only that one's emptiness
+          // controls the button (intermediate empty notes would auto-prune
+          // on blur anyway).
+          const allTas = ta.closest('.item').querySelectorAll('.item-note-edit');
+          const last = allTas[allTas.length - 1];
+          const enabled = !!(last && last.value.trim());
+          addBtn.disabled = !enabled;
+          addBtn.title = enabled ? 'Add another note for this element' : 'Fill the current note first';
+        }
       });
-      // When the user finishes editing a note that lives inside a big box,
-      // atomically flush the save and move the annotation to the loose list.
+      // Blur handler: covers two flows that need to write atomically.
+      //   1. Snapshot ungroup: a note inside a Copy-All "big box" was edited
+      //      → save and move the annotation back into the loose list.
+      //   2. Empty-extra prune: a non-primary note was emptied → drop it from
+      //      extraComments so we don't leave a phantom textarea behind.
       ta.addEventListener('blur', () => {
-        if (!_dirtyInSnap) return;
+        const inSnap        = !!ta.closest('.copy-all-snapshot');
+        const needsUngroup  = inSnap && _dirtyInSnap;
+        const needsPrune    = noteIdx > 0 && !ta.value.trim();
+        if (!needsUngroup && !needsPrune) return;
         _dirtyInSnap = false;
-        // Guard: annotation may already have been ungrouped between input and blur
-        const snapEl = ta.closest('.copy-all-snapshot');
-        if (!snapEl) return;
-        const annId = ta.dataset.annId;
-        const currentValue = ta.value;
-        // Cancel any pending debounced save — we'll write it atomically below
-        clearTimeout(saveTimers[annId]);
-        delete saveTimers[annId];
-        // Atomically save the updated comment + remove from snapshot
-        isWritingFromPopup = true;
-        chrome.storage.local.get({ annotations: [], [COPY_ALL_SNAPSHOTS_KEY]: [] }, r => {
-          const anns  = r.annotations.slice();
-          const snaps = r[COPY_ALL_SNAPSHOTS_KEY] || [];
-          const ann   = anns.find(a => a.id === annId);
-          const newSnaps = snaps
-            .map(s => ({ ...s, annotationIds: (s.annotationIds || []).filter(id => id !== annId) }))
-            .filter(s => (s.annotationIds || []).length > 0);
-          const toStore = { [COPY_ALL_SNAPSHOTS_KEY]: newSnaps };
-          if (ann) {
-            ann.comment = currentValue;
-            toStore.annotations = anns;
-          }
-          chrome.storage.local.set(toStore, () => {
-            isWritingFromPopup = false;
-            load();
-          });
+        commitNoteOnBlur(annId, noteIdx, ta.value, { removeFromSnapshots: needsUngroup }).then(changed => {
+          if (changed) load();
         });
       });
     });
+
+    // ── Premium: "+ Add note" button — append another textarea to the item.
+    listEl.querySelectorAll('.item-add-note-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (btn.disabled) return;
+        if (!isPremium()) {
+          showToast('Multiple notes per element is a Premium feature.');
+          return;
+        }
+        addExtraNote(btn.dataset.annId);
+      });
+    });
+
+    // Apply any pending "focus this textarea after render" intent (set when
+    // the user clicks Add Note — we want their cursor in the new textarea
+    // immediately after the re-render).
+    if (_focusNoteAfterRender) {
+      const { annId, noteIdx } = _focusNoteAfterRender;
+      _focusNoteAfterRender = null;
+      const sel = `.item-note-edit[data-ann-id="${annId.replace(/"/g, '\\"')}"][data-note-idx="${noteIdx}"]`;
+      const target = listEl.querySelector(sel);
+      if (target) {
+        target.focus();
+        try { target.scrollIntoView({ block: 'nearest' }); } catch (_) {}
+      }
+    }
     listEl.querySelectorAll('.item-delete-btn').forEach(btn => {
       btn.addEventListener('click', () => deleteAnnotation(btn.dataset.annId));
     });
@@ -2710,9 +2953,18 @@ document.addEventListener('DOMContentLoaded', () => {
               <span class="hist-ts">📅 ${escHtml(formatTimestamp(ann.timestamp))}</span>
               <span class="hist-ts hist-deleted">🗑 ${escHtml(formatTimestamp(ann.deletedAt))}</span>
             </div>
-            ${ann.comment
-              ? `<div class="hist-note hist-clickable-text" data-full-text="${escHtml(ann.comment)}">${escHtml(ann.comment)}</div>`
-              : `<div class="hist-note empty-note">(no note)</div>`}
+            ${(() => {
+              // Render every non-empty note (primary + extras) as a separate
+              // line so multi-note Premium annotations don't lose any
+              // content in the History view.
+              const notesArr = getAnnNotes(ann)
+                .map(n => (n || '').trim())
+                .filter(Boolean);
+              if (notesArr.length === 0) return `<div class="hist-note empty-note">(no note)</div>`;
+              return notesArr.map(n =>
+                `<div class="hist-note hist-clickable-text" data-full-text="${escHtml(n)}">${escHtml(n)}</div>`
+              ).join('');
+            })()}
           </div>`;
         });
         html += '</div>';
@@ -2796,7 +3048,10 @@ document.addEventListener('DOMContentLoaded', () => {
               <ul class="sfl-set-list">
                 ${g.items.map(ann => {
                   const sel  = getSelectorDisplay(ann);
-                  const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
+                  // Combined notes preview (primary + extras joined with " • ")
+                  // gives the same compact summary for both single- and multi-
+                  // note annotations.
+                  const note = getCombinedNoteText(ann) || '(no note)';
                   const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
                   // Per-row clear button — every item in the list must have an
                   // action button (mirrors the rule in Annotation History and
@@ -3070,7 +3325,9 @@ document.addEventListener('DOMContentLoaded', () => {
           if (!xpathIdx.has(k)) xpathIdx.set(k, id);
         }
         const sel  = getSelector(ann);
-        const note = (ann.comment || '').trim().slice(0, 120);
+        // Match against the combined-note text so multi-note Premium
+        // annotations still dedup correctly during copy-log backfill.
+        const note = (getCombinedNoteText(ann) || (ann.comment || '')).trim().slice(0, 120);
         const k2   = nu + '|' + sel + '|' + note;
         const arr  = selNoteIdx.get(k2) || [];
         arr.push(id);
@@ -3253,7 +3510,10 @@ document.addEventListener('DOMContentLoaded', () => {
               <ul class="sfl-set-list">
                 ${g.items.map(ann => {
                   const fullSels = annSelectors(ann).join(', ');
-                  const note = ann.comment && ann.comment.trim() ? ann.comment.trim() : '(no note)';
+                  // Combined notes preview (primary + extras joined with " • ")
+                  // so the Copy Log row reflects the full note set even when
+                  // the annotation has multiple Premium notes.
+                  const note = getCombinedNoteText(ann) || '(no note)';
                   const noteShort = note.slice(0, 120) + (note.length > 120 ? '…' : '');
                   const isLive = ann.id && liveIdSet.has(ann.id);
                   // Every row resolves to a real annotation id, so we always
@@ -3448,7 +3708,7 @@ document.addEventListener('DOMContentLoaded', () => {
         licenseSection = `
           <div class="settings-section">
             <div class="settings-section-title">⭐ Premium</div>
-            <p class="settings-hint">Premium unlocks dark mode, custom prepend/append text on every Markdown export, and all future Premium features. One-time $9.99, no subscription.</p>
+            <p class="settings-hint">Premium unlocks dark mode, custom prepend/append text on every Markdown export, multiple notes per element, and all future Premium features. One-time $9.99, no subscription.</p>
             <div class="settings-row">
               <button id="get-premium-btn" class="btn-primary" type="button">Get Premium ($9.99)</button>
             </div>
@@ -4266,7 +4526,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Markdown generation helper ─────────────────────────────────────────────
   function buildMarkdown(annotations, settings) {
-    const anns = annotations.filter(a => a.comment && a.comment.trim());
+    const anns = annotations.filter(hasAnyNote);
     if (anns.length === 0) return null;
 
     const byUrl = {};
@@ -4308,8 +4568,8 @@ document.addEventListener('DOMContentLoaded', () => {
           dups.forEach(d => refStoreDec(store, refIds(d.annotationIds)));
           const dedupedCopyHist = copyHist.filter(c => (c.output || '').trim() !== result.md.trim());
           // Take a snapshot of the annotations that contributed to the markdown
-          // (filtered by buildMarkdown's "has comment" rule).
-          const contribAnns = r.annotations.filter(a => a.comment && a.comment.trim());
+          // (filtered by buildMarkdown's "has any note" rule — primary OR extras).
+          const contribAnns = r.annotations.filter(hasAnyNote);
           const contribIds  = contribAnns.map(a => a.id);
           contribAnns.forEach(ann => {
             if (!store[ann.id]) store[ann.id] = { ...ann, _refCount: 0 };
@@ -4378,7 +4638,7 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.clipboard.writeText(result.md).then(() => {
           const copyHist = r[COPY_HISTORY_KEY];
           const store    = { ...(r[ANN_STORE_KEY] || {}) };
-          const contribAnns = r.annotations.filter(a => a.comment && a.comment.trim());
+          const contribAnns = r.annotations.filter(hasAnyNote);
           const contribIds  = contribAnns.map(a => a.id);
           // Dedup any prior identical copy log entry (decrement its ids).
           const dups = copyHist.filter(c => (c.output || '').trim() === result.md.trim());
