@@ -24,7 +24,7 @@ Typical flow:
 
 ## Models change. Interfaces change. Pricing changes.
 
-Your notes don't have to follow. Annotations save locally as plain text in real time. Easily export as plain Markdown with one click — paste them into Cursor today, Claude tomorrow, ChatGPT next week, whatever ships. Use whatever credits you got. Same workflow for all models.
+Progress doesn't. Annotations save locally as plain text in real time. Easily export as plain Markdown with one click — paste them into Cursor today, Claude tomorrow, ChatGPT next week, whatever ships. Use whatever credits you got. Use the same workflow for all models.
 ---
 
 ## Features
