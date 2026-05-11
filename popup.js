@@ -4005,7 +4005,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>
 
       <div class="settings-github-row">
-        <a href="#" class="meta-link" data-url="https://github.com/asharma2027/ai-dev-annotator/tree/main" title="View source on GitHub">View source on GitHub →</a>
+        <a href="#" class="meta-link" data-url="https://github.com/asharma2027/ai-dev-annotator/tree/release" title="View source on GitHub">View source on GitHub →</a>
       </div>
     `;
 
