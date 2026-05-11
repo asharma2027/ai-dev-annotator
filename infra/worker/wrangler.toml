@@ -1,9 +1,0 @@
-name = "ai-dev-annotator-licenses"
-main = "src/index.js"
-compatibility_date = "2025-01-01"
-
-# Secrets are NOT defined here — set them with `wrangler secret put`:
-#   STRIPE_SECRET_KEY       — sk_live_... (or sk_test_... while testing)
-#   STRIPE_WEBHOOK_SECRET   — whsec_... from the webhook you create in Stripe
-#   LICENSE_PRIVATE_KEY     — Ed25519 private key, base64url, no padding
-#                             (from LICENSE_KEYPAIR_DO_NOT_COMMIT.txt)
