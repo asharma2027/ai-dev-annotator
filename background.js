@@ -323,6 +323,40 @@ let firebaseApp = null;
 let firebaseDb = null;
 let syncRefs = {};
 
+// Config polling from standalone desktop app
+function pollLocalConfig() {
+  fetch('http://localhost:11454/api/config')
+    .then(res => res.json())
+    .then(config => {
+      if (config.githubUrl || config.firebaseConfig) {
+        chrome.storage.local.get({ annotatorSettings: {} }, (data) => {
+          const s = data.annotatorSettings;
+          let changed = false;
+
+          if (config.githubUrl && s.githubUrl !== config.githubUrl) {
+            s.githubUrl = config.githubUrl;
+            changed = true;
+          }
+          if (config.firebaseConfig && s.firebaseConfig !== config.firebaseConfig) {
+            s.firebaseConfig = config.firebaseConfig;
+            changed = true;
+          }
+
+          if (changed) {
+            chrome.storage.local.set({ annotatorSettings: s }, () => {
+              initFirebase();
+            });
+          }
+        });
+      }
+    })
+    .catch(() => {
+      // Local setup app not running or no config available, ignore
+    });
+}
+setInterval(pollLocalConfig, 3000);
+pollLocalConfig();
+
 function getTeamId(githubUrl) {
   if (!githubUrl) return null;
   const match = githubUrl.match(/github\.com\/([^/]+\/[^/]+)/);
@@ -466,6 +500,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.runtime.onMessage.addListener((t, e, n) => {
   if (t.type === "initFirebase") {
     initFirebase();
+    n({ ok: true });
+    return false;
+  }
+  if (t.type === "triggerPollLocalConfig") {
+    pollLocalConfig();
     n({ ok: true });
     return false;
   }

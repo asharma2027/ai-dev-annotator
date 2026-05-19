@@ -13,3 +13,6 @@ infra/worker/.wrangler/
 # OS / editor
 .DS_Store
 *.swp
+desktop-app/dist/
+desktop-app/node_modules/
+desktop-app/repo_workspace

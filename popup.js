@@ -4606,6 +4606,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   settingsBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: "triggerPollLocalConfig" }).catch(() => {});
     if (settingsVisible) hideSettings();
     else showSettings();
   });
