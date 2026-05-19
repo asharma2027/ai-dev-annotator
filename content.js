@@ -404,7 +404,7 @@ function buildPanel() {
                     `#${ANN}-page-chips .${ANN}-chip[data-ann-id="${t.id}"]`,
                   );
                   (n && n.remove(),
-                    injectChip(e, t.id, getCombinedNoteText(t)),
+                    injectChip(e, t.id, getCombinedNoteText(t), t.authorColor),
                     (activeChip = __aiann_chipMap.get(t.id) || null));
                 }
               }
@@ -1024,7 +1024,7 @@ function repositionAllChips() {
         (__aiann_reposPending = !1));
     }));
 }
-function injectChip(e, t, n) {
+function injectChip(e, t, n, authorColor) {
   e.classList.add(`${ANN}-hl`);
   const o = getChipOverlay();
   let a = __aiann_chipMap.get(t);
@@ -1043,6 +1043,7 @@ function injectChip(e, t, n) {
     o.appendChild(a),
     __aiann_chipMap.set(t, a)),
     (a.className = `${ANN}-chip${n && n.trim() ? " has-note" : ""}`),
+    (authorColor ? (a.style.backgroundColor = authorColor, a.style.color = '#fff') : null),
     (a.title = n && n.trim() ? n.trim().slice(0, 80) : "(no note)"),
     (a.textContent = "✏"),
     __aiann_targetMap.set(t, e),
@@ -1054,10 +1055,11 @@ function removeChip(e) {
     __aiann_chipMap.delete(e),
     __aiann_targetMap.delete(e));
 }
-function injectPageChip(e, t) {
+function injectPageChip(e, t, authorColor) {
   if (document.querySelector(`.${ANN}-chip[data-ann-id="${e}"]`)) return;
   const n = document.createElement("span");
   ((n.className = `${ANN}-chip ${ANN}-page-chip${t && t.trim() ? " has-note" : ""}`),
+    (authorColor ? (n.style.backgroundColor = authorColor, n.style.color = '#fff', n.style.borderColor = authorColor) : null),
     (n.dataset.annId = e),
     (n.textContent = "📄"),
     (n.title = t && t.trim() ? t.trim().slice(0, 80) : "(page annotation)"),
@@ -1088,10 +1090,10 @@ function restoreAnnotations() {
         // Premium extras) in their tooltip / has-note state from the start.
         const combined = getCombinedNoteText(e);
         if (e.pageLevel || "page" === e.tag)
-          injectPageChip(e.id, combined);
+          injectPageChip(e.id, combined, e.authorColor);
         else {
           const t = resolveXPath(e.xpath);
-          t && injectChip(t, e.id, combined);
+          t && injectChip(t, e.id, combined, e.authorColor);
         }
       }),
       consumeNavIntent());
@@ -1262,7 +1264,7 @@ function openAllChipsOnPage() {
       getAll((e) => {
         (e.push(a),
           setAll(e, () => {
-            injectChip(n, a.id, "");
+            injectChip(n, a.id, "", a.authorColor);
             const e = __aiann_chipMap.get(a.id);
             e && openPanel(e, a.id);
           }));
@@ -1289,7 +1291,7 @@ try {
         injectPageChip(t.id, combined);
       else if (t.xpath) {
         const e = resolveXPath(t.xpath);
-        e && injectChip(e, t.id, combined);
+        e && injectChip(e, t.id, combined, t.authorColor);
       }
     }
     if ("focusAnnotation" === e.type) {
@@ -1319,6 +1321,7 @@ try {
       });
     }
     "openAllAnnotations" === e.type && openAllChipsOnPage();
+    if ("remoteAnnotationsUpdated" === e.type) { try { __aiann_chipMap.forEach((e, t) => removeChip(t)); } catch(err){} restoreAnnotations(); }
   });
 } catch (e) {
   String(e && e.message).includes("Extension context invalidated") &&

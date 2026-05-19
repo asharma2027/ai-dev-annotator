@@ -1644,12 +1644,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // textarea is empty so users can't accumulate empty stacks.
         const lastNote = notes[notes.length - 1] || '';
         const addDisabled = !lastNote.trim();
+        const authorBadge = ann.authorName ? `<div style="font-size: 10px; margin-top: 2px; margin-bottom: 4px; color: ${escHtml(ann.authorColor || '#888')}; font-weight: 600;">👤 ${escHtml(ann.authorName)}</div>` : '';
         const addBtnHtml = isPremium()
           ? `<button class="item-add-note-btn" data-ann-id="${escHtml(ann.id)}"${addDisabled ? ' disabled aria-disabled="true"' : ''} title="${addDisabled ? 'Fill the current note first' : 'Add another note for this element'}">+ Add note</button>`
           : '';
         html += `
         <div class="item${isPageLevel ? ' item--page-level' : ''}${isMultiNote ? ' item--multi-note' : ''}">
-          <div class="item-sel">
+          ${authorBadge}<div class="item-sel">
             <code class="ann-code--clickable${isMulti ? ' ann-code--multi' : ''}" data-nav-ann-id="${escHtml(ann.id)}" title="${escHtml(codeTitle)}">${escHtml(sel)}</code>
             <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋</button>
             <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Clear annotation">🗑</button>
@@ -2936,9 +2937,10 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>`;
         items.forEach(ann => {
           const sel = getSelector(ann);
+          const authorBadge = ann.authorName ? `<div style="font-size: 10px; margin-top: 2px; margin-bottom: 4px; color: ${escHtml(ann.authorColor || '#888')}; font-weight: 600;">👤 ${escHtml(ann.authorName)}</div>` : '';
           html += `
           <div class="item hist-item">
-            <div class="item-sel">
+            ${authorBadge}<div class="item-sel">
               <code class="hist-clickable-text" data-full-text="${escHtml(sel)}">${escHtml(sel)}</code>
               <button class="hist-restore-btn"
                 data-ann-id="${escHtml(ann.id)}"
@@ -3799,6 +3801,34 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       </div>
 
+      <!-- ── Team Sync ── -->
+      <div class="settings-section">
+        <div class="settings-section-title">☁️ Team Sync</div>
+        <p class="settings-hint">Sync annotations in real-time using Firebase. Connect your own free Firebase project.</p>
+
+        <div class="settings-field">
+          <label class="settings-label" for="firebase-config">Firebase Config (JSON)</label>
+          <textarea id="firebase-config" class="settings-textarea" placeholder="{ &quot;apiKey&quot;: &quot;...&quot;, &quot;authDomain&quot;: &quot;...&quot;, &quot;databaseURL&quot;: &quot;...&quot; }" style="height:60px;">${escHtml(s.firebaseConfig || '')}</textarea>
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-label" for="sync-github-url">GitHub Repo URL</label>
+          <div style="display:flex;gap:8px;">
+            <input id="sync-github-url" type="text" class="settings-input" style="flex:1;" placeholder="https://github.com/user/repo" value="${escHtml(s.githubUrl || '')}" autocomplete="off" spellcheck="false" />
+            <button id="run-stackblitz-btn" class="btn-primary" style="white-space:nowrap;">Run in StackBlitz</button>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <label class="settings-label" for="sync-username">Username</label>
+          <input id="sync-username" type="text" class="settings-input" style="width:120px;" placeholder="Your name" value="${escHtml(s.username || '')}" autocomplete="off" spellcheck="false" />
+        </div>
+
+        <div class="settings-row">
+          <label class="settings-label" for="sync-color">Your Color</label>
+          <input id="sync-color" type="color" style="width:40px;height:24px;padding:0;border:none;cursor:pointer;" value="${escHtml(s.userColor || '#FF007F')}" />
+        </div>
+      </div>
       <!-- ── Undo / Redo Shortcuts ── -->
       <div class="settings-section">
         <div class="settings-section-title">↶ Undo / Redo</div>
@@ -4515,6 +4545,62 @@ document.addEventListener('DOMContentLoaded', () => {
       appendTa.addEventListener('input', () => {
         clearTimeout(appendTimer);
         appendTimer = setTimeout(() => saveSettings({ appendText: appendTa.value }), 350);
+      });
+    }
+
+    // ── Team Sync ────────────────────────────────────────────────────────
+    let fsyncTimer;
+    const fbConfigTa = settingsEl.querySelector('#firebase-config');
+    const syncGitUrl = settingsEl.querySelector('#sync-github-url');
+    const syncUser   = settingsEl.querySelector('#sync-username');
+    const syncColor  = settingsEl.querySelector('#sync-color');
+    const sbBtn      = settingsEl.querySelector('#run-stackblitz-btn');
+
+    if (fbConfigTa) {
+      fbConfigTa.addEventListener('input', () => {
+        clearTimeout(fsyncTimer);
+        fsyncTimer = setTimeout(() => {
+          saveSettings({ firebaseConfig: fbConfigTa.value }, () => {
+            chrome.runtime.sendMessage({ type: "initFirebase" });
+          });
+        }, 350);
+      });
+    }
+    if (syncGitUrl) {
+      syncGitUrl.addEventListener('input', () => {
+        clearTimeout(fsyncTimer);
+        fsyncTimer = setTimeout(() => {
+          saveSettings({ githubUrl: syncGitUrl.value }, () => {
+            chrome.runtime.sendMessage({ type: "initFirebase" });
+          });
+        }, 350);
+      });
+    }
+    if (syncUser) {
+      syncUser.addEventListener('input', () => {
+        clearTimeout(fsyncTimer);
+        fsyncTimer = setTimeout(() => {
+          saveSettings({ username: syncUser.value });
+        }, 350);
+      });
+    }
+    if (syncColor) {
+      syncColor.addEventListener('input', () => {
+        clearTimeout(fsyncTimer);
+        fsyncTimer = setTimeout(() => {
+          saveSettings({ userColor: syncColor.value });
+        }, 350);
+      });
+    }
+    if (sbBtn) {
+      sbBtn.addEventListener('click', () => {
+        const url = syncGitUrl.value.trim();
+        if (url && url.includes('github.com')) {
+          const repoPath = url.replace('https://github.com/', '');
+          window.open('https://stackblitz.com/github/' + repoPath, '_blank');
+        } else {
+          showToast('Please enter a valid GitHub URL');
+        }
       });
     }
   }

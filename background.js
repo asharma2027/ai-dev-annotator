@@ -1,3 +1,5 @@
+importScripts("lib/firebase-app-compat.js", "lib/firebase-database-compat.js");
+
 /**
  * MV3 service worker: periodic local snapshot + optional Chrome Sync mirror,
  * and small message handlers (debounced backup, open popup for scroll target).
@@ -316,3 +318,158 @@ chrome.runtime.onMessage.addListener((t, e, n) => {
     );
   }
 });
+// ── FIREBASE TEAM SYNC ──────────────────────────────────────────────────
+let firebaseApp = null;
+let firebaseDb = null;
+let syncRefs = {};
+
+function getTeamId(githubUrl) {
+  if (!githubUrl) return null;
+  const match = githubUrl.match(/github\.com\/([^/]+\/[^/]+)/);
+  if (match) return match[1].replace(/[^a-zA-Z0-9-]/g, '_');
+  return null;
+}
+
+function initFirebase() {
+  chrome.storage.local.get({ annotatorSettings: {} }, (data) => {
+    const s = data.annotatorSettings;
+    const fbConfigStr = s.firebaseConfig;
+    const teamId = getTeamId(s.githubUrl);
+
+    if (!fbConfigStr || !teamId) {
+      if (firebaseApp) {
+        Object.values(syncRefs).forEach(ref => ref.off());
+        syncRefs = {};
+        if (firebaseDb) firebaseDb.goOffline();
+      }
+      return;
+    }
+
+    try {
+      const config = JSON.parse(fbConfigStr);
+      if (!firebaseApp) {
+        firebaseApp = firebase.initializeApp(config);
+      } else if (firebaseApp.options.databaseURL !== config.databaseURL) {
+        firebaseApp.delete().then(() => {
+          firebaseApp = firebase.initializeApp(config);
+          firebaseDb = firebase.database();
+          setupTeamListeners(teamId);
+        });
+        return;
+      }
+
+      if (!firebaseDb) {
+        firebaseDb = firebase.database();
+      } else {
+        firebaseDb.goOnline();
+      }
+
+      setupTeamListeners(teamId);
+
+      if (!s.userColor) {
+        s.userColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+        chrome.storage.local.set({ annotatorSettings: s });
+      }
+
+    } catch (err) {
+      console.warn("Invalid Firebase config JSON", err);
+    }
+  });
+}
+
+function setupTeamListeners(teamId) {
+  Object.values(syncRefs).forEach(ref => ref.off());
+  syncRefs = {};
+
+  const teamRef = firebaseDb.ref(`teams/${teamId}/annotations`);
+  syncRefs['team'] = teamRef;
+
+  teamRef.on('value', (snapshot) => {
+    const data = snapshot.val() || {};
+    let allAnnotations = [];
+    Object.keys(data).forEach(urlKey => {
+      const annMap = data[urlKey] || {};
+      Object.values(annMap).forEach(ann => {
+        allAnnotations.push(ann);
+      });
+    });
+
+    // Write remote state to local storage, appending a timestamp to identify it's from Firebase
+    chrome.storage.local.set({
+      annotations: allAnnotations,
+      __firebase_sync_timestamp: Date.now()
+    }, () => {
+      chrome.runtime.sendMessage({ type: "remoteAnnotationsUpdated" }).catch(() => {});
+      chrome.tabs.query({}, tabs => {
+        tabs.forEach(tab => {
+          chrome.tabs.sendMessage(tab.id, { type: "remoteAnnotationsUpdated" }).catch(() => {});
+        });
+      });
+    });
+  });
+}
+
+function pushAnnotationToFirebase(ann, teamId, isDelete = false) {
+  if (!firebaseDb || !teamId) return;
+  const safeUrl = (ann.url || "unknown").replace(/[\.\#\$\[\]]/g, '_');
+  const annRef = firebaseDb.ref(`teams/${teamId}/annotations/${safeUrl}/${ann.id}`);
+
+  if (isDelete) {
+    annRef.remove().catch(e => console.warn("Firebase remove failed:", e));
+  } else {
+    annRef.set(ann).catch(e => console.warn("Firebase set failed:", e));
+  }
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+
+  // Ignore changes that were written by the Firebase listener
+  if (changes.__firebase_sync_timestamp) return;
+
+  if (changes.annotations) {
+    chrome.storage.local.get({ annotatorSettings: {} }, (data) => {
+      const s = data.annotatorSettings;
+      const teamId = getTeamId(s.githubUrl);
+      if (!teamId || !firebaseDb) return;
+
+      const oldList = changes.annotations.oldValue || [];
+      const newList = changes.annotations.newValue || [];
+
+      const oldMap = {};
+      oldList.forEach(a => oldMap[a.id] = a);
+
+      const newMap = {};
+      newList.forEach(a => newMap[a.id] = a);
+
+      newList.forEach(ann => {
+        if (!oldMap[ann.id] || JSON.stringify(oldMap[ann.id]) !== JSON.stringify(ann)) {
+          // If the annotation doesn't have an authorColor, attach the current user's color
+          if (!ann.authorColor && s.userColor) {
+            ann.authorColor = s.userColor;
+            ann.authorName = s.username || "Anonymous";
+          }
+          pushAnnotationToFirebase(ann, teamId);
+        }
+      });
+
+      oldList.forEach(ann => {
+        if (!newMap[ann.id]) {
+          pushAnnotationToFirebase(ann, teamId, true);
+        }
+      });
+    });
+  }
+});
+
+// Re-init when requested (e.g. from popup config change)
+chrome.runtime.onMessage.addListener((t, e, n) => {
+  if (t.type === "initFirebase") {
+    initFirebase();
+    n({ ok: true });
+    return false;
+  }
+});
+
+// Call on startup
+initFirebase();
