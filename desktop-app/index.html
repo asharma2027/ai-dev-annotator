@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Annotator - Setup</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; line-height: 1.6; }
+        h1 { color: #333; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; }
+        input[type="text"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background-color: #007bff; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #status { margin-top: 20px; padding: 15px; border-radius: 4px; display: none; }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .loading { background-color: #e2e3e5; color: #383d41; border: 1px solid #d6d8db; }
+        .config-file-info { font-size: 0.9em; color: #666; margin-top: 5px; }
+        #log { margin-top: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.9em; color: #555;}
+    </style>
+</head>
+<body>
+    <h1>AI Annotator Setup</h1>
+    <p>Provide the GitHub repository of the website you are annotating. We will automatically download it, install dependencies, and start the local server.</p>
+
+    <div class="form-group">
+        <label for="githubUrl">GitHub Repository URL:</label>
+        <input type="text" id="githubUrl" placeholder="https://github.com/username/repo">
+    </div>
+
+    <div class="form-group">
+        <label for="firebaseConfig">Firebase Config JSON (Optional):</label>
+        <textarea id="firebaseConfig" rows="5" placeholder='{ "apiKey": "...", "authDomain": "...", ... }'></textarea>
+        <div class="config-file-info">If left blank, we will try to read <strong>ai-annotator-config.json</strong> from the root of the repository.</div>
+    </div>
+
+    <button id="startBtn">Download & Start</button>
+
+    <div id="status"></div>
+    <div id="log"></div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        ipcRenderer.on('log', (event, message) => {
+            document.getElementById('log').innerText += message + '\n';
+        });
+
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            const githubUrl = document.getElementById('githubUrl').value.trim();
+            const firebaseConfig = document.getElementById('firebaseConfig').value.trim();
+            const statusDiv = document.getElementById('status');
+            const logDiv = document.getElementById('log');
+
+            if (!githubUrl && !firebaseConfig) {
+                statusDiv.style.display = 'block';
+                statusDiv.className = 'error';
+                statusDiv.innerText = 'Please provide either a GitHub URL or a Firebase Config.';
+                return;
+            }
+
+            statusDiv.style.display = 'block';
+            statusDiv.className = 'loading';
+            statusDiv.innerText = 'Initializing...';
+            logDiv.innerText = '';
+            document.getElementById('startBtn').disabled = true;
+
+            try {
+                await ipcRenderer.invoke('start-repo', { githubUrl, firebaseConfig });
+                statusDiv.className = 'success';
+                if (!githubUrl) {
+                  statusDiv.innerText = 'Configuration applied successfully!';
+                } else {
+                  statusDiv.innerText = 'Repository cloned and starting successfully! A new browser tab should open shortly.';
+                }
+            } catch (err) {
+                statusDiv.className = 'error';
+                statusDiv.innerText = 'Error: ' + err.message;
+            } finally {
+                document.getElementById('startBtn').disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

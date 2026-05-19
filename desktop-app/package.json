@@ -1,0 +1,26 @@
+{
+  "name": "ai-annotator-setup",
+  "version": "1.0.0",
+  "description": "Standalone desktop app for AI Annotator",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.22.2",
+    "simple-git": "^3.24.0",
+    "tree-kill": "^1.2.2"
+  },
+  "devDependencies": {
+    "electron": "^30.0.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.aiannotator.setup",
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    }
+  }
+}
