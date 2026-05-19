@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "source": {
+    "adapter": "macos-accessibility",
+    "appName": "Acme Desktop",
+    "bundleId": "com.acme.desktop",
+    "windowTitle": "Billing Settings"
+  },
+  "captures": [
+    {
+      "target": {
+        "kind": "button",
+        "name": "Export",
+        "accessibilityPath": "AXApplication/AXWindow[Billing Settings]/AXGroup/AXToolbar/AXButton[Export]",
+        "visibleText": "Export"
+      },
+      "prompt": "Rename this button to Export CSV and add a disabled state while invoices are loading."
+    },
+    {
+      "target": {
+        "kind": "table-cell",
+        "name": "Invoice status",
+        "accessibilityPath": "AXApplication/AXWindow[Billing Settings]/AXTable/AXRow[0]/AXCell[Status]",
+        "visibleText": "Pending"
+      },
+      "prompt": "Make this status text use the same semantic color tokens as the web dashboard."
+    }
+  ]
+}
