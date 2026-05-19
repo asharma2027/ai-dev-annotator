@@ -37,6 +37,8 @@ Progress doesn't. Annotations save locally as plain text in real time. Easily ex
 - Per-row inline note editing with **auto-expanding textboxes** (auto-saves as you type)
 - Per-row delete button : moves annotation to history rather than erasing it
 - **Footer export buttons** (labels are customizable in Settings) : by default, **📋 Copy All** copies Markdown without clearing; **right-click** the same button runs **✂ Cut All** (copy + clear). **🗑 Clear All** clears with a 5-second **Undo** banner; **right-click** it runs **💾 Save for Later** instead.
+- **Import App Captures** : paste prompt-only JSON from a native helper, mobile simulator bridge, IDE extension, Figma plugin, or other adapter. The extension stores it locally as annotations and never executes the prompt.
+- **Copy App Prompts** : copy only imported cross-app captures as model-agnostic Markdown grouped by app, screen, document, or adapter. See [`docs/universal-prompt-capture.md`](docs/universal-prompt-capture.md).
 - **↶ / ↷** in the popup header : multi-step undo and redo for recent storage changes
 - **🕐 History view** : deleted annotations with timestamps, including restore
 - **Copy Log** : copy events with full output preview
@@ -65,8 +67,9 @@ Progress doesn't. Annotations save locally as plain text in real time. Easily ex
 2. **Review** : Open the popup (toolbar icon or **Alt+Shift+A**) to see all saved annotations grouped by page URL. Notes are editable inline.
 3. **Navigate** : Click any pink annotation selector or blue URL group label to jump directly to that element on the page — the annotation panel opens automatically.
 4. **Copy / cut** : By default, **📋 Copy All** copies Markdown and leaves your list intact; **right-click** that button for **✂ Cut All** (copy + clear). An undo banner appears after a cut-style clear so you can reverse it within 5 seconds.
-5. **History** : Click 🕐 to browse past annotations, including deleted ones, with timestamps. Click `+` to restore any entry.
-6. **Settings** : Click ⚙️ for shortcuts, footer button actions, Auto-Backup toggle, dark mode (Premium), prepend/append text (Premium), or license key activation.
+5. **Import app captures** : Click **Import App Captures** to paste prompt-only JSON from another app adapter. Imported captures save locally and can be exported with **Copy App Prompts**.
+6. **History** : Click 🕐 to browse past annotations, including deleted ones, with timestamps. Click `+` to restore any entry.
+7. **Settings** : Click ⚙️ for shortcuts, footer button actions, Auto-Backup toggle, dark mode (Premium), prepend/append text (Premium), or license key activation.
 
 ---
 
@@ -91,6 +94,25 @@ Progress doesn't. Annotations save locally as plain text in real time. Easily ex
 
 Paste directly into Cursor's chat, Claude, or any AI tool : it already knows which element, where it lives, and what you want changed.
 
+### Cross-app prompt capture output
+
+```markdown
+# Cross-App Prompt Capture Export
+
+> Prompt-only context. Do not assume any action has been executed. Use these notes as instructions for an AI coding/writing/design agent.
+
+## Acme Desktop
+
+1. button · Export · AXWindow/AXToolbar/AXButton[Export]
+   - Source adapter: macos-accessibility
+   - App id: com.acme.desktop
+   - Window/screen: Billing Settings
+   - Stable reference: `AXWindow/AXToolbar/AXButton[Export]`
+   - Visible text: _"Export"_
+   - Prompt: Rename this button to Export CSV and add a disabled state while invoices are loading.
+   - Captured at: 2026-05-18T00:00:00.000Z
+```
+
 ---
 
 ## Activating Premium
@@ -114,6 +136,7 @@ Extension verifies license keys locally.
 | Data                              | Where it lives                              | Leaves your device?                                  |
 |-----------------------------------|---------------------------------------------|------------------------------------------------------|
 | Annotations, notes, element text  | `chrome.storage.local`                      | No.                                                  |
+| Cross-app imported prompt captures | `chrome.storage.local`                     | No. The import/export layer is prompt-only.          |
 | Copy / annotation history         | `chrome.storage.local`                      | No.                                                  |
 | Settings (theme, shortcuts, backup, footer buttons, history limits, …) | `chrome.storage.local`                      | No.                                                  |
 | Auto-Backup mirror (on by default; off in Settings) | `chrome.storage.sync`                       | Only when enabled; synced via your Google Account. |
@@ -133,6 +156,10 @@ of the clicked element’s text (plus up to 120 characters per companion
 element if you attach extras with modifier + click). It does not read
 passwords, form values, cookies, or storage.
 
+The cross-app import layer only accepts JSON that the user explicitly
+pastes into the popup. It does not inspect other apps by itself, execute
+prompts, call AI APIs, or automate external UI.
+
 ---
 
 ## File structure
@@ -144,8 +171,10 @@ ai-dev-annotator/
 ├── background.js        : Auto-backup alarm and background message handling
 ├── popup.html           : Extension popup UI
 ├── popup.js             : Popup logic (annotations, copy, history, settings, premium)
+├── universal-import.js  : Prompt-only cross-app capture import and Markdown export UI
 ├── styles.css           : Popup styles (light + dark theme)
-├── docs/                : GitHub Pages landing, success, terms, and refund pages
+├── examples/            : Example payloads for cross-app prompt capture
+├── docs/                : GitHub Pages landing, success, terms, refund, and capture docs
 ├── infra/worker/        : Cloudflare Worker for Stripe webhooks and license lookup
 └── icons/               : Extension icon assets
 ```
@@ -155,7 +184,7 @@ ai-dev-annotator/
 
 | Key | Contents |
 |-----|----------|
-| `annotations` | Active (non-deleted) annotations |
+| `annotations` | Active (non-deleted) annotations, including imported cross-app captures |
 | `annotationHistory` | Past annotations with `deletedAt` timestamp |
 | `copyHistory` | Log of every copy event |
 | `copyAllSnapshots` | Grouped “Copy All” snapshots for the Copy Log UI |
@@ -194,6 +223,10 @@ ai-dev-annotator/
   shadow roots are supported.
 - **`file://` URLs and `chrome://` pages:** Out of scope. The extension
   runs on `http(s)://` only.
+- **Cross-app capture adapters:** This branch imports prompt-only JSON
+  from other apps but does not yet ship native macOS, Windows, mobile,
+  IDE, or Figma capture adapters. See `docs/universal-prompt-capture.md`
+  for the adapter contract.
 
 ---
 
