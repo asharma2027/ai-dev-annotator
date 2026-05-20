@@ -15,6 +15,9 @@ importScripts("lib/firebase-app-compat.js", "lib/firebase-database-compat.js");
 const BACKUP_ALARM = "annotatorAutoBackup";
 /** Matches `periodInMinutes` passed to chrome.alarms.create. */
 const BACKUP_INTERVAL = 15;
+const WEBSITE_VERSION_ALARM = "annotatorWebsiteVersion";
+const WEBSITE_VERSION_INTERVAL = 1;
+const LOCAL_SETUP_ORIGIN = "http://localhost:11454";
 const SYNC_PREFIX = "ann_sync_";
 const SYNC_V2_PREFIX = "annv2_";
 const SYNC_CHUNK_SIZE = 7e3;
@@ -53,6 +56,13 @@ function setupAlarm() {
         periodInMinutes: BACKUP_INTERVAL,
       });
   });
+  chrome.alarms.get(WEBSITE_VERSION_ALARM, (t) => {
+    t ||
+      chrome.alarms.create(WEBSITE_VERSION_ALARM, {
+        delayInMinutes: 1,
+        periodInMinutes: WEBSITE_VERSION_INTERVAL,
+      });
+  });
 }
 chrome.runtime.onInstalled.addListener(async () => {
   setupAlarm();
@@ -69,10 +79,17 @@ chrome.runtime.onInstalled.addListener(async () => {
     didStrip &&
       (await chrome.storage.local.set({ annotations: annotationsList }));
   } catch (_err) {}
+  await refreshLocalConfig({ initFirebaseAfter: true });
+  await checkWebsiteVersion();
 });
-chrome.runtime.onStartup.addListener(setupAlarm);
+chrome.runtime.onStartup.addListener(() => {
+  setupAlarm();
+  refreshLocalConfig({ initFirebaseAfter: true });
+  checkWebsiteVersion();
+});
 chrome.alarms.onAlarm.addListener((t) => {
   t.name === BACKUP_ALARM && performBackup();
+  t.name === WEBSITE_VERSION_ALARM && checkWebsiteVersion();
 });
 const ANN_SHORT_KEYS = {
   id: "i",
@@ -321,151 +338,313 @@ chrome.runtime.onMessage.addListener((t, e, n) => {
 // ── FIREBASE TEAM SYNC ──────────────────────────────────────────────────
 let firebaseApp = null;
 let firebaseDb = null;
-let syncRefs = {};
+let teamAnnotationsRef = null;
+let activeTeamId = null;
+let activeFirebaseConfigKey = null;
+let applyingRemoteAnnotations = false;
 
-// Config polling from standalone desktop app
-function pollLocalConfig() {
-  fetch('http://localhost:11454/api/config')
-    .then(res => res.json())
-    .then(config => {
-      if (config.githubUrl || config.firebaseConfig) {
-        chrome.storage.local.get({ annotatorSettings: {} }, (data) => {
-          const s = data.annotatorSettings;
-          let changed = false;
-
-          if (config.githubUrl && s.githubUrl !== config.githubUrl) {
-            s.githubUrl = config.githubUrl;
-            changed = true;
-          }
-          if (config.firebaseConfig && s.firebaseConfig !== config.firebaseConfig) {
-            s.firebaseConfig = config.firebaseConfig;
-            changed = true;
-          }
-
-          if (changed) {
-            chrome.storage.local.set({ annotatorSettings: s }, () => {
-              initFirebase();
-            });
-          }
-        });
-      }
-    })
-    .catch(() => {
-      // Local setup app not running or no config available, ignore
-    });
+function storageLocalGet(defaults) {
+  return new Promise((resolve) => chrome.storage.local.get(defaults, resolve));
 }
-setInterval(pollLocalConfig, 3000);
-pollLocalConfig();
-
-function getTeamId(githubUrl) {
+function storageLocalSet(values) {
+  return new Promise((resolve) => chrome.storage.local.set(values, resolve));
+}
+function parseGithubRepo(githubUrl) {
   if (!githubUrl) return null;
-  const match = githubUrl.match(/github\.com\/([^/]+\/[^/]+)/);
-  if (match) return match[1].replace(/[^a-zA-Z0-9-]/g, '_');
-  return null;
+  let value = String(githubUrl).trim();
+  const sshMatch = value.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/i);
+  if (sshMatch) return sshMatch[1];
+  try {
+    const url = new URL(value);
+    if (!/github\.com$/i.test(url.hostname)) return null;
+    const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
+    if (parts.length < 2) return null;
+    return `${parts[0]}/${parts[1].replace(/\.git$/i, "")}`;
+  } catch (_err) {
+    const match = value.match(/github\.com[/:]([^/]+\/[^/#?]+?)(?:\.git)?(?:[#?].*)?$/i);
+    return match ? match[1] : null;
+  }
 }
-
-function initFirebase() {
-  chrome.storage.local.get({ annotatorSettings: {} }, (data) => {
-    const s = data.annotatorSettings;
-    const fbConfigStr = s.firebaseConfig;
-    const teamId = getTeamId(s.githubUrl);
-
-    if (!fbConfigStr || !teamId) {
-      if (firebaseApp) {
-        Object.values(syncRefs).forEach(ref => ref.off());
-        syncRefs = {};
-        if (firebaseDb) firebaseDb.goOffline();
-      }
+function getTeamId(githubUrl) {
+  const repo = parseGithubRepo(githubUrl);
+  return repo ? repo.replace(/[^a-zA-Z0-9-]/g, "_") : null;
+}
+function firebaseKey(value) {
+  return String(value || "unknown").replace(/[.#$\/\[\]]/g, "_");
+}
+function legacyUrlKey(value) {
+  return String(value || "unknown").replace(/[.#$\[\]]/g, "_");
+}
+function configKey(config) {
+  return JSON.stringify({
+    apiKey: config.apiKey || "",
+    appId: config.appId || "",
+    projectId: config.projectId || "",
+    databaseURL: config.databaseURL || "",
+  });
+}
+function annotationVersion(ann) {
+  const updatedAt = Number(ann?._updatedAt || ann?.updatedAt || 0);
+  if (updatedAt) return updatedAt;
+  const ts = ann?.timestamp ? Date.parse(ann.timestamp) : 0;
+  return Number.isFinite(ts) ? ts : 0;
+}
+function stableJson(value) {
+  try {
+    return JSON.stringify(value);
+  } catch (_err) {
+    return "";
+  }
+}
+function withAuthorMetadata(ann, settings, teamId) {
+  return {
+    ...ann,
+    authorName: ann.authorName || settings.username || "Reviewer",
+    authorColor: ann.authorColor || settings.userColor || "#2563eb",
+    _teamId: teamId,
+    _updatedAt: Date.now(),
+  };
+}
+function mergeRemoteAnnotations(localList, remoteList, teamId) {
+  const remoteIds = new Set(remoteList.map((ann) => ann.id));
+  const byId = new Map();
+  (localList || []).forEach((ann) => {
+    if (ann && ann.id) byId.set(ann.id, ann);
+  });
+  remoteList.forEach((remoteAnn) => {
+    if (!remoteAnn || !remoteAnn.id) return;
+    const localAnn = byId.get(remoteAnn.id);
+    if (!localAnn || annotationVersion(remoteAnn) >= annotationVersion(localAnn))
+      byId.set(remoteAnn.id, remoteAnn);
+  });
+  return Array.from(byId.values()).filter((ann) => {
+    if (!ann || !ann.id) return false;
+    if (ann._teamId === teamId && !remoteIds.has(ann.id)) return false;
+    return !ann.deletedAt && !ann._deleted;
+  });
+}
+function collectRemoteAnnotations(data) {
+  const out = [];
+  Object.values(data || {}).forEach((value) => {
+    if (value && value.id) {
+      out.push(value);
       return;
     }
-
-    try {
-      const config = JSON.parse(fbConfigStr);
-      if (!firebaseApp) {
-        firebaseApp = firebase.initializeApp(config);
-      } else if (firebaseApp.options.databaseURL !== config.databaseURL) {
-        firebaseApp.delete().then(() => {
-          firebaseApp = firebase.initializeApp(config);
-          firebaseDb = firebase.database();
-          setupTeamListeners(teamId);
-        });
-        return;
-      }
-
-      if (!firebaseDb) {
-        firebaseDb = firebase.database();
-      } else {
-        firebaseDb.goOnline();
-      }
-
-      setupTeamListeners(teamId);
-
-      if (!s.userColor) {
-        s.userColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
-        chrome.storage.local.set({ annotatorSettings: s });
-      }
-
-    } catch (err) {
-      console.warn("Invalid Firebase config JSON", err);
+    if (value && typeof value === "object") {
+      Object.values(value).forEach((nested) => {
+        if (nested && nested.id) out.push(nested);
+      });
     }
   });
+  const byId = new Map();
+  out
+    .filter((ann) => ann && ann.id && !ann.deletedAt && !ann._deleted)
+    .forEach((ann) => {
+      const existing = byId.get(ann.id);
+      if (!existing || annotationVersion(ann) >= annotationVersion(existing)) byId.set(ann.id, ann);
+    });
+  return Array.from(byId.values());
+}
+function notifyAnnotationConsumers() {
+  chrome.runtime.sendMessage({ type: "remoteAnnotationsUpdated" }).catch(() => {});
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach((tab) => {
+      chrome.tabs.sendMessage(tab.id, { type: "remoteAnnotationsUpdated" }).catch(() => {});
+    });
+  });
+}
+async function setTeamStatus(patch) {
+  const current = await storageLocalGet({ _teamSyncStatus: {} });
+  await storageLocalSet({
+    _teamSyncStatus: {
+      ...(current._teamSyncStatus || {}),
+      ...patch,
+      checkedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function refreshLocalConfig({ initFirebaseAfter = false } = {}) {
+  try {
+    const res = await fetch(`${LOCAL_SETUP_ORIGIN}/api/config`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`Setup app returned ${res.status}`);
+    const config = await res.json();
+    const data = await storageLocalGet({ annotatorSettings: {} });
+    const settings = { ...(data.annotatorSettings || {}) };
+    let changed = false;
+    ["githubUrl", "firebaseConfig", "username", "userColor"].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(config, key) && settings[key] !== config[key]) {
+        settings[key] = config[key] || "";
+        changed = true;
+      }
+    });
+    if (Object.prototype.hasOwnProperty.call(config, "localServerPort")) {
+      const port = Number.isInteger(config.localServerPort) ? config.localServerPort : null;
+      if (settings.localServerPort !== port) {
+        settings.localServerPort = port;
+        changed = true;
+      }
+    }
+    const toSet = {
+      _teamSetupLastChecked: new Date().toISOString(),
+      _teamSetupError: null,
+    };
+    if (changed) toSet.annotatorSettings = settings;
+    await storageLocalSet(toSet);
+    if (initFirebaseAfter || changed) await initFirebase();
+    return { ok: true, changed };
+  } catch (err) {
+    await storageLocalSet({
+      _teamSetupLastChecked: new Date().toISOString(),
+      _teamSetupError: err?.message || String(err),
+    });
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+async function disconnectFirebase() {
+  if (teamAnnotationsRef) {
+    try {
+      teamAnnotationsRef.off();
+    } catch (_err) {}
+  }
+  teamAnnotationsRef = null;
+  activeTeamId = null;
+  if (firebaseDb) {
+    try {
+      firebaseDb.goOffline();
+    } catch (_err) {}
+  }
+  if (firebaseApp) {
+    try {
+      await firebaseApp.delete();
+    } catch (_err) {}
+  }
+  firebaseApp = null;
+  firebaseDb = null;
+  activeFirebaseConfigKey = null;
+}
+
+async function initFirebase() {
+  const data = await storageLocalGet({ annotatorSettings: {} });
+  const settings = data.annotatorSettings || {};
+  const fbConfigStr = settings.firebaseConfig;
+  const teamId = getTeamId(settings.githubUrl);
+
+  if (!fbConfigStr || !teamId) {
+    await disconnectFirebase();
+    await setTeamStatus({
+      connected: false,
+      teamId: null,
+      error: fbConfigStr ? "Add a valid GitHub repo in the desktop app." : "Add Firebase config in the desktop app.",
+    });
+    return { ok: false };
+  }
+
+  try {
+    const config = JSON.parse(fbConfigStr);
+    const nextKey = configKey(config);
+    if (!firebaseApp || activeFirebaseConfigKey !== nextKey) {
+      await disconnectFirebase();
+      firebaseApp = firebase.initializeApp(config);
+      firebaseDb = firebase.database();
+      activeFirebaseConfigKey = nextKey;
+    } else if (firebaseDb) {
+      firebaseDb.goOnline();
+    }
+    setupTeamListeners(teamId);
+    await setTeamStatus({ connected: true, teamId, githubUrl: settings.githubUrl, error: null });
+    return { ok: true };
+  } catch (err) {
+    console.warn("Invalid Firebase config JSON", err);
+    await disconnectFirebase();
+    await setTeamStatus({ connected: false, teamId, error: "Invalid Firebase config JSON." });
+    return { ok: false, error: err?.message || String(err) };
+  }
 }
 
 function setupTeamListeners(teamId) {
-  Object.values(syncRefs).forEach(ref => ref.off());
-  syncRefs = {};
+  if (!firebaseDb) return;
+  if (teamAnnotationsRef) {
+    try {
+      teamAnnotationsRef.off();
+    } catch (_err) {}
+  }
+  activeTeamId = teamId;
+  teamAnnotationsRef = firebaseDb.ref(`teams/${teamId}/annotations`);
 
-  const teamRef = firebaseDb.ref(`teams/${teamId}/annotations`);
-  syncRefs['team'] = teamRef;
-
-  teamRef.on('value', (snapshot) => {
-    const data = snapshot.val() || {};
-    let allAnnotations = [];
-    Object.keys(data).forEach(urlKey => {
-      const annMap = data[urlKey] || {};
-      Object.values(annMap).forEach(ann => {
-        allAnnotations.push(ann);
-      });
-    });
-
-    // Write remote state to local storage, appending a timestamp to identify it's from Firebase
-    chrome.storage.local.set({
-      annotations: allAnnotations,
-      __firebase_sync_timestamp: Date.now()
-    }, () => {
-      chrome.runtime.sendMessage({ type: "remoteAnnotationsUpdated" }).catch(() => {});
-      chrome.tabs.query({}, tabs => {
-        tabs.forEach(tab => {
-          chrome.tabs.sendMessage(tab.id, { type: "remoteAnnotationsUpdated" }).catch(() => {});
+  teamAnnotationsRef.on(
+    "value",
+    async (snapshot) => {
+      const data = snapshot.val() || {};
+      const remoteList = collectRemoteAnnotations(data);
+      const local = await storageLocalGet({ annotations: [] });
+      const before = local.annotations || [];
+      const merged = mergeRemoteAnnotations(before, remoteList, teamId);
+      if (stableJson(before) !== stableJson(merged)) {
+        applyingRemoteAnnotations = true;
+        await storageLocalSet({
+          annotations: merged,
+          __firebase_sync_timestamp: Date.now(),
         });
+        applyingRemoteAnnotations = false;
+        notifyAnnotationConsumers();
+      }
+      await setTeamStatus({
+        connected: true,
+        teamId,
+        error: null,
+        remoteCount: remoteList.length,
+        lastSync: new Date().toISOString(),
       });
-    });
-  });
+      pushMissingLocalAnnotations(before, remoteList, teamId);
+    },
+    async (err) => {
+      console.warn("Firebase team listener failed:", err);
+      await setTeamStatus({ connected: false, teamId, error: err?.message || String(err) });
+    },
+  );
 }
 
-function pushAnnotationToFirebase(ann, teamId, isDelete = false) {
+function pushAnnotationToFirebase(ann, teamId, isDelete = false, settings = {}) {
   if (!firebaseDb || !teamId) return;
-  const safeUrl = (ann.url || "unknown").replace(/[\.\#\$\[\]]/g, '_');
-  const annRef = firebaseDb.ref(`teams/${teamId}/annotations/${safeUrl}/${ann.id}`);
+  const annRef = firebaseDb.ref(`teams/${teamId}/annotations/${firebaseKey(ann.id)}`);
 
   if (isDelete) {
     annRef.remove().catch(e => console.warn("Firebase remove failed:", e));
+    if (ann.url) {
+      firebaseDb
+        .ref(`teams/${teamId}/annotations/${legacyUrlKey(ann.url)}/${firebaseKey(ann.id)}`)
+        .remove()
+        .catch(() => {});
+    }
   } else {
-    annRef.set(ann).catch(e => console.warn("Firebase set failed:", e));
+    annRef.set(withAuthorMetadata(ann, settings, teamId)).catch(e => console.warn("Firebase set failed:", e));
   }
+}
+function pushMissingLocalAnnotations(localList, remoteList, teamId) {
+  const remoteIds = new Set((remoteList || []).map((ann) => ann.id));
+  if (!localList || !localList.length) return;
+  chrome.storage.local.get({ annotatorSettings: {} }, ({ annotatorSettings }) => {
+    (localList || []).forEach((ann) => {
+      if (!ann || !ann.id || remoteIds.has(ann.id)) return;
+      if (ann._teamId) return;
+      pushAnnotationToFirebase(ann, teamId, false, annotatorSettings || {});
+    });
+  });
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
 
   // Ignore changes that were written by the Firebase listener
-  if (changes.__firebase_sync_timestamp) return;
+  if (applyingRemoteAnnotations || changes.__firebase_sync_timestamp) return;
 
   if (changes.annotations) {
     chrome.storage.local.get({ annotatorSettings: {} }, (data) => {
       const s = data.annotatorSettings;
       const teamId = getTeamId(s.githubUrl);
-      if (!teamId || !firebaseDb) return;
+      if (!teamId || !firebaseDb || activeTeamId !== teamId) return;
 
       const oldList = changes.annotations.oldValue || [];
       const newList = changes.annotations.newValue || [];
@@ -478,37 +657,70 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
       newList.forEach(ann => {
         if (!oldMap[ann.id] || JSON.stringify(oldMap[ann.id]) !== JSON.stringify(ann)) {
-          // If the annotation doesn't have an authorColor, attach the current user's color
-          if (!ann.authorColor && s.userColor) {
-            ann.authorColor = s.userColor;
-            ann.authorName = s.username || "Anonymous";
-          }
-          pushAnnotationToFirebase(ann, teamId);
+          pushAnnotationToFirebase(ann, teamId, false, s);
         }
       });
 
       oldList.forEach(ann => {
         if (!newMap[ann.id]) {
-          pushAnnotationToFirebase(ann, teamId, true);
+          pushAnnotationToFirebase(ann, teamId, true, s);
         }
       });
     });
   }
 });
 
+async function checkWebsiteVersion() {
+  try {
+    const res = await fetch(`${LOCAL_SETUP_ORIGIN}/api/site-version`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`Setup app returned ${res.status}`);
+    const info = await res.json();
+    if (!info || !info.currentCommit) return;
+    const prior = await storageLocalGet({
+      _websiteVersionInfo: null,
+      _websiteVersionCommit: null,
+    });
+    const changed = prior._websiteVersionCommit && prior._websiteVersionCommit !== info.currentCommit;
+    await storageLocalSet({
+      _websiteVersionInfo: info,
+      _websiteVersionCommit: info.currentCommit,
+      _websiteVersionError: null,
+    });
+    if (changed && info.localServerPort) refreshWebsiteTabs(info.localServerPort);
+  } catch (err) {
+    await storageLocalSet({ _websiteVersionError: err?.message || String(err) });
+  }
+}
+function refreshWebsiteTabs(port) {
+  const patterns = [
+    `http://localhost:${port}/*`,
+    `http://127.0.0.1:${port}/*`,
+  ];
+  chrome.tabs.query({ url: patterns }, (tabs) => {
+    (tabs || []).forEach((tab) => {
+      try {
+        chrome.tabs.reload(tab.id, { bypassCache: true });
+      } catch (_err) {}
+    });
+  });
+}
+
 // Re-init when requested (e.g. from popup config change)
 chrome.runtime.onMessage.addListener((t, e, n) => {
   if (t.type === "initFirebase") {
-    initFirebase();
-    n({ ok: true });
-    return false;
+    initFirebase().then(n).catch((err) => n({ ok: false, error: err?.message || String(err) }));
+    return true;
   }
-  if (t.type === "triggerPollLocalConfig") {
-    pollLocalConfig();
-    n({ ok: true });
-    return false;
+  if (t.type === "refreshLocalConfig") {
+    refreshLocalConfig({ initFirebaseAfter: true }).then(n).catch((err) => n({ ok: false, error: err?.message || String(err) }));
+    return true;
+  }
+  if (t.type === "checkWebsiteVersion") {
+    checkWebsiteVersion().then(() => n({ ok: true })).catch((err) => n({ ok: false, error: err?.message || String(err) }));
+    return true;
   }
 });
 
 // Call on startup
 initFirebase();
+checkWebsiteVersion();

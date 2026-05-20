@@ -872,6 +872,25 @@ textarea.search-note-match {
   color: var(--text-muted);
   font-size: 12px;
 }
+.settings-value--truncate {
+  max-width: 175px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.team-identity-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.team-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+}
 .settings-field { margin-bottom: 10px; }
 .settings-field .settings-label {
   display: block;

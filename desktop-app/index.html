@@ -1,85 +1,450 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>AI Annotator - Setup</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; line-height: 1.6; }
-        h1 { color: #333; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; font-weight: bold; margin-bottom: 5px; }
-        input[type="text"], textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background-color: #007bff; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; }
-        button:hover { background-color: #0056b3; }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
-        #status { margin-top: 20px; padding: 15px; border-radius: 4px; display: none; }
-        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .loading { background-color: #e2e3e5; color: #383d41; border: 1px solid #d6d8db; }
-        .config-file-info { font-size: 0.9em; color: #666; margin-top: 5px; }
-        #log { margin-top: 10px; font-family: monospace; white-space: pre-wrap; font-size: 0.9em; color: #555;}
-    </style>
+  <title>AI Annotator Setup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --surface: #ffffff;
+      --border: #d8dde8;
+      --text: #172033;
+      --muted: #68758a;
+      --blue: #2563eb;
+      --blue-dark: #1d4ed8;
+      --green: #047857;
+      --red: #b91c1c;
+      --code: #f1f5f9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.45;
+    }
+
+    .app-shell {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 28px 34px 32px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 620px;
+    }
+
+    .status-pill {
+      flex: 0 0 auto;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 6px 11px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status-pill.running { color: var(--green); border-color: #86efac; background: #f0fdf4; }
+    .status-pill.error { color: var(--red); border-color: #fecaca; background: #fef2f2; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+
+    h2 {
+      margin: 0 0 14px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      color: var(--muted);
+    }
+
+    .field { margin-bottom: 16px; }
+
+    label {
+      display: block;
+      font-weight: 700;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    input[type="text"],
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fbfcfe;
+      color: var(--text);
+      padding: 10px 11px;
+      font: 13px/1.45 inherit;
+      outline: none;
+    }
+
+    input[type="text"]:focus,
+    textarea:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+      background: #fff;
+    }
+
+    textarea {
+      min-height: 118px;
+      resize: vertical;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    .hint {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .identity-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .color-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 138px;
+    }
+
+    input[type="color"] {
+      width: 42px;
+      height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      padding: 3px;
+      cursor: pointer;
+    }
+
+    .color-value {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font: 700 13px/1.2 inherit;
+      cursor: pointer;
+    }
+
+    .primary {
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .primary:hover:not(:disabled) { background: var(--blue-dark); }
+    .secondary {
+      background: #eef2f7;
+      color: var(--text);
+      border-color: var(--border);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .version-grid {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 8px 10px;
+      font-size: 13px;
+    }
+
+    .version-label {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .version-value {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    code {
+      background: var(--code);
+      border-radius: 4px;
+      padding: 2px 5px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    #status {
+      display: none;
+      margin-top: 14px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    #status.success { display: block; background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+    #status.error { display: block; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    #status.loading { display: block; background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+
+    #log {
+      min-height: 180px;
+      max-height: 300px;
+      overflow: auto;
+      white-space: pre-wrap;
+      background: #101827;
+      color: #dbeafe;
+      border-radius: 8px;
+      padding: 12px;
+      font: 12px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    .empty-log { color: #93a4bb; }
+
+    @media (max-width: 760px) {
+      .app-shell { padding: 22px; }
+      .layout { grid-template-columns: 1fr; }
+      header { flex-direction: column; }
+      .identity-row { grid-template-columns: 1fr; }
+    }
+  </style>
 </head>
 <body>
-    <h1>AI Annotator Setup</h1>
-    <p>Provide the GitHub repository of the website you are annotating. We will automatically download it, install dependencies, and start the local server.</p>
+  <main class="app-shell">
+    <header>
+      <div>
+        <h1>AI Annotator Setup</h1>
+        <p class="subtitle">Set up the team once here. The extension reads these values on demand, while this app keeps the local website updated from GitHub.</p>
+      </div>
+      <div id="run-state" class="status-pill">Not started</div>
+    </header>
 
-    <div class="form-group">
-        <label for="githubUrl">GitHub Repository URL:</label>
-        <input type="text" id="githubUrl" placeholder="https://github.com/username/repo">
+    <div class="layout">
+      <div>
+        <section>
+          <h2>Website And Sync</h2>
+          <div class="field">
+            <label for="githubUrl">GitHub repository</label>
+            <input type="text" id="githubUrl" placeholder="https://github.com/username/repo" autocomplete="off" spellcheck="false">
+            <p class="hint">The checkout is reused after the first run. This app checks GitHub regularly and refreshes the local website when a newer commit is available.</p>
+          </div>
+
+          <div class="field">
+            <label for="firebaseConfig">Firebase config JSON</label>
+            <textarea id="firebaseConfig" placeholder='{ "apiKey": "...", "authDomain": "...", "databaseURL": "..." }'></textarea>
+            <p class="hint">Leave blank only if the repository includes <code>ai-annotator-config.json</code>.</p>
+          </div>
+        </section>
+
+        <section>
+          <h2>Your Team Identity</h2>
+          <div class="identity-row">
+            <div class="field">
+              <label for="username">Display name</label>
+              <input type="text" id="username" autocomplete="off" spellcheck="false">
+              <p class="hint">A random name is assigned automatically. Change it here whenever needed.</p>
+            </div>
+            <div class="field">
+              <label for="userColor">Color</label>
+              <div class="color-control">
+                <input type="color" id="userColor">
+                <span id="colorValue" class="color-value"></span>
+              </div>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="startBtn" class="primary">Save And Start Website</button>
+            <button id="saveOnlyBtn" class="secondary">Save Setup Only</button>
+          </div>
+          <div id="status"></div>
+        </section>
+      </div>
+
+      <div>
+        <section>
+          <h2>Current Git Version</h2>
+          <div class="version-grid">
+            <div class="version-label">Commit</div>
+            <div class="version-value"><code id="versionHash">Not checked yet</code></div>
+            <div class="version-label">Message</div>
+            <div class="version-value" id="versionMessage">Not checked yet</div>
+            <div class="version-label">Date</div>
+            <div class="version-value" id="versionDate">Not checked yet</div>
+            <div class="version-label">Branch</div>
+            <div class="version-value" id="versionBranch">Not checked yet</div>
+            <div class="version-label">Checked</div>
+            <div class="version-value" id="versionChecked">Not checked yet</div>
+          </div>
+        </section>
+
+        <section>
+          <h2>Activity</h2>
+          <div id="log"><span class="empty-log">No activity yet.</span></div>
+        </section>
+      </div>
     </div>
+  </main>
 
-    <div class="form-group">
-        <label for="firebaseConfig">Firebase Config JSON (Optional):</label>
-        <textarea id="firebaseConfig" rows="5" placeholder='{ "apiKey": "...", "authDomain": "...", ... }'></textarea>
-        <div class="config-file-info">If left blank, we will try to read <strong>ai-annotator-config.json</strong> from the root of the repository.</div>
-    </div>
+  <script>
+    const { ipcRenderer } = require('electron');
 
-    <button id="startBtn">Download & Start</button>
+    const els = {
+      githubUrl: document.getElementById('githubUrl'),
+      firebaseConfig: document.getElementById('firebaseConfig'),
+      username: document.getElementById('username'),
+      userColor: document.getElementById('userColor'),
+      colorValue: document.getElementById('colorValue'),
+      startBtn: document.getElementById('startBtn'),
+      saveOnlyBtn: document.getElementById('saveOnlyBtn'),
+      status: document.getElementById('status'),
+      log: document.getElementById('log'),
+      runState: document.getElementById('run-state'),
+      versionHash: document.getElementById('versionHash'),
+      versionMessage: document.getElementById('versionMessage'),
+      versionDate: document.getElementById('versionDate'),
+      versionBranch: document.getElementById('versionBranch'),
+      versionChecked: document.getElementById('versionChecked'),
+    };
 
-    <div id="status"></div>
-    <div id="log"></div>
+    function formatDate(value) {
+      if (!value) return 'Not checked yet';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
 
-    <script>
-        const { ipcRenderer } = require('electron');
+    function setStatus(kind, text) {
+      els.status.className = kind;
+      els.status.textContent = text;
+      els.status.style.display = text ? 'block' : 'none';
+    }
 
-        ipcRenderer.on('log', (event, message) => {
-            document.getElementById('log').innerText += message + '\n';
-        });
+    function appendLog(message) {
+      if (!message) return;
+      if (els.log.querySelector('.empty-log')) els.log.textContent = '';
+      els.log.textContent += message + '\n';
+      els.log.scrollTop = els.log.scrollHeight;
+    }
 
-        document.getElementById('startBtn').addEventListener('click', async () => {
-            const githubUrl = document.getElementById('githubUrl').value.trim();
-            const firebaseConfig = document.getElementById('firebaseConfig').value.trim();
-            const statusDiv = document.getElementById('status');
-            const logDiv = document.getElementById('log');
+    function renderConfig(config) {
+      if (!config) return;
+      els.githubUrl.value = config.githubUrl || '';
+      els.firebaseConfig.value = config.firebaseConfig || '';
+      els.username.value = config.username || '';
+      els.userColor.value = config.userColor || '#2563eb';
+      els.colorValue.textContent = els.userColor.value.toUpperCase();
 
-            if (!githubUrl && !firebaseConfig) {
-                statusDiv.style.display = 'block';
-                statusDiv.className = 'error';
-                statusDiv.innerText = 'Please provide either a GitHub URL or a Firebase Config.';
-                return;
-            }
+      const status = config.repoStatus || {};
+      els.versionHash.textContent = status.shortCommit || status.currentCommit || 'Not checked yet';
+      els.versionMessage.textContent = status.commitMessage || 'Not checked yet';
+      els.versionDate.textContent = formatDate(status.commitDate);
+      els.versionBranch.textContent = status.branch || 'Not checked yet';
+      els.versionChecked.textContent = formatDate(status.checkedAt || status.updatedAt);
 
-            statusDiv.style.display = 'block';
-            statusDiv.className = 'loading';
-            statusDiv.innerText = 'Initializing...';
-            logDiv.innerText = '';
-            document.getElementById('startBtn').disabled = true;
+      if (status.error) {
+        els.runState.textContent = 'Needs attention';
+        els.runState.className = 'status-pill error';
+      } else if (config.localServerPort) {
+        els.runState.textContent = `Running on :${config.localServerPort}`;
+        els.runState.className = 'status-pill running';
+      } else {
+        els.runState.textContent = 'Not started';
+        els.runState.className = 'status-pill';
+      }
+    }
 
-            try {
-                await ipcRenderer.invoke('start-repo', { githubUrl, firebaseConfig });
-                statusDiv.className = 'success';
-                if (!githubUrl) {
-                  statusDiv.innerText = 'Configuration applied successfully!';
-                } else {
-                  statusDiv.innerText = 'Repository cloned and starting successfully! A new browser tab should open shortly.';
-                }
-            } catch (err) {
-                statusDiv.className = 'error';
-                statusDiv.innerText = 'Error: ' + err.message;
-            } finally {
-                document.getElementById('startBtn').disabled = false;
-            }
-        });
-    </script>
+    function readSetup({ saveOnly = false } = {}) {
+      return {
+        githubUrl: els.githubUrl.value.trim(),
+        firebaseConfig: els.firebaseConfig.value.trim(),
+        username: els.username.value.trim(),
+        userColor: els.userColor.value,
+        saveOnly,
+      };
+    }
+
+    async function submitSetup(saveOnly) {
+      const originalStart = els.startBtn.textContent;
+      els.startBtn.disabled = true;
+      els.saveOnlyBtn.disabled = true;
+      setStatus('loading', saveOnly ? 'Saving setup...' : 'Preparing website...');
+
+      try {
+        const setup = readSetup({ saveOnly });
+        await ipcRenderer.invoke('start-repo', setup);
+        setStatus('success', saveOnly ? 'Setup saved.' : 'Website is starting. A browser tab should open shortly.');
+      } catch (err) {
+        setStatus('error', 'Error: ' + err.message);
+      } finally {
+        els.startBtn.disabled = false;
+        els.saveOnlyBtn.disabled = false;
+        els.startBtn.textContent = originalStart;
+      }
+    }
+
+    els.userColor.addEventListener('input', () => {
+      els.colorValue.textContent = els.userColor.value.toUpperCase();
+    });
+
+    els.startBtn.addEventListener('click', () => submitSetup(false));
+    els.saveOnlyBtn.addEventListener('click', () => submitSetup(true));
+
+    ipcRenderer.on('log', (event, message) => appendLog(message));
+    ipcRenderer.on('config-updated', (event, config) => renderConfig(config));
+
+    ipcRenderer.invoke('get-config').then(renderConfig);
+  </script>
 </body>
 </html>

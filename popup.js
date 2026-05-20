@@ -3804,29 +3804,24 @@ document.addEventListener('DOMContentLoaded', () => {
       <!-- ── Team Sync ── -->
       <div class="settings-section">
         <div class="settings-section-title">☁️ Team Sync</div>
-        <p class="settings-hint">Sync annotations in real-time using Firebase. Connect your own free Firebase project.</p>
-
-        <div class="settings-field">
-          <label class="settings-label" for="firebase-config">Firebase Config (JSON)</label>
-          <textarea id="firebase-config" class="settings-textarea" placeholder="{ &quot;apiKey&quot;: &quot;...&quot;, &quot;authDomain&quot;: &quot;...&quot;, &quot;databaseURL&quot;: &quot;...&quot; }" style="height:60px;">${escHtml(s.firebaseConfig || '')}</textarea>
-        </div>
-
-        <div class="settings-field">
-          <label class="settings-label" for="sync-github-url">GitHub Repo URL</label>
-          <div style="display:flex;gap:8px;">
-            <input id="sync-github-url" type="text" class="settings-input" style="flex:1;" placeholder="https://github.com/user/repo" value="${escHtml(s.githubUrl || '')}" autocomplete="off" spellcheck="false" />
-            <button id="run-stackblitz-btn" class="btn-primary" style="white-space:nowrap;">Run in StackBlitz</button>
-          </div>
-        </div>
-
         <div class="settings-row">
-          <label class="settings-label" for="sync-username">Username</label>
-          <input id="sync-username" type="text" class="settings-input" style="width:120px;" placeholder="Your name" value="${escHtml(s.username || '')}" autocomplete="off" spellcheck="false" />
+          <span class="settings-label">Status</span>
+          <span class="settings-value" id="team-sync-status">Checking…</span>
         </div>
-
         <div class="settings-row">
-          <label class="settings-label" for="sync-color">Your Color</label>
-          <input id="sync-color" type="color" style="width:40px;height:24px;padding:0;border:none;cursor:pointer;" value="${escHtml(s.userColor || '#FF007F')}" />
+          <span class="settings-label">Repository</span>
+          <span class="settings-value settings-value--truncate" title="${escHtml(s.githubUrl || '')}">${escHtml(s.githubUrl || 'Not configured')}</span>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">You</span>
+          <span class="settings-value team-identity-value">
+            <span class="team-color-dot" style="background:${escHtml(s.userColor || '#2563eb')}"></span>
+            ${escHtml(s.username || 'Assigned in desktop app')}
+          </span>
+        </div>
+        <p class="settings-hint">Set Firebase, GitHub, name, and color once in the desktop app. Use refresh only after changing those values there.</p>
+        <div class="settings-row settings-row--btns">
+          <button id="refresh-team-config-btn" class="btn-history-action">Refresh from desktop app</button>
         </div>
       </div>
       <!-- ── Undo / Redo Shortcuts ── -->
@@ -4548,65 +4543,58 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // ── Team Sync ────────────────────────────────────────────────────────
-    let fsyncTimer;
-    const fbConfigTa = settingsEl.querySelector('#firebase-config');
-    const syncGitUrl = settingsEl.querySelector('#sync-github-url');
-    const syncUser   = settingsEl.querySelector('#sync-username');
-    const syncColor  = settingsEl.querySelector('#sync-color');
-    const sbBtn      = settingsEl.querySelector('#run-stackblitz-btn');
+    // ── Team Sync status ─────────────────────────────────────────────────
+    chrome.storage.local.get({
+      _teamSyncStatus: {},
+      _teamSetupLastChecked: null,
+      _teamSetupError: null,
+    }, data => {
+      const statusEl = settingsEl.querySelector('#team-sync-status');
+      if (!statusEl) return;
+      const sync = data._teamSyncStatus || {};
+      if (data._teamSetupError && !sync.connected) {
+        statusEl.textContent = 'Desktop app not available';
+        statusEl.style.color = '#dc2626';
+        statusEl.title = data._teamSetupError;
+      } else if (sync.connected) {
+        statusEl.textContent = sync.lastSync
+          ? 'Connected · ' + new Date(sync.lastSync).toLocaleTimeString()
+          : 'Connected';
+        statusEl.style.color = '#16a34a';
+        statusEl.title = sync.teamId || '';
+      } else if (sync.error) {
+        statusEl.textContent = 'Not connected';
+        statusEl.style.color = '#dc2626';
+        statusEl.title = sync.error;
+      } else {
+        statusEl.textContent = 'Not configured';
+        statusEl.title = data._teamSetupLastChecked
+          ? 'Last checked ' + new Date(data._teamSetupLastChecked).toLocaleString()
+          : '';
+      }
+    });
 
-    if (fbConfigTa) {
-      fbConfigTa.addEventListener('input', () => {
-        clearTimeout(fsyncTimer);
-        fsyncTimer = setTimeout(() => {
-          saveSettings({ firebaseConfig: fbConfigTa.value }, () => {
-            chrome.runtime.sendMessage({ type: "initFirebase" });
-          });
-        }, 350);
-      });
-    }
-    if (syncGitUrl) {
-      syncGitUrl.addEventListener('input', () => {
-        clearTimeout(fsyncTimer);
-        fsyncTimer = setTimeout(() => {
-          saveSettings({ githubUrl: syncGitUrl.value }, () => {
-            chrome.runtime.sendMessage({ type: "initFirebase" });
-          });
-        }, 350);
-      });
-    }
-    if (syncUser) {
-      syncUser.addEventListener('input', () => {
-        clearTimeout(fsyncTimer);
-        fsyncTimer = setTimeout(() => {
-          saveSettings({ username: syncUser.value });
-        }, 350);
-      });
-    }
-    if (syncColor) {
-      syncColor.addEventListener('input', () => {
-        clearTimeout(fsyncTimer);
-        fsyncTimer = setTimeout(() => {
-          saveSettings({ userColor: syncColor.value });
-        }, 350);
-      });
-    }
-    if (sbBtn) {
-      sbBtn.addEventListener('click', () => {
-        const url = syncGitUrl.value.trim();
-        if (url && url.includes('github.com')) {
-          const repoPath = url.replace('https://github.com/', '');
-          window.open('https://stackblitz.com/github/' + repoPath, '_blank');
-        } else {
-          showToast('Please enter a valid GitHub URL');
+    settingsEl.querySelector('#refresh-team-config-btn')?.addEventListener('click', e => {
+      const btn = e.currentTarget;
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Refreshing…';
+      chrome.runtime.sendMessage({ type: 'refreshLocalConfig' }, result => {
+        btn.disabled = false;
+        btn.textContent = original;
+        if (chrome.runtime.lastError || !result || result.ok === false) {
+          const msg = chrome.runtime.lastError?.message || result?.error || 'Desktop app not available.';
+          showToast('Could not refresh setup: ' + msg, { kind: 'error' });
+          renderSettings();
+          return;
         }
+        showToast(result.changed ? 'Team setup refreshed.' : 'Team setup already current.', { kind: 'ok' });
+        renderSettings();
       });
-    }
+    });
   }
 
   settingsBtn.addEventListener('click', () => {
-    chrome.runtime.sendMessage({ type: "triggerPollLocalConfig" }).catch(() => {});
     if (settingsVisible) hideSettings();
     else showSettings();
   });
