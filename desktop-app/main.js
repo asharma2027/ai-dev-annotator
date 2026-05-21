@@ -98,10 +98,11 @@ function firebaseConfigForRepoFile(value) {
 function repoConfigToSetupConfig(fileConfig = {}) {
   const setup = {};
   if (typeof fileConfig.githubUrl === 'string') setup.githubUrl = fileConfig.githubUrl.trim();
-  if (fileConfig.firebaseConfig) {
-    setup.firebaseConfig = typeof fileConfig.firebaseConfig === 'object'
-      ? JSON.stringify(fileConfig.firebaseConfig, null, 2)
-      : normalizeFirebaseConfigText(fileConfig.firebaseConfig);
+  const firebaseConfig = fileConfig.firebaseConfig || fileConfig.firebase;
+  if (firebaseConfig) {
+    setup.firebaseConfig = typeof firebaseConfig === 'object'
+      ? JSON.stringify(completeFirebaseConfig(firebaseConfig), null, 2)
+      : normalizeFirebaseConfigText(firebaseConfig);
   }
   if (typeof fileConfig.username === 'string') setup.username = fileConfig.username.trim();
   if (typeof fileConfig.userColor === 'string') setup.userColor = fileConfig.userColor.trim();
@@ -436,6 +437,46 @@ app.on('will-quit', () => {
 
 ipcMain.handle('get-config', async () => publicConfig());
 ipcMain.handle('get-diagnostics', async () => desktopDiagnostics());
+
+ipcMain.handle('setup-github-repo', async (event, githubUrl) => {
+  const nextGithubUrl = typeof githubUrl === 'string' ? githubUrl.trim() : '';
+  if (!nextGithubUrl) throw new Error('GitHub repository is required.');
+  if (!parseGithubRepo(nextGithubUrl)) {
+    throw new Error('Enter a valid GitHub repository URL, such as https://github.com/username/repo.');
+  }
+
+  const previousConfig = {
+    ...currentConfig,
+    repoStatus: { ...(currentConfig.repoStatus || {}) },
+  };
+
+  try {
+    currentConfig.githubUrl = nextGithubUrl;
+    currentConfig.localServerPort = null;
+    sendLog('Checking repository setup...');
+    const git = await ensureRepo(nextGithubUrl);
+    await applyRepoConfigFile();
+    await updateRepoStatus(git, { checkedAt: new Date().toISOString() });
+    if (currentConfig.firebaseConfig) {
+      sendLog('Using Firebase config from ai-annotator-config.json.');
+    } else {
+      sendLog('No Firebase config found in ai-annotator-config.json. You can add one from the setup menu.');
+    }
+    return publicConfig();
+  } catch (error) {
+    currentConfig = normalizeConfig({
+      ...previousConfig,
+      repoStatus: {
+        ...(previousConfig.repoStatus || {}),
+        error: error.message,
+        checkedAt: new Date().toISOString(),
+      },
+    });
+    broadcastConfig();
+    console.error(error);
+    throw error;
+  }
+});
 
 ipcMain.handle('start-repo', async (event, setup) => {
   currentConfig.githubUrl = typeof setup.githubUrl === 'string' ? setup.githubUrl.trim() : currentConfig.githubUrl;

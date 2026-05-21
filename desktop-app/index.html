@@ -18,6 +18,7 @@
     }
 
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
 
     body {
       margin: 0;
@@ -27,8 +28,44 @@
       line-height: 1.45;
     }
 
+    .github-gate {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .gate-card {
+      width: min(520px, 100%);
+    }
+
+    .gate-card label {
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+
+    .gate-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .gate-status {
+      min-height: 40px;
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      visibility: hidden;
+    }
+
+    .gate-status.success { visibility: visible; background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
+    .gate-status.error { visibility: visible; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    .gate-status.loading { visibility: visible; background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+
     .app-shell {
-      max-width: 920px;
+      max-width: 980px;
       margin: 0 auto;
       padding: 28px 34px 32px;
     }
@@ -52,7 +89,7 @@
       margin: 6px 0 0;
       color: var(--muted);
       font-size: 14px;
-      max-width: 620px;
+      max-width: 640px;
     }
 
     .status-pill {
@@ -77,7 +114,8 @@
       align-items: start;
     }
 
-    section {
+    section,
+    details.panel {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -91,6 +129,59 @@
       text-transform: uppercase;
       letter-spacing: 0;
       color: var(--muted);
+    }
+
+    details.panel summary,
+    details.advanced-details summary {
+      cursor: pointer;
+      font-weight: 700;
+      color: var(--text);
+      list-style: none;
+    }
+
+    details.panel summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      text-transform: uppercase;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    details.advanced-details summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    details.panel summary::-webkit-details-marker,
+    details.advanced-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.panel summary::after,
+    details.advanced-details summary::after {
+      content: "Show";
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      margin-left: auto;
+    }
+
+    details.panel[open] summary::after,
+    details.advanced-details[open] summary::after {
+      content: "Hide";
+    }
+
+    details.panel[open] summary {
+      margin-bottom: 12px;
+    }
+
+    .section-intro {
+      margin: -6px 0 14px;
+      color: var(--muted);
+      font-size: 13px;
     }
 
     .field { margin-bottom: 16px; }
@@ -188,6 +279,10 @@
       flex-wrap: wrap;
     }
 
+    .main-actions {
+      margin-top: 4px;
+    }
+
     button {
       border: 1px solid transparent;
       border-radius: 6px;
@@ -215,7 +310,7 @@
 
     .version-grid {
       display: grid;
-      grid-template-columns: 92px minmax(0, 1fr);
+      grid-template-columns: 82px minmax(0, 1fr);
       gap: 8px 10px;
       font-size: 13px;
     }
@@ -271,6 +366,23 @@
       margin-bottom: 10px;
     }
 
+    .advanced-details {
+      margin-top: 10px;
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+
+    .advanced-details[open] summary {
+      margin-bottom: 12px;
+    }
+
+    .summary-state {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      margin-left: 4px;
+    }
+
     #diagnostics {
       min-height: 140px;
       max-height: 280px;
@@ -289,15 +401,27 @@
       .layout { grid-template-columns: 1fr; }
       header { flex-direction: column; }
       .identity-row { grid-template-columns: 1fr; }
+      .gate-form { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <main class="app-shell">
+  <main id="github-gate" class="github-gate" hidden>
+    <form id="githubGateForm" class="gate-card">
+      <label for="gateGithubUrl">GitHub repository</label>
+      <div class="gate-form">
+        <input type="text" id="gateGithubUrl" placeholder="https://github.com/username/repo" autocomplete="off" spellcheck="false" autofocus>
+        <button id="gateContinueBtn" class="primary" type="submit">Continue</button>
+      </div>
+      <div id="gateStatus" class="gate-status" aria-live="polite"></div>
+    </form>
+  </main>
+
+  <main id="app-shell" class="app-shell" hidden>
     <header>
       <div>
-        <h1>AI Annotator Setup</h1>
-        <p class="subtitle">Set up the team once here. The extension reads these values on demand, while this app keeps the local website updated from GitHub.</p>
+        <h1>Setup Menu</h1>
+        <p class="subtitle">Choose how your annotations appear, start the local website, and keep the team sync details available when you need them.</p>
       </div>
       <div id="run-state" class="status-pill">Not started</div>
     </header>
@@ -305,27 +429,12 @@
     <div class="layout">
       <div>
         <section>
-          <h2>Website And Sync</h2>
-          <div class="field">
-            <label for="githubUrl">GitHub repository</label>
-            <input type="text" id="githubUrl" placeholder="https://github.com/username/repo" autocomplete="off" spellcheck="false">
-            <p class="hint">The checkout is reused after the first run. This app checks GitHub regularly and refreshes the local website when a newer commit is available.</p>
-          </div>
-
-          <div class="field">
-            <label for="firebaseConfig">Firebase config JSON</label>
-            <textarea id="firebaseConfig" placeholder='{ "apiKey": "...", "authDomain": "...", "databaseURL": "..." }'></textarea>
-            <p class="hint">You can paste the JSON object or the Firebase config snippet. This app writes it to <code>ai-annotator-config.json</code> when the website starts.</p>
-          </div>
-        </section>
-
-        <section>
-          <h2>Your Team Identity</h2>
+          <h2>Your Identity</h2>
+          <p class="section-intro">This name and color are attached to new annotations.</p>
           <div class="identity-row">
             <div class="field">
               <label for="username">Display name</label>
               <input type="text" id="username" autocomplete="off" spellcheck="false">
-              <p class="hint">A random name is assigned automatically. Change it here whenever needed.</p>
             </div>
             <div class="field">
               <label for="userColor">Color</label>
@@ -340,19 +449,37 @@
               <input type="checkbox" id="testingMode">
               <span>Testing mode</span>
             </label>
-            <p class="hint">When enabled, the extension can assign currently open Chrome windows to test identities while still using the normal annotation and sync pipeline.</p>
+            <p class="hint">Use this when you want different Chrome windows to act as different reviewers.</p>
           </div>
-          <div class="actions">
-            <button id="startBtn" class="primary">Save And Start Website</button>
-            <button id="saveOnlyBtn" class="secondary">Save Setup Only</button>
+          <div class="actions main-actions">
+            <button id="startBtn" class="primary">Start Website</button>
+            <button id="saveOnlyBtn" class="secondary">Save Changes</button>
           </div>
           <div id="status"></div>
+        </section>
+
+        <section>
+          <h2>Website</h2>
+          <div class="field">
+            <label for="githubUrl">GitHub repository</label>
+            <input type="text" id="githubUrl" placeholder="https://github.com/username/repo" autocomplete="off" spellcheck="false">
+            <p class="hint">The app keeps this checkout updated and starts it locally when you press Start Website.</p>
+          </div>
+
+          <details class="advanced-details" id="syncDetails">
+            <summary>Team sync details <span id="firebaseState" class="summary-state">Checking</span></summary>
+            <div class="field">
+              <label for="firebaseConfig">Firebase config JSON</label>
+              <textarea id="firebaseConfig" placeholder='{ "apiKey": "...", "authDomain": "...", "databaseURL": "..." }'></textarea>
+              <p class="hint">If the repository has <code>ai-annotator-config.json</code>, this field is filled automatically. You can still paste or edit the Firebase config here.</p>
+            </div>
+          </details>
         </section>
       </div>
 
       <div>
         <section>
-          <h2>Current Git Version</h2>
+          <h2>Website Status</h2>
           <div class="version-grid">
             <div class="version-label">Commit</div>
             <div class="version-value"><code id="versionHash">Not checked yet</code></div>
@@ -372,14 +499,14 @@
           <div id="log"><span class="empty-log">No activity yet.</span></div>
         </section>
 
-        <section>
-          <h2>Diagnostics</h2>
+        <details class="panel">
+          <summary>Diagnostics</summary>
           <div class="debug-actions">
             <button id="refreshDiagnosticsBtn" class="secondary">Refresh Debug</button>
             <button id="copyDiagnosticsBtn" class="secondary">Copy Debug JSON</button>
           </div>
           <div id="diagnostics">Diagnostics have not been loaded yet.</div>
-        </section>
+        </details>
       </div>
     </div>
   </main>
@@ -388,8 +515,15 @@
     const { ipcRenderer, clipboard } = require('electron');
 
     const els = {
+      appShell: document.getElementById('app-shell'),
+      githubGate: document.getElementById('github-gate'),
+      githubGateForm: document.getElementById('githubGateForm'),
+      gateGithubUrl: document.getElementById('gateGithubUrl'),
+      gateContinueBtn: document.getElementById('gateContinueBtn'),
+      gateStatus: document.getElementById('gateStatus'),
       githubUrl: document.getElementById('githubUrl'),
       firebaseConfig: document.getElementById('firebaseConfig'),
+      firebaseState: document.getElementById('firebaseState'),
       username: document.getElementById('username'),
       userColor: document.getElementById('userColor'),
       testingMode: document.getElementById('testingMode'),
@@ -410,6 +544,7 @@
     };
 
     let lastDiagnostics = null;
+    let diagnosticsLoaded = false;
 
     function formatDate(value) {
       if (!value) return 'Not checked yet';
@@ -428,6 +563,29 @@
       els.status.className = kind;
       els.status.textContent = text;
       els.status.style.display = text ? 'block' : 'none';
+    }
+
+    function setGateStatus(kind, text) {
+      els.gateStatus.className = 'gate-status' + (kind ? ` ${kind}` : '');
+      els.gateStatus.textContent = text || '';
+    }
+
+    function showGithubGate(config) {
+      els.appShell.hidden = true;
+      els.githubGate.hidden = false;
+      els.gateGithubUrl.value = config?.githubUrl || '';
+      setGateStatus('', '');
+      setTimeout(() => els.gateGithubUrl.focus(), 0);
+    }
+
+    async function showMenu(config) {
+      renderConfig(config);
+      els.githubGate.hidden = true;
+      els.appShell.hidden = false;
+      if (!diagnosticsLoaded) {
+        diagnosticsLoaded = true;
+        refreshDiagnostics();
+      }
     }
 
     function appendLog(message) {
@@ -473,6 +631,9 @@
       els.userColor.value = config.userColor || '#2563eb';
       els.testingMode.checked = config.testingMode !== false;
       els.colorValue.textContent = els.userColor.value.toUpperCase();
+      const hasFirebase = !!String(config.firebaseConfig || '').trim();
+      els.firebaseState.textContent = hasFirebase ? 'Configured' : 'Missing';
+      els.firebaseState.style.color = hasFirebase ? 'var(--green)' : 'var(--muted)';
 
       const status = config.repoStatus || {};
       els.versionHash.textContent = status.shortCommit || status.currentCommit || 'Not checked yet';
@@ -490,6 +651,35 @@
       } else {
         els.runState.textContent = 'Not started';
         els.runState.className = 'status-pill';
+      }
+    }
+
+    async function submitGithubGate(event) {
+      event.preventDefault();
+      const githubUrl = els.gateGithubUrl.value.trim();
+      if (!githubUrl) {
+        setGateStatus('error', 'Enter a GitHub repository URL.');
+        return;
+      }
+
+      els.gateContinueBtn.disabled = true;
+      els.gateGithubUrl.disabled = true;
+      setGateStatus('loading', 'Checking repository...');
+
+      try {
+        const config = await ipcRenderer.invoke('setup-github-repo', githubUrl);
+        await showMenu(config);
+        setStatus(
+          'success',
+          config.firebaseConfig
+            ? 'Repository checked. Firebase sync was loaded from ai-annotator-config.json.'
+            : 'Repository checked. Add Firebase details only if your team uses sync.'
+        );
+      } catch (err) {
+        setGateStatus('error', 'Error: ' + err.message);
+      } finally {
+        els.gateContinueBtn.disabled = false;
+        els.gateGithubUrl.disabled = false;
       }
     }
 
@@ -539,6 +729,7 @@
       els.colorValue.textContent = els.userColor.value.toUpperCase();
     });
 
+    els.githubGateForm.addEventListener('submit', submitGithubGate);
     els.startBtn.addEventListener('click', () => submitSetup(false));
     els.saveOnlyBtn.addEventListener('click', () => submitSetup(true));
     els.refreshDiagnosticsBtn.addEventListener('click', refreshDiagnostics);
@@ -551,8 +742,11 @@
     ipcRenderer.on('log', (event, message) => appendLog(message));
     ipcRenderer.on('config-updated', (event, config) => renderConfig(config));
 
-    ipcRenderer.invoke('get-config').then(renderConfig);
-    refreshDiagnostics();
+    ipcRenderer.invoke('get-config').then(config => {
+      renderConfig(config);
+      if (config.githubUrl) showMenu(config);
+      else showGithubGate(config);
+    });
   </script>
 </body>
 </html>
