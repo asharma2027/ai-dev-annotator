@@ -54,21 +54,30 @@ const MODIFIER_LABELS = {
 
 // ─── Cached premium status ────────────────────────────────────────────────────
 let _premium = false;
+let _premiumStatusPromise = null;
 
 function isPremium() {
   return _premium;
 }
 
 async function refreshPremiumStatus() {
-  const stored = await new Promise(resolve =>
-    chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r =>
-      resolve(r[LICENSE_STORAGE_KEY])));
-  if (!stored || !stored.key) { _premium = false; return; }
-  // Re-verify the stored key on every popup open. This is cheap (pure
-  // crypto) and prevents tampering with chrome.storage.local from
-  // unlocking premium without a valid signature.
-  const verified = await verifyLicenseSignature(stored.key);
-  _premium = !!verified.valid;
+  if (_premiumStatusPromise) return _premiumStatusPromise;
+  _premiumStatusPromise = (async () => {
+    const stored = await new Promise(resolve =>
+      chrome.storage.local.get({ [LICENSE_STORAGE_KEY]: null }, r =>
+        resolve(r[LICENSE_STORAGE_KEY])));
+    if (!stored || !stored.key) { _premium = false; return; }
+    // Re-verify the stored key on every popup open. This is cheap (pure
+    // crypto) and prevents tampering with chrome.storage.local from
+    // unlocking premium without a valid signature.
+    const verified = await verifyLicenseSignature(stored.key);
+    _premium = !!verified.valid;
+  })();
+  try {
+    await _premiumStatusPromise;
+  } finally {
+    _premiumStatusPromise = null;
+  }
 }
 
 // ─── base64url helpers (no padding) ──────────────────────────────────────────
@@ -214,6 +223,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const searchCount   = document.getElementById('search-count');
   const restoreBanner = document.getElementById('restore-banner');
   const clearUndoBanner = document.getElementById('clear-undo-banner');
+  const authorLegendEl = document.getElementById('author-legend-row');
   const footer        = document.querySelector('.footer');
 
   // ── History tab clickable-text modal ──────────────────────────────────────
@@ -736,6 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
     maxHistoryLength: 200,                 // legacy key, kept for back-compat / fallback
     historyLimits:    { ...DEFAULT_HISTORY_LIMITS }, // per-tab limits, 0 = indefinite
     backupEnabled:    true,               // enable/disable auto-backup to sync
+    testingMode:      true,               // local dev/test identities are enabled by default for now
     buttonActions: {
       copyBtn:  { left: 'copyAll',  right: 'cutAll'       },
       clearBtn: { left: 'clearAll', right: 'saveForLater' },
@@ -812,6 +823,98 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/</g,  '&lt;')
       .replace(/>/g,  '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function normalizeHexColor(value) {
+    const match = String(value || '').trim().match(/^#?([0-9a-f]{6})$/i);
+    return match ? `#${match[1].toLowerCase()}` : '';
+  }
+
+  function hexToRgb(hex) {
+    const normalized = normalizeHexColor(hex);
+    if (!normalized) return null;
+    const value = normalized.slice(1);
+    return {
+      r: parseInt(value.slice(0, 2), 16),
+      g: parseInt(value.slice(2, 4), 16),
+      b: parseInt(value.slice(4, 6), 16),
+    };
+  }
+
+  function rgbToHex({ r, g, b }) {
+    return '#' + [r, g, b].map(v =>
+      Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')
+    ).join('');
+  }
+
+  function mixHex(fromHex, toHex, toWeight) {
+    const from = hexToRgb(fromHex);
+    const to = hexToRgb(toHex);
+    if (!from || !to) return '';
+    const fromWeight = 1 - toWeight;
+    return rgbToHex({
+      r: from.r * fromWeight + to.r * toWeight,
+      g: from.g * fromWeight + to.g * toWeight,
+      b: from.b * fromWeight + to.b * toWeight,
+    });
+  }
+
+  function buildAuthorTintStyle(authorColor) {
+    const hex = normalizeHexColor(authorColor);
+    if (!hex) return '';
+    const vars = {
+      '--ann-card-bg': mixHex(hex, '#ffffff', 0.88),
+      '--ann-card-border': mixHex(hex, '#ffffff', 0.58),
+      '--ann-card-accent': mixHex(hex, '#ffffff', 0.28),
+      '--ann-note-bg': mixHex(hex, '#ffffff', 0.94),
+      '--ann-card-bg-dark': mixHex(hex, '#25262b', 0.76),
+      '--ann-card-border-dark': mixHex(hex, '#373a40', 0.52),
+      '--ann-card-accent-dark': mixHex(hex, '#ffffff', 0.38),
+      '--ann-note-bg-dark': mixHex(hex, '#2c2e33', 0.84),
+    };
+    return Object.entries(vars)
+      .filter(([, value]) => value)
+      .map(([key, value]) => `${key}:${value}`)
+      .join(';');
+  }
+
+  function getAuthorLegendItems(anns, settings) {
+    const fallbackName = String((settings && settings.username) || '').trim();
+    const fallbackColor = normalizeHexColor(settings && settings.userColor);
+    const seen = new Set();
+    const items = [];
+
+    (anns || []).forEach(ann => {
+      const explicitName = String((ann && ann.authorName) || '').trim();
+      const explicitColor = normalizeHexColor(ann && ann.authorColor);
+      const name = explicitName || (!explicitColor ? fallbackName : '');
+      const color = explicitColor || fallbackColor || '#2563eb';
+      if (!name) return;
+
+      const key = `${name.toLowerCase()}|${color}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({ name, color });
+    });
+
+    return items;
+  }
+
+  function renderAuthorLegend(anns, settings) {
+    if (!authorLegendEl) return;
+    const items = getAuthorLegendItems(anns, settings);
+    if (items.length === 0) {
+      authorLegendEl.innerHTML = '';
+      authorLegendEl.style.display = 'none';
+      return;
+    }
+
+    authorLegendEl.innerHTML = items.map(item => `
+      <span class="author-legend-item" title="${escHtml(item.name)}">
+        <span class="author-legend-dot" style="background:${escHtml(item.color)}" aria-hidden="true"></span>
+        <span class="author-legend-name">${escHtml(item.name)}</span>
+      </span>`).join('');
+    authorLegendEl.style.display = 'flex';
   }
 
   function getSelector(ann) {
@@ -1592,6 +1695,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const accordion  = !!opts.accordion;
     const openUrls   = opts.openUrls instanceof Set ? opts.openUrls : new Set();
     const snapId     = opts.snapId || '';
+    const fallbackAuthorColor = opts.fallbackAuthorColor || '';
     const byUrl = {};
     anns.forEach(ann => (byUrl[ann.url] = byUrl[ann.url] || []).push(ann));
 
@@ -1644,13 +1748,15 @@ document.addEventListener('DOMContentLoaded', () => {
         // textarea is empty so users can't accumulate empty stacks.
         const lastNote = notes[notes.length - 1] || '';
         const addDisabled = !lastNote.trim();
-        const authorBadge = ann.authorName ? `<div style="font-size: 10px; margin-top: 2px; margin-bottom: 4px; color: ${escHtml(ann.authorColor || '#888')}; font-weight: 600;">👤 ${escHtml(ann.authorName)}</div>` : '';
+        const authorTintStyle = buildAuthorTintStyle(ann.authorColor || fallbackAuthorColor);
+        const authorTintClass = authorTintStyle ? ' item--author-tinted' : '';
+        const authorTintAttr = authorTintStyle ? ` style="${escHtml(authorTintStyle)}"` : '';
         const addBtnHtml = isPremium()
           ? `<button class="item-add-note-btn" data-ann-id="${escHtml(ann.id)}"${addDisabled ? ' disabled aria-disabled="true"' : ''} title="${addDisabled ? 'Fill the current note first' : 'Add another note for this element'}">+ Add note</button>`
           : '';
         html += `
-        <div class="item${isPageLevel ? ' item--page-level' : ''}${isMultiNote ? ' item--multi-note' : ''}">
-          ${authorBadge}<div class="item-sel">
+        <div class="item${authorTintClass}${isPageLevel ? ' item--page-level' : ''}${isMultiNote ? ' item--multi-note' : ''}"${authorTintAttr}>
+          <div class="item-sel">
             <code class="ann-code--clickable${isMulti ? ' ann-code--multi' : ''}" data-nav-ann-id="${escHtml(ann.id)}" title="${escHtml(codeTitle)}">${escHtml(sel)}</code>
             <button class="item-copy-btn" data-ann-id="${escHtml(ann.id)}" title="Copy this annotation">📋</button>
             <button class="item-delete-btn" data-ann-id="${escHtml(ann.id)}" title="Clear annotation">🗑</button>
@@ -1707,6 +1813,7 @@ document.addEventListener('DOMContentLoaded', () => {
     badge.textContent = anns.length > 0 ? String(anns.length) : '';
 
     if (anns.length === 0) {
+      renderAuthorLegend([], {});
       // Read current shortcut to show the right gesture in the empty-state hint
       loadSettings(s => {
         const mod = modLabel(s.shortcut?.modifier || 'alt');
@@ -1722,9 +1829,12 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [] }, snapR => {
+    chrome.storage.local.get({ [COPY_ALL_SNAPSHOTS_KEY]: [], [SETTINGS_KEY]: DEFAULT_SETTINGS }, snapR => {
       const rawSnaps  = snapR[COPY_ALL_SNAPSHOTS_KEY] || [];
       const snapshots = reconcileSnapshots(rawSnaps, anns);
+      const settings = snapR[SETTINGS_KEY] || {};
+      const fallbackAuthorColor = normalizeHexColor(settings.userColor);
+      renderAuthorLegend(anns, settings);
       // Persist reconciliation if we actually trimmed anything.
       if (snapshots.length !== rawSnaps.length ||
           snapshots.some((s, i) => (rawSnaps[i] && s.annotationIds.length !== (rawSnaps[i].annotationIds || []).length))) {
@@ -1776,6 +1886,7 @@ document.addEventListener('DOMContentLoaded', () => {
               accordion:      true,
               snapId:         snap.id,
               openUrls:       new Set(Array.isArray(snap.openUrls) ? snap.openUrls : []),
+              fallbackAuthorColor,
             })}
           </div>
         </div>`;
@@ -1783,7 +1894,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Render any loose annotations (those not in any snapshot) below.
       if (looseAnns.length > 0) {
-        html += buildGroupedAnnotationsHTML(looseAnns, { showGroupCount: false });
+        html += buildGroupedAnnotationsHTML(looseAnns, { showGroupCount: false, fallbackAuthorColor });
       }
 
       finishRender(html, anns);
@@ -2232,6 +2343,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (historyVisible) {
         renderHistoryTab();
       }
+    }
+    if (changes[SETTINGS_KEY]) {
+      chrome.storage.local.get({ annotations: [], [SETTINGS_KEY]: DEFAULT_SETTINGS }, r => {
+        renderAuthorLegend(r.annotations || [], r[SETTINGS_KEY] || {});
+      });
     }
     // Copy Log rows are also affected by changes to the copy-history list
     // itself (e.g., a row gets backfilled or removed in another window).
@@ -3668,7 +3784,14 @@ document.addEventListener('DOMContentLoaded', () => {
     settingsBtn.textContent   = '✕';
     settingsBtn.title         = 'Close settings';
     settingsBtn.classList.add('active');
-    refreshPremiumStatus().then(() => renderSettings());
+    renderSettings();
+    refreshPremiumStatus().then(() => {
+      if (settingsVisible) renderSettings();
+    });
+    chrome.runtime.sendMessage({ type: 'refreshLocalConfig' }, () => {
+      void chrome.runtime.lastError;
+      if (settingsVisible) renderSettings();
+    });
   }
 
   function hideSettings() {
@@ -3680,6 +3803,78 @@ document.addEventListener('DOMContentLoaded', () => {
     settingsBtn.title        = 'Settings';
     settingsBtn.classList.remove('active');
     load();
+  }
+
+  function sendExtensionMessage(type, payload = {}) {
+    return new Promise(resolve => {
+      try {
+        chrome.runtime.sendMessage({ type, ...payload }, result => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          resolve(result || { ok: false, error: 'No response from extension worker.' });
+        });
+      } catch (err) {
+        resolve({ ok: false, error: err?.message || String(err) });
+      }
+    });
+  }
+
+  function fmtDebugTime(value) {
+    if (!value) return 'n/a';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString();
+  }
+
+  function fmtDebugBool(value) {
+    if (value === true) return 'yes';
+    if (value === false) return 'no';
+    return 'unknown';
+  }
+
+  function formatTeamDebugSnapshot(snapshot) {
+    if (!snapshot || snapshot.ok === false) {
+      return `Diagnostics unavailable: ${snapshot?.error || 'No snapshot returned.'}`;
+    }
+    const settings = snapshot.settings || {};
+    const firebase = settings.firebase || {};
+    const sync = snapshot.teamSync || {};
+    const testing = snapshot.testing || {};
+    const desktop = snapshot.desktop || {};
+    const permissions = snapshot.permissions || {};
+    const identityRows = Object.entries(testing.identities || {})
+      .map(([windowId, identity]) => `  ${windowId}: ${identity.username || '(unnamed)'} ${identity.userColor || ''}`)
+      .join('\n') || '  none';
+    const windowRows = (testing.windows || [])
+      .map(win => {
+        const assigned = win.assignedIdentity?.username ? ` -> ${win.assignedIdentity.username}` : '';
+        return `  ${win.id}: ${win.tabCount || 0} tab(s), ${win.activeTabTitle || 'Untitled'}${assigned}`;
+      })
+      .join('\n') || `  ${testing.windowsError ? `error: ${testing.windowsError}` : 'none visible'}`;
+    const events = (snapshot.events || [])
+      .slice(-18)
+      .map(event => `  ${fmtDebugTime(event.at)} [${event.level || 'info'}] ${event.scope || 'debug'}: ${event.message || ''}`)
+      .join('\n') || '  none';
+
+    return [
+      `Generated: ${fmtDebugTime(snapshot.generatedAt)}`,
+      `Extension: ${snapshot.runtime?.id || 'unknown'} v${snapshot.runtime?.version || 'unknown'}`,
+      `Permissions: tabs=${fmtDebugBool(permissions.tabs)}, windows=${fmtDebugBool(permissions.windows)}, localhost=${fmtDebugBool(permissions.localhost)}`,
+      `Desktop app: ${desktop.ok ? 'reachable' : 'unreachable'}${desktop.error ? ` (${desktop.error})` : ''}`,
+      `Desktop config: repo=${desktop.currentConfig?.githubUrl || 'n/a'}, user=${desktop.currentConfig?.username || 'n/a'}, testing=${desktop.currentConfig?.testingMode !== false ? 'on' : 'off'}`,
+      `Extension config: repo=${settings.githubUrl || 'n/a'}, user=${settings.username || 'n/a'}, testing=${settings.testingMode ? 'on' : 'off'}, firebase=${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
+      `Setup refresh: last=${fmtDebugTime(snapshot.setup?.lastChecked)}, error=${snapshot.setup?.error || 'none'}`,
+      `Team sync: ${sync.connected ? 'connected' : 'not connected'}, team=${sync.teamId || 'n/a'}, remote=${sync.remoteCount ?? 'n/a'}, error=${sync.error || 'none'}`,
+      `Testing identity source: ${testing.identitySource || 'unknown'}, desktopAvailable=${fmtDebugBool(testing.desktopAvailable)}`,
+      'Assigned identities:',
+      identityRows,
+      'Visible windows:',
+      windowRows,
+      'Recent events:',
+      events,
+    ].join('\n');
   }
 
   function renderSettings() {
@@ -3746,12 +3941,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const copyBtnRight  = btnActions.copyBtn?.right  || 'cutAll';
     const clearBtnLeft  = btnActions.clearBtn?.left  || 'clearAll';
     const clearBtnRight = btnActions.clearBtn?.right || 'saveForLater';
+    const testingMode   = s.testingMode !== false;
 
     // Build <option> list for a given action key
     const actionOptions = (selected) => Object.entries(BUTTON_ACTIONS)
       .map(([key, cfg]) =>
         `<option value="${escHtml(key)}" ${selected === key ? 'selected' : ''}>${cfg.emoji} ${escHtml(cfg.label)}</option>`)
       .join('');
+    const testingWindowSection = testingMode ? `
+      <!-- ── Testing Windows ── -->
+      <div class="settings-section settings-section--dev" id="testing-windows-section">
+        <div class="settings-section-title">Testing Windows</div>
+        <div class="settings-row">
+          <span class="settings-label">Mode</span>
+          <span class="settings-value testing-mode-on">On</span>
+        </div>
+        <p class="settings-hint">Assign open Chrome windows to temporary test identities. New annotations from those windows use the same author fields and sync path as real team annotations.</p>
+        <div id="testing-windows-list" class="testing-windows-list">Loading windows…</div>
+        <div class="settings-row settings-row--btns">
+          <button id="refresh-testing-windows-btn" class="btn-history-action">Refresh windows</button>
+        </div>
+      </div>` : '';
 
     // Undo/redo shortcut state for this render.
     const undoSc  = s.undoShortcut || DEFAULT_SETTINGS.undoShortcut;
@@ -3819,9 +4029,24 @@ document.addEventListener('DOMContentLoaded', () => {
             ${escHtml(s.username || 'Assigned in desktop app')}
           </span>
         </div>
-        <p class="settings-hint">Set Firebase, GitHub, name, and color once in the desktop app. Use refresh only after changing those values there.</p>
+        <div class="settings-row">
+          <span class="settings-label">Testing mode</span>
+          <span class="settings-value">${testingMode ? 'On' : 'Off'}</span>
+        </div>
+        <p class="settings-hint">Set Firebase, GitHub, name, color, and testing mode once in the desktop app. The popup refreshes these automatically when settings opens.</p>
         <div class="settings-row settings-row--btns">
           <button id="refresh-team-config-btn" class="btn-history-action">Refresh from desktop app</button>
+        </div>
+      </div>
+      ${testingWindowSection}
+      <div class="settings-section settings-section--dev" id="team-debug-section">
+        <div class="settings-section-title">Team Debug</div>
+        <p class="settings-hint">One snapshot for setup, Firebase, testing identities, Chrome windows, permissions, and recent worker events.</p>
+        <pre id="team-debug-output" class="team-debug-output">Loading diagnostics...</pre>
+        <div class="settings-row settings-row--btns">
+          <button id="refresh-team-debug-btn" class="btn-history-action" type="button">Refresh debug</button>
+          <button id="copy-team-debug-btn" class="btn-history-action" type="button">Copy debug JSON</button>
+          <button id="clear-team-debug-btn" class="btn-history-action" type="button">Clear debug log</button>
         </div>
       </div>
       <!-- ── Undo / Redo Shortcuts ── -->
@@ -4035,6 +4260,147 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
 
     attachExternalLinks(settingsEl);
+
+    // ── Testing window identities ───────────────────────────────────────
+    const testingWindowsList = settingsEl.querySelector('#testing-windows-list');
+    function renderTestingWindows() {
+      if (!testingWindowsList) return;
+      testingWindowsList.textContent = 'Loading windows…';
+      chrome.runtime.sendMessage({ type: 'listTestingWindows' }, result => {
+        if (chrome.runtime.lastError || !result || result.ok === false) {
+          const msg = chrome.runtime.lastError?.message || result?.error || 'Could not read Chrome windows.';
+          testingWindowsList.innerHTML = `<div class="testing-window-empty">${escHtml(msg)}</div>`;
+          return;
+        }
+        const windows = result.windows || [];
+        if (!windows.length) {
+          testingWindowsList.innerHTML = '<div class="testing-window-empty">No Chrome windows found.</div>';
+          return;
+        }
+        testingWindowsList.innerHTML = windows.map(win => {
+          const identity = win.assignedIdentity || {};
+          const username = identity.username || '';
+          const color = identity.userColor || win.suggestedColor || '#2563eb';
+          const activeTitle = win.activeTabTitle || 'Untitled active tab';
+          const activeUrl = win.activeTabUrl || '';
+          return `
+            <div class="testing-window-card" data-window-id="${escHtml(win.id)}">
+              <div class="testing-window-summary">
+                <div class="testing-window-title">
+                  Window ${escHtml(win.id)}
+                  ${win.focused ? '<span class="testing-window-pill">Focused</span>' : ''}
+                  ${win.incognito ? '<span class="testing-window-pill">Incognito</span>' : ''}
+                  ${win.identitySource ? `<span class="testing-window-pill">${escHtml(win.identitySource)}</span>` : ''}
+                </div>
+                <div class="testing-window-sub">${escHtml(win.tabCount || 0)} tab${win.tabCount === 1 ? '' : 's'} · ${escHtml(activeTitle)}</div>
+                ${activeUrl ? `<div class="testing-window-url" title="${escHtml(activeUrl)}">${escHtml(activeUrl)}</div>` : ''}
+              </div>
+              <div class="testing-window-controls">
+                <input class="testing-window-name" type="text" placeholder="Display name" value="${escHtml(username)}" autocomplete="off" spellcheck="false">
+                <input class="testing-window-color" type="color" value="${escHtml(color)}" title="Identity color">
+                <button class="btn-history-action testing-window-save" type="button">Assign</button>
+                <button class="btn-history-action testing-window-clear" type="button" ${username ? '' : 'disabled'}>Clear</button>
+              </div>
+            </div>`;
+        }).join('');
+      });
+    }
+    if (testingWindowsList) {
+      renderTestingWindows();
+      testingWindowsList.addEventListener('keydown', e => {
+        if (e.key !== 'Enter') return;
+        const card = e.target.closest('.testing-window-card');
+        if (!card || !e.target.classList.contains('testing-window-name')) return;
+        e.preventDefault();
+        card.querySelector('.testing-window-save')?.click();
+      });
+      testingWindowsList.addEventListener('click', e => {
+        const card = e.target.closest('.testing-window-card');
+        if (!card) return;
+        const windowId = Number(card.dataset.windowId);
+        const nameInput = card.querySelector('.testing-window-name');
+        const colorInput = card.querySelector('.testing-window-color');
+        if (e.target.closest('.testing-window-save')) {
+          const username = (nameInput?.value || '').trim();
+          if (!username) {
+            showToast('Enter a display name for that window.', { kind: 'error' });
+            nameInput?.focus();
+            return;
+          }
+          const btn = e.target.closest('.testing-window-save');
+          btn.disabled = true;
+          chrome.runtime.sendMessage({
+            type: 'setTestingWindowIdentity',
+            windowId,
+            identity: {
+              username,
+              userColor: colorInput?.value || '#2563eb',
+            },
+          }, result => {
+            btn.disabled = false;
+            if (chrome.runtime.lastError || !result || result.ok === false) {
+              const msg = chrome.runtime.lastError?.message || result?.error || 'Could not assign that window.';
+              showToast(msg, { kind: 'error' });
+              renderTestingWindows();
+              return;
+            }
+            const source = result.identity?._source ? ` (${result.identity._source})` : '';
+            showToast(`Testing identity assigned${source}.`, { kind: 'ok' });
+            renderTestingWindows();
+          });
+        }
+        if (e.target.closest('.testing-window-clear')) {
+          const btn = e.target.closest('.testing-window-clear');
+          btn.disabled = true;
+          chrome.runtime.sendMessage({ type: 'clearTestingWindowIdentity', windowId }, result => {
+            btn.disabled = false;
+            if (chrome.runtime.lastError || !result || result.ok === false) {
+              const msg = chrome.runtime.lastError?.message || result?.error || 'Could not clear that window.';
+              showToast(msg, { kind: 'error' });
+              renderTestingWindows();
+              return;
+            }
+            showToast('Testing identity cleared.', { kind: 'ok' });
+            renderTestingWindows();
+          });
+        }
+      });
+    }
+    settingsEl.querySelector('#refresh-testing-windows-btn')?.addEventListener('click', renderTestingWindows);
+
+    // ── Team diagnostics ─────────────────────────────────────────────────
+    const teamDebugOutput = settingsEl.querySelector('#team-debug-output');
+    let lastTeamDebugSnapshot = null;
+    async function renderTeamDiagnostics() {
+      if (!teamDebugOutput) return;
+      teamDebugOutput.textContent = 'Loading diagnostics...';
+      const snapshot = await sendExtensionMessage('getTeamDebugSnapshot');
+      lastTeamDebugSnapshot = snapshot;
+      teamDebugOutput.textContent = formatTeamDebugSnapshot(snapshot);
+    }
+    renderTeamDiagnostics();
+    settingsEl.querySelector('#refresh-team-debug-btn')?.addEventListener('click', renderTeamDiagnostics);
+    settingsEl.querySelector('#copy-team-debug-btn')?.addEventListener('click', async () => {
+      const snapshot = lastTeamDebugSnapshot && lastTeamDebugSnapshot.ok
+        ? lastTeamDebugSnapshot
+        : await sendExtensionMessage('getTeamDebugSnapshot');
+      lastTeamDebugSnapshot = snapshot;
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2));
+        showToast('Debug JSON copied.', { kind: 'ok' });
+      } catch (err) {
+        showToast('Could not copy debug JSON: ' + (err?.message || err), { kind: 'error' });
+      }
+    });
+    settingsEl.querySelector('#clear-team-debug-btn')?.addEventListener('click', async () => {
+      const result = await sendExtensionMessage('clearTeamDebugLog');
+      if (!result || result.ok === false) {
+        showToast('Could not clear debug log: ' + (result?.error || 'No response'), { kind: 'error' });
+        return;
+      }
+      showToast('Debug log cleared.', { kind: 'ok' });
+      renderTeamDiagnostics();
+    });
 
     // ── Backup status section ─────────────────────────────────────────────
     chrome.storage.local.get({
@@ -4925,17 +5291,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const _tipLink = document.getElementById('stripe-tip-link');
   if (_tipLink) _tipLink.setAttribute('data-url', TIP_URL);
 
-  refreshPremiumStatus().then(() => {
-    // Re-apply dark mode now that the real premium status is known.
-    loadSettings(s => applyDarkMode(s.darkMode));
-    // Run one-shot migration (legacy → dedup) before loading the UI.
+  load();
+  setTimeout(() => {
+    refreshPremiumStatus().then(() => {
+      // Re-apply dark mode now that the real premium status is known.
+      loadSettings(s => applyDarkMode(s.darkMode));
+      if (settingsVisible) renderSettings();
+    });
     maybeMigrateStorage(() => {
-      // One-time backfill so legacy copy-log entries (stored as raw
-      // markdown only) render with real per-row buttons instead of a
-      // markdown-parsing fallback. Chained before load() so the Copy
-      // Log tab is in its final shape on first render.
       backfillCopyLogIds(() => {
         load();
+        if (historyVisible) renderHistoryTab();
         checkSyncRestore();
       });
       // Init writes are done; allow user actions to start populating the
@@ -4949,7 +5315,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateUndoButtons();
       }, 50);
     });
-  });
+  }, 0);
 
 
 

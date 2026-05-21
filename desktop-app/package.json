@@ -4,7 +4,8 @@
   "description": "Standalone desktop app for AI Annotator",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node ../scripts/start-desktop.js",
+    "start:electron": "electron .",
     "build:mac": "electron-builder --mac"
   },
   "dependencies": {

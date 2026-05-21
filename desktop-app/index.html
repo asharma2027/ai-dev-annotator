@@ -141,6 +141,23 @@
       align-items: end;
     }
 
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--blue);
+      cursor: pointer;
+    }
+
     .color-control {
       display: flex;
       align-items: center;
@@ -247,6 +264,26 @@
 
     .empty-log { color: #93a4bb; }
 
+    .debug-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    #diagnostics {
+      min-height: 140px;
+      max-height: 280px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #101827;
+      color: #dbeafe;
+      border-radius: 8px;
+      padding: 12px;
+      font: 12px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
     @media (max-width: 760px) {
       .app-shell { padding: 22px; }
       .layout { grid-template-columns: 1fr; }
@@ -278,7 +315,7 @@
           <div class="field">
             <label for="firebaseConfig">Firebase config JSON</label>
             <textarea id="firebaseConfig" placeholder='{ "apiKey": "...", "authDomain": "...", "databaseURL": "..." }'></textarea>
-            <p class="hint">Leave blank only if the repository includes <code>ai-annotator-config.json</code>.</p>
+            <p class="hint">You can paste the JSON object or the Firebase config snippet. This app writes it to <code>ai-annotator-config.json</code> when the website starts.</p>
           </div>
         </section>
 
@@ -297,6 +334,13 @@
                 <span id="colorValue" class="color-value"></span>
               </div>
             </div>
+          </div>
+          <div class="field">
+            <label class="checkbox-row" for="testingMode">
+              <input type="checkbox" id="testingMode">
+              <span>Testing mode</span>
+            </label>
+            <p class="hint">When enabled, the extension can assign currently open Chrome windows to test identities while still using the normal annotation and sync pipeline.</p>
           </div>
           <div class="actions">
             <button id="startBtn" class="primary">Save And Start Website</button>
@@ -327,18 +371,28 @@
           <h2>Activity</h2>
           <div id="log"><span class="empty-log">No activity yet.</span></div>
         </section>
+
+        <section>
+          <h2>Diagnostics</h2>
+          <div class="debug-actions">
+            <button id="refreshDiagnosticsBtn" class="secondary">Refresh Debug</button>
+            <button id="copyDiagnosticsBtn" class="secondary">Copy Debug JSON</button>
+          </div>
+          <div id="diagnostics">Diagnostics have not been loaded yet.</div>
+        </section>
       </div>
     </div>
   </main>
 
   <script>
-    const { ipcRenderer } = require('electron');
+    const { ipcRenderer, clipboard } = require('electron');
 
     const els = {
       githubUrl: document.getElementById('githubUrl'),
       firebaseConfig: document.getElementById('firebaseConfig'),
       username: document.getElementById('username'),
       userColor: document.getElementById('userColor'),
+      testingMode: document.getElementById('testingMode'),
       colorValue: document.getElementById('colorValue'),
       startBtn: document.getElementById('startBtn'),
       saveOnlyBtn: document.getElementById('saveOnlyBtn'),
@@ -350,7 +404,12 @@
       versionDate: document.getElementById('versionDate'),
       versionBranch: document.getElementById('versionBranch'),
       versionChecked: document.getElementById('versionChecked'),
+      refreshDiagnosticsBtn: document.getElementById('refreshDiagnosticsBtn'),
+      copyDiagnosticsBtn: document.getElementById('copyDiagnosticsBtn'),
+      diagnostics: document.getElementById('diagnostics'),
     };
+
+    let lastDiagnostics = null;
 
     function formatDate(value) {
       if (!value) return 'Not checked yet';
@@ -378,12 +437,41 @@
       els.log.scrollTop = els.log.scrollHeight;
     }
 
+    function summarizeDiagnostics(data) {
+      if (!data || data.ok === false) return 'Diagnostics unavailable.';
+      const config = data.currentConfig || {};
+      const firebase = config.firebase || {};
+      const identities = data.testingWindowIdentities || {};
+      const events = data.extensionDebugEvents || [];
+      const identityRows = Object.entries(identities)
+        .map(([windowId, identity]) => `  ${windowId}: ${identity.username || '(unnamed)'} ${identity.userColor || ''}`)
+        .join('\n') || '  none';
+      const eventRows = events.slice(-14)
+        .map(event => `  ${event.at} [${event.level}] ${event.scope}: ${event.message}`)
+        .join('\n') || '  none';
+      return [
+        `Checked: ${data.checkedAt}`,
+        `Setup API: http://localhost:${data.setupPort}`,
+        `Repo: ${config.githubUrl || 'n/a'}`,
+        `User: ${config.username || 'n/a'} ${config.userColor || ''}`,
+        `Testing mode: ${config.testingMode !== false ? 'on' : 'off'}`,
+        `Firebase: ${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
+        `Local site port: ${config.localServerPort || 'n/a'}`,
+        `Repo workspace: ${data.repoWorkspaceExists ? 'ready' : 'not cloned'}`,
+        'Shared testing identities:',
+        identityRows,
+        'Recent extension events:',
+        eventRows,
+      ].join('\n');
+    }
+
     function renderConfig(config) {
       if (!config) return;
       els.githubUrl.value = config.githubUrl || '';
       els.firebaseConfig.value = config.firebaseConfig || '';
       els.username.value = config.username || '';
       els.userColor.value = config.userColor || '#2563eb';
+      els.testingMode.checked = config.testingMode !== false;
       els.colorValue.textContent = els.userColor.value.toUpperCase();
 
       const status = config.repoStatus || {};
@@ -411,6 +499,7 @@
         firebaseConfig: els.firebaseConfig.value.trim(),
         username: els.username.value.trim(),
         userColor: els.userColor.value,
+        testingMode: els.testingMode.checked,
         saveOnly,
       };
     }
@@ -434,17 +523,36 @@
       }
     }
 
+    async function refreshDiagnostics() {
+      els.refreshDiagnosticsBtn.disabled = true;
+      try {
+        lastDiagnostics = await ipcRenderer.invoke('get-diagnostics');
+        els.diagnostics.textContent = summarizeDiagnostics(lastDiagnostics);
+      } catch (err) {
+        els.diagnostics.textContent = 'Diagnostics error: ' + err.message;
+      } finally {
+        els.refreshDiagnosticsBtn.disabled = false;
+      }
+    }
+
     els.userColor.addEventListener('input', () => {
       els.colorValue.textContent = els.userColor.value.toUpperCase();
     });
 
     els.startBtn.addEventListener('click', () => submitSetup(false));
     els.saveOnlyBtn.addEventListener('click', () => submitSetup(true));
+    els.refreshDiagnosticsBtn.addEventListener('click', refreshDiagnostics);
+    els.copyDiagnosticsBtn.addEventListener('click', async () => {
+      if (!lastDiagnostics) lastDiagnostics = await ipcRenderer.invoke('get-diagnostics');
+      clipboard.writeText(JSON.stringify(lastDiagnostics, null, 2));
+      setStatus('success', 'Diagnostics copied.');
+    });
 
     ipcRenderer.on('log', (event, message) => appendLog(message));
     ipcRenderer.on('config-updated', (event, config) => renderConfig(config));
 
     ipcRenderer.invoke('get-config').then(renderConfig);
+    refreshDiagnostics();
   </script>
 </body>
 </html>

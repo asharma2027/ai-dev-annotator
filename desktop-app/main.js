@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
@@ -9,29 +9,131 @@ const treeKill = require('tree-kill');
 
 const CONFIG_FILE = path.join(app.getPath('userData'), 'annotator-setup.json');
 const REPO_DIR = path.join(app.getPath('userData'), 'repo_workspace');
+const REPO_CONFIG_FILE = path.join(REPO_DIR, 'ai-annotator-config.json');
+const TEST_IDENTITIES_FILE = path.join(app.getPath('userData'), 'testing-window-identities.json');
 const SETUP_PORT = 11454;
 const REPO_CHECK_INTERVAL_MS = 60 * 1000;
 const DEFAULT_COLORS = ['#2563eb', '#059669', '#dc2626', '#7c3aed', '#ea580c', '#0891b2', '#be123c'];
+const EXTENSION_DEBUG_EVENT_LIMIT = 200;
 
 let mainWindow;
+let setupServer = null;
 let repoProcess = null;
 let repoUpdateTimer = null;
 let repoUpdateInFlight = false;
+let extensionDebugEvents = [];
 
 function randomReviewerName() {
   return `Reviewer ${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
+function parseLenientJsonObject(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+
+  const candidates = [raw];
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    candidates.push(raw.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch (_err) {}
+  }
+
+  for (const candidate of candidates) {
+    const normalized = candidate
+      .replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":')
+      .replace(/,\s*([}\]])/g, '$1');
+    try {
+      const parsed = JSON.parse(normalized);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch (_err) {}
+  }
+
+  return null;
+}
+
+function completeFirebaseConfig(config) {
+  const completed = { ...(config || {}) };
+  if (!completed.databaseURL && completed.projectId) {
+    completed.databaseURL = `https://${completed.projectId}-default-rtdb.firebaseio.com`;
+  }
+  return completed;
+}
+
+function normalizeFirebaseConfigText(value, { allowBlank = true } = {}) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    if (allowBlank) return '';
+    throw new Error('Firebase config JSON is required.');
+  }
+  const parsed = parseLenientJsonObject(raw);
+  if (!parsed) {
+    throw new Error('Firebase config must be a valid JSON object. You can paste either the JSON object or the Firebase config snippet from Firebase.');
+  }
+  return JSON.stringify(completeFirebaseConfig(parsed), null, 2);
+}
+
+function safeNormalizeFirebaseConfigText(value) {
+  try {
+    return normalizeFirebaseConfigText(value);
+  } catch (_err) {
+    return String(value || '').trim();
+  }
+}
+
+function firebaseConfigForRepoFile(value) {
+  const normalized = normalizeFirebaseConfigText(value);
+  return normalized ? JSON.parse(normalized) : '';
+}
+
+function repoConfigToSetupConfig(fileConfig = {}) {
+  const setup = {};
+  if (typeof fileConfig.githubUrl === 'string') setup.githubUrl = fileConfig.githubUrl.trim();
+  if (fileConfig.firebaseConfig) {
+    setup.firebaseConfig = typeof fileConfig.firebaseConfig === 'object'
+      ? JSON.stringify(fileConfig.firebaseConfig, null, 2)
+      : normalizeFirebaseConfigText(fileConfig.firebaseConfig);
+  }
+  if (typeof fileConfig.username === 'string') setup.username = fileConfig.username.trim();
+  if (typeof fileConfig.userColor === 'string') setup.userColor = fileConfig.userColor.trim();
+  return setup;
+}
+
+function readRepoConfigFile() {
+  if (!fs.existsSync(REPO_CONFIG_FILE)) return null;
+  try {
+    return repoConfigToSetupConfig(JSON.parse(fs.readFileSync(REPO_CONFIG_FILE, 'utf8')));
+  } catch (err) {
+    console.warn('Could not parse ai-annotator-config.json', err);
+    return null;
+  }
+}
+
+function mergeMissingConfig(base = {}, fallback = {}) {
+  const merged = { ...base };
+  ['githubUrl', 'firebaseConfig', 'username', 'userColor'].forEach((key) => {
+    if (!merged[key] && fallback[key]) merged[key] = fallback[key];
+  });
+  return merged;
+}
+
 function normalizeConfig(config = {}) {
   return {
     githubUrl: typeof config.githubUrl === 'string' ? config.githubUrl : '',
-    firebaseConfig: typeof config.firebaseConfig === 'string' ? config.firebaseConfig : '',
+    firebaseConfig: typeof config.firebaseConfig === 'string' ? safeNormalizeFirebaseConfigText(config.firebaseConfig) : '',
     username: typeof config.username === 'string' && config.username.trim()
       ? config.username.trim()
       : randomReviewerName(),
     userColor: typeof config.userColor === 'string' && /^#[0-9a-f]{6}$/i.test(config.userColor)
       ? config.userColor
       : DEFAULT_COLORS[Math.floor(Math.random() * DEFAULT_COLORS.length)],
+    testingMode: config.testingMode !== false,
     localServerPort: Number.isInteger(config.localServerPort) ? config.localServerPort : null,
     repoStatus: {
       currentCommit: '',
@@ -48,14 +150,16 @@ function normalizeConfig(config = {}) {
 }
 
 function loadConfig() {
+  let rawConfig = {};
   try {
     if (fs.existsSync(CONFIG_FILE)) {
-      return normalizeConfig(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')));
+      rawConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     }
   } catch (err) {
     console.warn('Could not load setup config:', err);
   }
-  const config = normalizeConfig();
+  const repoConfig = readRepoConfigFile();
+  const config = normalizeConfig(repoConfig ? mergeMissingConfig(rawConfig, repoConfig) : rawConfig);
   saveConfig(config);
   return config;
 }
@@ -73,6 +177,7 @@ function publicConfig() {
     firebaseConfig: currentConfig.firebaseConfig,
     username: currentConfig.username,
     userColor: currentConfig.userColor,
+    testingMode: currentConfig.testingMode,
     localServerPort: currentConfig.localServerPort,
     repoStatus: currentConfig.repoStatus,
   };
@@ -91,9 +196,179 @@ function broadcastConfig() {
 
 const expressApp = express();
 expressApp.use(cors({ origin: '*' }));
+expressApp.use(express.json({ limit: '1mb' }));
+
+function normalizeTestIdentity(identity = {}) {
+  const username = typeof identity.username === 'string' ? identity.username.trim() : '';
+  if (!username) return null;
+  return {
+    username,
+    userColor: typeof identity.userColor === 'string' && /^#[0-9a-f]{6}$/i.test(identity.userColor)
+      ? identity.userColor
+      : '#2563eb',
+    assignedAt: typeof identity.assignedAt === 'string' && identity.assignedAt
+      ? identity.assignedAt
+      : new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeTestingWindowIdentities(value = {}) {
+  const out = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  Object.entries(value).forEach(([windowId, identity]) => {
+    const normalized = normalizeTestIdentity(identity);
+    if (normalized) out[String(windowId)] = normalized;
+  });
+  return out;
+}
+
+function readTestingWindowIdentities() {
+  if (!fs.existsSync(TEST_IDENTITIES_FILE)) return {};
+  try {
+    return normalizeTestingWindowIdentities(JSON.parse(fs.readFileSync(TEST_IDENTITIES_FILE, 'utf8')));
+  } catch (err) {
+    console.warn('Could not parse testing-window-identities.json', err);
+    return {};
+  }
+}
+
+function writeTestingWindowIdentities(identities) {
+  const normalized = normalizeTestingWindowIdentities(identities);
+  fs.mkdirSync(path.dirname(TEST_IDENTITIES_FILE), { recursive: true });
+  fs.writeFileSync(TEST_IDENTITIES_FILE, `${JSON.stringify(normalized, null, 2)}\n`);
+  return normalized;
+}
+
+function setTestingWindowIdentity(windowId, identity) {
+  const id = Number(windowId);
+  if (!Number.isInteger(id)) throw new Error('Window id is required.');
+  const normalized = normalizeTestIdentity(identity);
+  if (!normalized) throw new Error('Display name is required.');
+  const identities = readTestingWindowIdentities();
+  identities[String(id)] = normalized;
+  writeTestingWindowIdentities(identities);
+  sendLog(`Assigned testing window ${id} to ${normalized.username}.`);
+  return normalized;
+}
+
+function clearTestingWindowIdentity(windowId) {
+  const id = Number(windowId);
+  if (!Number.isInteger(id)) throw new Error('Window id is required.');
+  const identities = readTestingWindowIdentities();
+  if (identities[String(id)]) {
+    delete identities[String(id)];
+    writeTestingWindowIdentities(identities);
+    sendLog(`Cleared testing identity for window ${id}.`);
+  }
+}
+
+function safeParseFirebaseConfig(value) {
+  try {
+    const parsed = parseLenientJsonObject(value);
+    if (!parsed) return { configured: false };
+    const completed = completeFirebaseConfig(parsed);
+    return {
+      configured: true,
+      projectId: completed.projectId || '',
+      databaseURL: completed.databaseURL || '',
+      authDomain: completed.authDomain || '',
+      appIdSuffix: completed.appId ? String(completed.appId).slice(-8) : '',
+      hasApiKey: !!completed.apiKey,
+    };
+  } catch (err) {
+    return {
+      configured: !!String(value || '').trim(),
+      error: err.message,
+    };
+  }
+}
+
+function appendExtensionDebugEvent(raw = {}) {
+  const event = {
+    at: new Date().toISOString(),
+    scope: typeof raw.scope === 'string' && raw.scope ? raw.scope : 'extension',
+    message: typeof raw.message === 'string' && raw.message ? raw.message : 'debug event',
+    level: typeof raw.level === 'string' && raw.level ? raw.level : 'info',
+    details: raw.details && typeof raw.details === 'object' ? raw.details : {},
+  };
+  extensionDebugEvents.push(event);
+  if (extensionDebugEvents.length > EXTENSION_DEBUG_EVENT_LIMIT) {
+    extensionDebugEvents = extensionDebugEvents.slice(-EXTENSION_DEBUG_EVENT_LIMIT);
+  }
+  sendLog(`[Extension:${event.level}] ${event.scope} - ${event.message}`);
+  return event;
+}
+
+function desktopDiagnostics() {
+  const repoConfigExists = fs.existsSync(REPO_CONFIG_FILE);
+  return {
+    ok: true,
+    checkedAt: new Date().toISOString(),
+    setupPort: SETUP_PORT,
+    configPath: CONFIG_FILE,
+    repoDir: REPO_DIR,
+    repoConfigPath: REPO_CONFIG_FILE,
+    repoConfigExists,
+    repoWorkspaceExists: hasGitRepo(),
+    repoProcess: repoProcess ? { pid: repoProcess.pid } : null,
+    currentConfig: {
+      githubUrl: currentConfig.githubUrl,
+      username: currentConfig.username,
+      userColor: currentConfig.userColor,
+      testingMode: currentConfig.testingMode,
+      localServerPort: currentConfig.localServerPort,
+      firebase: safeParseFirebaseConfig(currentConfig.firebaseConfig),
+      repoStatus: currentConfig.repoStatus,
+    },
+    testingWindowIdentities: readTestingWindowIdentities(),
+    extensionDebugEvents: extensionDebugEvents.slice(-80),
+  };
+}
 
 expressApp.get('/api/config', (req, res) => {
   res.json(publicConfig());
+});
+
+expressApp.get('/api/testing-identities', (req, res) => {
+  res.json({
+    ok: true,
+    source: 'desktop-app',
+    identities: readTestingWindowIdentities(),
+    checkedAt: new Date().toISOString(),
+  });
+});
+
+expressApp.put('/api/testing-identities/:windowId', (req, res) => {
+  try {
+    const identity = setTestingWindowIdentity(req.params.windowId, req.body || {});
+    res.json({ ok: true, source: 'desktop-app', identity });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+expressApp.delete('/api/testing-identities/:windowId', (req, res) => {
+  try {
+    clearTestingWindowIdentity(req.params.windowId);
+    res.json({ ok: true, source: 'desktop-app' });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+expressApp.post('/api/debug-events', (req, res) => {
+  try {
+    const events = Array.isArray(req.body?.events) ? req.body.events : [req.body || {}];
+    const accepted = events.map(appendExtensionDebugEvent);
+    res.json({ ok: true, accepted: accepted.length });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
+expressApp.get('/api/diagnostics', (req, res) => {
+  res.json(desktopDiagnostics());
 });
 
 expressApp.get('/api/site-version', (req, res) => {
@@ -104,9 +379,26 @@ expressApp.get('/api/site-version', (req, res) => {
   });
 });
 
-expressApp.listen(SETUP_PORT, () => {
-  console.log(`Extension setup server running on port ${SETUP_PORT}`);
-});
+function startSetupServer() {
+  setupServer = expressApp.listen(SETUP_PORT, () => {
+    console.log(`Extension setup server running on port ${SETUP_PORT}`);
+  });
+
+  setupServer.on('error', (error) => {
+    const message = error.code === 'EADDRINUSE'
+      ? `The desktop setup server could not start because port ${SETUP_PORT} is already in use. Close the other desktop app instance or free that port, then run npm start again.`
+      : `The desktop setup server could not start: ${error.message}`;
+
+    console.error(message);
+    sendLog(message);
+    app.whenReady().then(() => {
+      dialog.showErrorBox('Desktop App Startup Failed', message);
+      app.quit();
+    });
+  });
+}
+
+startSetupServer();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -118,7 +410,7 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile('index.html');
+  mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
 
 app.whenReady().then(() => {
@@ -135,23 +427,36 @@ app.on('window-all-closed', function () {
 
 app.on('will-quit', () => {
   clearInterval(repoUpdateTimer);
+  if (setupServer) setupServer.close();
   if (repoProcess) treeKill(repoProcess.pid, 'SIGKILL');
 });
 
 ipcMain.handle('get-config', async () => publicConfig());
+ipcMain.handle('get-diagnostics', async () => desktopDiagnostics());
 
 ipcMain.handle('start-repo', async (event, setup) => {
   currentConfig.githubUrl = typeof setup.githubUrl === 'string' ? setup.githubUrl.trim() : currentConfig.githubUrl;
-  currentConfig.firebaseConfig = typeof setup.firebaseConfig === 'string' ? setup.firebaseConfig.trim() : currentConfig.firebaseConfig;
+  if (typeof setup.firebaseConfig === 'string') {
+    currentConfig.firebaseConfig = normalizeFirebaseConfigText(setup.firebaseConfig);
+  }
   currentConfig.username = typeof setup.username === 'string' && setup.username.trim()
     ? setup.username.trim()
     : currentConfig.username || randomReviewerName();
   currentConfig.userColor = typeof setup.userColor === 'string' && /^#[0-9a-f]{6}$/i.test(setup.userColor)
     ? setup.userColor
     : currentConfig.userColor;
+  if (typeof setup.testingMode === 'boolean') {
+    currentConfig.testingMode = setup.testingMode;
+  }
   broadcastConfig();
 
   if (setup.saveOnly) {
+    if (await repoWorkspaceMatchesGithubUrl()) {
+      await applyRepoConfigFile();
+      await writeRepoConfigFile();
+    } else if (currentConfig.githubUrl) {
+      sendLog('Setup saved. The repository config file will be written after you start this repository.');
+    }
     sendLog('Setup saved.');
     return { success: true };
   }
@@ -165,6 +470,7 @@ ipcMain.handle('start-repo', async (event, setup) => {
     sendLog('Preparing repository...');
     const git = await ensureRepo(currentConfig.githubUrl);
     await applyRepoConfigFile();
+    await writeRepoConfigFile();
     await updateRepoStatus(git);
     await installAndStartRepo();
     startRepoUpdateChecks();
@@ -208,6 +514,13 @@ function hasGitRepo() {
   return fs.existsSync(path.join(REPO_DIR, '.git'));
 }
 
+async function repoWorkspaceMatchesGithubUrl() {
+  if (!hasGitRepo() || !currentConfig.githubUrl) return false;
+  const git = simpleGit(REPO_DIR);
+  const origin = await git.remote(['get-url', 'origin']).catch(() => '');
+  return sameGithubRepo(origin, currentConfig.githubUrl);
+}
+
 async function ensureRepo(githubUrl) {
   fs.mkdirSync(path.dirname(REPO_DIR), { recursive: true });
   if (hasGitRepo()) {
@@ -241,24 +554,51 @@ async function pullCurrentBranch(git) {
 }
 
 async function applyRepoConfigFile() {
-  const configPath = path.join(REPO_DIR, 'ai-annotator-config.json');
-  if (!fs.existsSync(configPath)) return;
+  const fileConfig = readRepoConfigFile();
+  if (!fileConfig) {
+    if (fs.existsSync(REPO_CONFIG_FILE)) sendLog('Could not parse ai-annotator-config.json.');
+    return;
+  }
+  currentConfig = normalizeConfig(mergeMissingConfig(currentConfig, fileConfig));
+  broadcastConfig();
+}
+
+async function writeRepoConfigFile() {
+  if (!fs.existsSync(REPO_DIR)) return false;
+  let existing = {};
+  const existed = fs.existsSync(REPO_CONFIG_FILE);
+  if (existed) {
+    try {
+      existing = JSON.parse(fs.readFileSync(REPO_CONFIG_FILE, 'utf8'));
+    } catch (err) {
+      existing = {};
+      sendLog('Replacing unreadable ai-annotator-config.json with the current setup.');
+      console.warn('Could not parse ai-annotator-config.json', err);
+    }
+  }
+
+  const repoConfig = {
+    ...existing,
+    githubUrl: currentConfig.githubUrl,
+    firebaseConfig: firebaseConfigForRepoFile(currentConfig.firebaseConfig),
+    username: currentConfig.username,
+    userColor: currentConfig.userColor,
+  };
+
+  if (!repoConfig.firebaseConfig) delete repoConfig.firebaseConfig;
+  if (!repoConfig.githubUrl) delete repoConfig.githubUrl;
+  if (!repoConfig.username) delete repoConfig.username;
+  if (!repoConfig.userColor) delete repoConfig.userColor;
+
   try {
-    const fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    if (!currentConfig.firebaseConfig && fileConfig.firebaseConfig) {
-      currentConfig.firebaseConfig = typeof fileConfig.firebaseConfig === 'object'
-        ? JSON.stringify(fileConfig.firebaseConfig)
-        : String(fileConfig.firebaseConfig);
-    }
-    if (!currentConfig.githubUrl && fileConfig.githubUrl) currentConfig.githubUrl = String(fileConfig.githubUrl);
-    if (!currentConfig.username && fileConfig.username) currentConfig.username = String(fileConfig.username);
-    if (!currentConfig.userColor && /^#[0-9a-f]{6}$/i.test(fileConfig.userColor || '')) {
-      currentConfig.userColor = fileConfig.userColor;
-    }
-    broadcastConfig();
+    fs.mkdirSync(REPO_DIR, { recursive: true });
+    fs.writeFileSync(REPO_CONFIG_FILE, `${JSON.stringify(repoConfig, null, 2)}\n`);
+    sendLog(`${existed ? 'Updated' : 'Created'} ai-annotator-config.json.`);
+    return true;
   } catch (err) {
-    sendLog('Could not parse ai-annotator-config.json.');
-    console.warn('Could not parse ai-annotator-config.json', err);
+    sendLog('Could not write ai-annotator-config.json.');
+    console.warn('Could not write ai-annotator-config.json', err);
+    throw err;
   }
 }
 
@@ -301,6 +641,90 @@ function runCommand(command, args, cwd, label) {
   });
 }
 
+function chromeLaunchAttempts(url) {
+  const chromeArgs = ['--new-window', url];
+
+  if (process.platform === 'darwin') {
+    const candidates = [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      path.join(app.getPath('home'), 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+    ];
+    const installedChrome = candidates
+      .filter(candidate => fs.existsSync(candidate))
+      .map(command => ({ command, args: chromeArgs }));
+
+    return [
+      ...installedChrome,
+      { command: 'open', args: ['-a', 'Google Chrome', '--args', ...chromeArgs], waitForExit: true },
+    ];
+  }
+
+  if (process.platform === 'win32') {
+    const candidates = [
+      process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      process.env['PROGRAMFILES(X86)'] && path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    ];
+    const installedChrome = candidates
+      .filter(candidate => candidate && fs.existsSync(candidate))
+      .map(command => ({ command, args: chromeArgs }));
+    return [
+      ...installedChrome,
+      { command: 'chrome.exe', args: chromeArgs },
+    ];
+  }
+
+  return [
+    { command: 'google-chrome', args: chromeArgs },
+    { command: 'google-chrome-stable', args: chromeArgs },
+    { command: 'chromium', args: chromeArgs },
+    { command: 'chromium-browser', args: chromeArgs },
+  ];
+}
+
+function launchDetached(command, args, { waitForExit = false } = {}) {
+  return new Promise(resolve => {
+    let settled = false;
+    const proc = spawn(command, args, {
+      detached: true,
+      stdio: 'ignore',
+      shell: false,
+    });
+    const settle = ok => {
+      if (settled) return;
+      settled = true;
+      if (ok) proc.unref();
+      resolve(ok);
+    };
+
+    proc.once('error', () => settle(false));
+
+    if (waitForExit) {
+      proc.once('close', code => settle(code === 0));
+      setTimeout(() => settle(true), 2000);
+    } else {
+      proc.once('spawn', () => settle(true));
+    }
+  });
+}
+
+async function openWebsiteInChromeWindow(url) {
+  for (const attempt of chromeLaunchAttempts(url)) {
+    if (await launchDetached(attempt.command, attempt.args, { waitForExit: attempt.waitForExit })) {
+      sendLog('Opened website in a new Chrome window.');
+      return true;
+    }
+  }
+
+  sendLog('Could not launch Chrome directly. Opening website with the system browser instead.');
+  try {
+    await shell.openExternal(url);
+  } catch (err) {
+    sendLog(`Could not open website automatically: ${err.message}`);
+  }
+  return false;
+}
+
 async function installAndStartRepo({ openBrowser = true } = {}) {
   await stopRepoProcess();
 
@@ -332,7 +756,7 @@ async function installAndStartRepo({ openBrowser = true } = {}) {
     repoProcess = spawn('python3', ['-m', 'http.server', '8000'], { cwd: REPO_DIR, shell: true });
     currentConfig.localServerPort = 8000;
     broadcastConfig();
-    if (openBrowser) setTimeout(() => shell.openExternal('http://localhost:8000'), 1200);
+    if (openBrowser) setTimeout(() => openWebsiteInChromeWindow('http://localhost:8000'), 1200);
     return;
   }
 
@@ -341,7 +765,7 @@ async function installAndStartRepo({ openBrowser = true } = {}) {
     repoProcess = spawn('python3', ['-m', 'http.server', '8000'], { cwd: REPO_DIR, shell: true });
     currentConfig.localServerPort = 8000;
     broadcastConfig();
-    if (openBrowser) setTimeout(() => shell.openExternal('http://localhost:8000'), 1200);
+    if (openBrowser) setTimeout(() => openWebsiteInChromeWindow('http://localhost:8000'), 1200);
     return;
   }
 
@@ -363,7 +787,7 @@ function watchServerProcess(proc, fallbackPort, { openBrowser = true } = {}) {
       currentConfig.localServerPort = port;
       broadcastConfig();
       sendLog(`Website running on http://localhost:${port}`);
-      if (openBrowser) setTimeout(() => shell.openExternal(`http://localhost:${port}`), 1000);
+      if (openBrowser) setTimeout(() => openWebsiteInChromeWindow(`http://localhost:${port}`), 1000);
     }
   };
 
@@ -379,7 +803,7 @@ function watchServerProcess(proc, fallbackPort, { openBrowser = true } = {}) {
       currentConfig.localServerPort = fallbackPort;
       broadcastConfig();
       sendLog(`Could not detect the dev server port. Using http://localhost:${fallbackPort}.`);
-      if (openBrowser) shell.openExternal(`http://localhost:${fallbackPort}`);
+      if (openBrowser) openWebsiteInChromeWindow(`http://localhost:${fallbackPort}`);
     }
   }, 8000);
 }

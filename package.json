@@ -1,0 +1,17 @@
+{
+  "name": "ai-dev-annotator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chrome extension and desktop setup app for AI Website Dev Annotator",
+  "scripts": {
+    "setup:codex": "bash scripts/codex-cloud-setup.sh",
+    "check": "node scripts/validate-codex.js",
+    "check:extension": "node scripts/validate-codex.js --extension",
+    "check:desktop": "node scripts/validate-codex.js --desktop",
+    "check:worker": "node scripts/validate-codex.js --worker",
+    "start": "node scripts/start-desktop.js",
+    "start:desktop": "node scripts/start-desktop.js",
+    "build:mac": "npm --prefix desktop-app run build:mac",
+    "install:desktop": "npm --prefix desktop-app ci --no-audit --no-fund"
+  }
+}

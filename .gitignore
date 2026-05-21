@@ -16,3 +16,6 @@ infra/worker/.wrangler/
 desktop-app/dist/
 desktop-app/node_modules/
 desktop-app/repo_workspace
+
+
+instructions.txt

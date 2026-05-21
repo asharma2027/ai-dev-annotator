@@ -243,6 +243,24 @@ function backupAnnotationsToSync(e) {
       showContextInvalidatedNotice();
   }
 }
+function getEffectiveIdentity(callback) {
+  try {
+    chrome.runtime.sendMessage({ type: "getEffectiveIdentity" }, (response) => {
+      if (
+        chrome.runtime.lastError &&
+        String(chrome.runtime.lastError.message).includes(
+          "Extension context invalidated",
+        )
+      )
+        return (showContextInvalidatedNotice(), callback(null));
+      callback(response && response.ok ? response.identity || null : null);
+    });
+  } catch (e) {
+    String(e && e.message).includes("Extension context invalidated") &&
+      showContextInvalidatedNotice();
+    callback(null);
+  }
+}
 function enforceHistoryLimit() {
   try {
     chrome.storage.local.get(
@@ -424,7 +442,7 @@ function buildPanel() {
               (n &&
                 !n.closest(`#${ANN}-page-chips`) &&
                 (removeChip(t.id),
-                injectPageChip(t.id, getCombinedNoteText(t)),
+                injectPageChip(t.id, getCombinedNoteText(t), t.authorColor),
                 (activeChip = document.querySelector(
                   `#${ANN}-page-chips .${ANN}-chip[data-ann-id="${t.id}"]`,
                 ))),
@@ -1233,15 +1251,16 @@ function openAllChipsOnPage() {
         }
       }
       const o =
-          "string" == typeof n.className && n.className.trim()
-            ? n.className
-                .trim()
-                .split(/\s+/)
-                .filter((e) => !e.startsWith(ANN))
-                .map((e) => `.${e}`)
-                .join("")
-            : "",
-        a = {
+        "string" == typeof n.className && n.className.trim()
+          ? n.className
+              .trim()
+              .split(/\s+/)
+              .filter((e) => !e.startsWith(ANN))
+              .map((e) => `.${e}`)
+              .join("")
+          : "";
+      getEffectiveIdentity((identity) => {
+        const a = {
           id: genId(),
           url: __aiann_pageKey,
           tag: n.tagName.toLowerCase(),
@@ -1261,13 +1280,18 @@ function openAllChipsOnPage() {
             }
           })(),
         };
-      getAll((e) => {
-        (e.push(a),
-          setAll(e, () => {
-            injectChip(n, a.id, "", a.authorColor);
-            const e = __aiann_chipMap.get(a.id);
-            e && openPanel(e, a.id);
-          }));
+        if (identity && identity.username) {
+          a.authorName = identity.username;
+          a.authorColor = identity.userColor || "#2563eb";
+        }
+        getAll((e) => {
+          (e.push(a),
+            setAll(e, () => {
+              injectChip(n, a.id, "", a.authorColor);
+              const e = __aiann_chipMap.get(a.id);
+              e && openPanel(e, a.id);
+            }));
+        });
       });
     },
     { capture: !0, passive: !1 },

@@ -28,6 +28,11 @@ const COPY_HISTORY_KEY = "copyHistory";
 const SETTINGS_KEY = "annotatorSettings";
 const SAVED_LATER_KEY = "savedForLater";
 const ANN_STORE_KEY = "_annStore";
+const TEST_WINDOW_IDENTITIES_KEY = "testingWindowIdentities";
+const TEAM_DEBUG_EVENTS_KEY = "_teamDebugEvents";
+const TEAM_DEBUG_EVENT_LIMIT = 160;
+const DESKTOP_FETCH_TIMEOUT_MS = 2500;
+const DEFAULT_TEST_COLORS = ["#2563eb", "#059669", "#dc2626", "#7c3aed", "#ea580c", "#0891b2", "#be123c"];
 
 function resolveRefBg(t, e) {
   return t
@@ -349,6 +354,82 @@ function storageLocalGet(defaults) {
 function storageLocalSet(values) {
   return new Promise((resolve) => chrome.storage.local.set(values, resolve));
 }
+function storageLocalRemove(keys) {
+  return new Promise((resolve) => chrome.storage.local.remove(keys, resolve));
+}
+function storageSessionGet(defaults) {
+  return new Promise((resolve) => {
+    if (!chrome.storage.session) return resolve(defaults || {});
+    chrome.storage.session.get(defaults, resolve);
+  });
+}
+function storageSessionSet(values) {
+  return new Promise((resolve) => {
+    if (!chrome.storage.session) return resolve();
+    chrome.storage.session.set(values, resolve);
+  });
+}
+function storageSessionRemove(keys) {
+  return new Promise((resolve) => {
+    if (!chrome.storage.session) return resolve();
+    chrome.storage.session.remove(keys, resolve);
+  });
+}
+async function desktopFetchJson(pathname, { method = "GET", body = undefined, timeoutMs = DESKTOP_FETCH_TIMEOUT_MS } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const options = {
+      method,
+      cache: "no-store",
+      signal: controller.signal,
+    };
+    if (body !== undefined) {
+      options.headers = { "Content-Type": "application/json" };
+      options.body = JSON.stringify(body);
+    }
+    const res = await fetch(`${LOCAL_SETUP_ORIGIN}${pathname}`, options);
+    if (!res.ok) {
+      let detail = "";
+      try {
+        detail = await res.text();
+      } catch (_err) {}
+      throw new Error(`Setup app returned ${res.status}${detail ? `: ${detail.slice(0, 180)}` : ""}`);
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function recordTeamDebug(scope, message, details = {}, level = "info") {
+  const event = {
+    at: new Date().toISOString(),
+    level,
+    scope,
+    message,
+    details,
+  };
+  try {
+    const log = level === "error" || level === "warn" ? console.warn : console.log;
+    log("[Annotator team]", scope, message, details);
+  } catch (_err) {}
+  try {
+    chrome.storage.local.get({ [TEAM_DEBUG_EVENTS_KEY]: [] }, (data) => {
+      const events = Array.isArray(data[TEAM_DEBUG_EVENTS_KEY]) ? data[TEAM_DEBUG_EVENTS_KEY] : [];
+      events.push(event);
+      chrome.storage.local.set({ [TEAM_DEBUG_EVENTS_KEY]: events.slice(-TEAM_DEBUG_EVENT_LIMIT) });
+    });
+  } catch (_err) {}
+  try {
+    fetch(`${LOCAL_SETUP_ORIGIN}/api/debug-events`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    }).catch(() => {});
+  } catch (_err) {}
+  return event;
+}
 function parseGithubRepo(githubUrl) {
   if (!githubUrl) return null;
   let value = String(githubUrl).trim();
@@ -383,6 +464,13 @@ function configKey(config) {
     databaseURL: config.databaseURL || "",
   });
 }
+function withDatabaseUrlFallback(config) {
+  const completed = { ...(config || {}) };
+  if (!completed.databaseURL && completed.projectId) {
+    completed.databaseURL = `https://${completed.projectId}-default-rtdb.firebaseio.com`;
+  }
+  return completed;
+}
 function annotationVersion(ann) {
   const updatedAt = Number(ann?._updatedAt || ann?.updatedAt || 0);
   if (updatedAt) return updatedAt;
@@ -404,6 +492,241 @@ function withAuthorMetadata(ann, settings, teamId) {
     _teamId: teamId,
     _updatedAt: Date.now(),
   };
+}
+function normalizeTestIdentity(identity = {}) {
+  const username = typeof identity.username === "string" ? identity.username.trim() : "";
+  if (!username) return null;
+  return {
+    username,
+    userColor: typeof identity.userColor === "string" && /^#[0-9a-f]{6}$/i.test(identity.userColor)
+      ? identity.userColor
+      : "#2563eb",
+    assignedAt: identity.assignedAt || new Date().toISOString(),
+  };
+}
+function normalizeTestingWindowIdentities(value = {}) {
+  const out = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  Object.entries(value).forEach(([windowId, identity]) => {
+    const normalized = normalizeTestIdentity(identity);
+    if (normalized) out[String(windowId)] = normalized;
+  });
+  return out;
+}
+async function readLocalTestingWindowIdentities() {
+  const [localData, sessionData] = await Promise.all([
+    storageLocalGet({ [TEST_WINDOW_IDENTITIES_KEY]: {} }),
+    storageSessionGet({ [TEST_WINDOW_IDENTITIES_KEY]: {} }),
+  ]);
+  return normalizeTestingWindowIdentities({
+    ...(sessionData[TEST_WINDOW_IDENTITIES_KEY] || {}),
+    ...(localData[TEST_WINDOW_IDENTITIES_KEY] || {}),
+  });
+}
+async function writeLocalTestingWindowIdentities(identities) {
+  const normalized = normalizeTestingWindowIdentities(identities);
+  await Promise.all([
+    storageLocalSet({ [TEST_WINDOW_IDENTITIES_KEY]: normalized }),
+    storageSessionSet({ [TEST_WINDOW_IDENTITIES_KEY]: normalized }),
+  ]);
+}
+async function readTestingWindowIdentities() {
+  try {
+    const data = await desktopFetchJson("/api/testing-identities");
+    return {
+      source: data.source || "desktop-app",
+      identities: normalizeTestingWindowIdentities(data.identities || {}),
+      desktopAvailable: true,
+    };
+  } catch (err) {
+    const identities = await readLocalTestingWindowIdentities();
+    recordTeamDebug(
+      "testing-identities",
+      "Using extension-profile testing identities because desktop identities were unavailable.",
+      { error: err?.message || String(err), localCount: Object.keys(identities).length },
+      "warn",
+    );
+    return {
+      source: "extension-profile",
+      identities,
+      desktopAvailable: false,
+      error: err?.message || String(err),
+    };
+  }
+}
+async function writeTestingWindowIdentity(windowId, identity) {
+  const id = Number(windowId);
+  if (!Number.isInteger(id)) throw new Error("Window id is required.");
+  const normalized = normalizeTestIdentity(identity);
+  if (!normalized) throw new Error("Display name is required.");
+
+  try {
+    const data = await desktopFetchJson(`/api/testing-identities/${encodeURIComponent(String(id))}`, {
+      method: "PUT",
+      body: normalized,
+    });
+    const saved = normalizeTestIdentity(data.identity || normalized);
+    const localIdentities = await readLocalTestingWindowIdentities();
+    localIdentities[String(id)] = saved;
+    await writeLocalTestingWindowIdentities(localIdentities);
+    recordTeamDebug("testing-identities", "Testing identity assigned through desktop app.", {
+      windowId: id,
+      username: saved.username,
+      source: data.source || "desktop-app",
+    });
+    return { identity: saved, source: data.source || "desktop-app" };
+  } catch (err) {
+    const identities = await readLocalTestingWindowIdentities();
+    identities[String(id)] = normalized;
+    await writeLocalTestingWindowIdentities(identities);
+    recordTeamDebug("testing-identities", "Testing identity assigned in this extension profile only.", {
+      windowId: id,
+      username: normalized.username,
+      error: err?.message || String(err),
+    }, "warn");
+    return { identity: normalized, source: "extension-profile", warning: err?.message || String(err) };
+  }
+}
+async function clearSharedTestingWindowIdentity(windowId) {
+  const id = Number(windowId);
+  if (!Number.isInteger(id)) throw new Error("Window id is required.");
+  let desktopCleared = false;
+  try {
+    await desktopFetchJson(`/api/testing-identities/${encodeURIComponent(String(id))}`, {
+      method: "DELETE",
+    });
+    desktopCleared = true;
+  } catch (err) {
+    recordTeamDebug("testing-identities", "Could not clear desktop testing identity; clearing local fallback.", {
+      windowId: id,
+      error: err?.message || String(err),
+    }, "warn");
+  }
+  const identities = await readLocalTestingWindowIdentities();
+  delete identities[String(id)];
+  await writeLocalTestingWindowIdentities(identities);
+  recordTeamDebug("testing-identities", "Testing identity cleared.", {
+    windowId: id,
+    source: desktopCleared ? "desktop-app" : "extension-profile",
+  });
+}
+function getChromeWindows() {
+  return new Promise((resolve, reject) => {
+    try {
+      recordTeamDebug("windows", "Requesting Chrome windows.");
+      chrome.windows.getAll({ populate: true }, (windows) => {
+        if (chrome.runtime.lastError) {
+          const err = new Error(chrome.runtime.lastError.message);
+          recordTeamDebug("windows", "Chrome windows request failed.", { error: err.message }, "error");
+          reject(err);
+          return;
+        }
+        const normalWindows = (windows || []).filter((win) => !win.type || win.type === "normal");
+        recordTeamDebug("windows", "Chrome windows request completed.", {
+          windowCount: normalWindows.length,
+          ids: normalWindows.map((win) => win.id),
+        });
+        resolve(normalWindows);
+      });
+    } catch (err) {
+      recordTeamDebug("windows", "Chrome windows request threw.", { error: err?.message || String(err) }, "error");
+      reject(err);
+    }
+  });
+}
+async function pruneLocalTestingWindowIdentities(openWindowIds) {
+  const identities = await readLocalTestingWindowIdentities();
+  const open = new Set(openWindowIds.map((id) => String(id)));
+  let changed = false;
+  Object.keys(identities).forEach((windowId) => {
+    if (!open.has(windowId)) {
+      delete identities[windowId];
+      changed = true;
+    }
+  });
+  if (changed) await writeLocalTestingWindowIdentities(identities);
+  return identities;
+}
+function activeTabForWindow(win) {
+  const tabs = Array.isArray(win.tabs) ? win.tabs : [];
+  return tabs.find((tab) => tab.active) || tabs[0] || null;
+}
+async function listTestingWindows() {
+  const windows = await getChromeWindows();
+  const identityState = await readTestingWindowIdentities();
+  const identities = identityState.source === "desktop-app"
+    ? identityState.identities
+    : await pruneLocalTestingWindowIdentities(windows.map((win) => win.id));
+  return windows.map((win, index) => {
+    const tab = activeTabForWindow(win);
+    const assignedIdentity = identities[String(win.id)] || null;
+    return {
+      id: win.id,
+      focused: !!win.focused,
+      incognito: !!win.incognito,
+      tabCount: Array.isArray(win.tabs) ? win.tabs.length : 0,
+      activeTabTitle: tab?.title || "",
+      activeTabUrl: tab?.url || "",
+      suggestedColor: assignedIdentity?.userColor || DEFAULT_TEST_COLORS[index % DEFAULT_TEST_COLORS.length],
+      assignedIdentity,
+      identitySource: identityState.source,
+    };
+  });
+}
+async function setTestingWindowIdentity(windowId, identity) {
+  const id = Number(windowId);
+  if (!Number.isInteger(id)) throw new Error("Window id is required.");
+  const normalized = normalizeTestIdentity(identity);
+  if (!normalized) throw new Error("Display name is required.");
+  const windows = await getChromeWindows();
+  if (!windows.some((win) => win.id === id)) throw new Error("That Chrome window is no longer open.");
+  const saved = await writeTestingWindowIdentity(id, normalized);
+  return { ...saved.identity, _source: saved.source, _warning: saved.warning || "" };
+}
+async function clearTestingWindowIdentity(windowId) {
+  const id = Number(windowId);
+  if (!Number.isInteger(id)) throw new Error("Window id is required.");
+  await clearSharedTestingWindowIdentity(id);
+}
+async function getEffectiveIdentityForSender(sender = {}) {
+  const data = await storageLocalGet({ annotatorSettings: {} });
+  const settings = data.annotatorSettings || {};
+  const base = {
+    username: settings.username || "Reviewer",
+    userColor: settings.userColor || "#2563eb",
+    testingMode: settings.testingMode !== false,
+    source: "team",
+  };
+  const windowId = sender.tab && Number.isInteger(sender.tab.windowId) ? sender.tab.windowId : null;
+  if (base.testingMode && windowId !== null) {
+    const identityState = await readTestingWindowIdentities();
+    const assigned = identityState.identities[String(windowId)];
+    if (assigned) {
+      recordTeamDebug("identity", "Resolved testing-window identity for annotation sender.", {
+        windowId,
+        username: assigned.username,
+        source: identityState.source,
+        tabId: sender.tab?.id,
+        url: sender.tab?.url || "",
+      });
+      return {
+        username: assigned.username,
+        userColor: assigned.userColor,
+        testingMode: true,
+        source: "testing-window",
+        identitySource: identityState.source,
+        windowId,
+      };
+    }
+  }
+  recordTeamDebug("identity", "Resolved base team identity for annotation sender.", {
+    windowId,
+    username: base.username,
+    testingMode: base.testingMode,
+    tabId: sender.tab?.id,
+    url: sender.tab?.url || "",
+  });
+  return base;
 }
 function mergeRemoteAnnotations(localList, remoteList, teamId) {
   const remoteIds = new Set(remoteList.map((ann) => ann.id));
@@ -466,23 +789,39 @@ async function setTeamStatus(patch) {
 
 async function refreshLocalConfig({ initFirebaseAfter = false } = {}) {
   try {
+    recordTeamDebug("config", "Refreshing setup from desktop app.", { initFirebaseAfter });
     const res = await fetch(`${LOCAL_SETUP_ORIGIN}/api/config`, { cache: "no-store" });
     if (!res.ok) throw new Error(`Setup app returned ${res.status}`);
     const config = await res.json();
     const data = await storageLocalGet({ annotatorSettings: {} });
     const settings = { ...(data.annotatorSettings || {}) };
     let changed = false;
+    const changedKeys = [];
     ["githubUrl", "firebaseConfig", "username", "userColor"].forEach((key) => {
       if (Object.prototype.hasOwnProperty.call(config, key) && settings[key] !== config[key]) {
         settings[key] = config[key] || "";
         changed = true;
+        changedKeys.push(key);
       }
     });
+    if (Object.prototype.hasOwnProperty.call(config, "testingMode")) {
+      const testingMode = config.testingMode !== false;
+      if (settings.testingMode !== testingMode) {
+        settings.testingMode = testingMode;
+        changed = true;
+        changedKeys.push("testingMode");
+      }
+    } else if (!Object.prototype.hasOwnProperty.call(settings, "testingMode")) {
+      settings.testingMode = true;
+      changed = true;
+      changedKeys.push("testingMode");
+    }
     if (Object.prototype.hasOwnProperty.call(config, "localServerPort")) {
       const port = Number.isInteger(config.localServerPort) ? config.localServerPort : null;
       if (settings.localServerPort !== port) {
         settings.localServerPort = port;
         changed = true;
+        changedKeys.push("localServerPort");
       }
     }
     const toSet = {
@@ -492,12 +831,22 @@ async function refreshLocalConfig({ initFirebaseAfter = false } = {}) {
     if (changed) toSet.annotatorSettings = settings;
     await storageLocalSet(toSet);
     if (initFirebaseAfter || changed) await initFirebase();
+    recordTeamDebug("config", "Desktop setup refresh completed.", {
+      changed,
+      changedKeys,
+      githubUrl: settings.githubUrl || "",
+      username: settings.username || "",
+      testingMode: settings.testingMode !== false,
+      localServerPort: settings.localServerPort || null,
+      firebaseConfigured: !!settings.firebaseConfig,
+    });
     return { ok: true, changed };
   } catch (err) {
     await storageLocalSet({
       _teamSetupLastChecked: new Date().toISOString(),
       _teamSetupError: err?.message || String(err),
     });
+    recordTeamDebug("config", "Desktop setup refresh failed.", { error: err?.message || String(err) }, "error");
     return { ok: false, error: err?.message || String(err) };
   }
 }
@@ -530,6 +879,11 @@ async function initFirebase() {
   const settings = data.annotatorSettings || {};
   const fbConfigStr = settings.firebaseConfig;
   const teamId = getTeamId(settings.githubUrl);
+  recordTeamDebug("firebase", "Firebase init requested.", {
+    teamId,
+    githubUrl: settings.githubUrl || "",
+    firebaseConfigured: !!fbConfigStr,
+  });
 
   if (!fbConfigStr || !teamId) {
     await disconnectFirebase();
@@ -538,11 +892,26 @@ async function initFirebase() {
       teamId: null,
       error: fbConfigStr ? "Add a valid GitHub repo in the desktop app." : "Add Firebase config in the desktop app.",
     });
+    recordTeamDebug("firebase", "Firebase init skipped because setup is incomplete.", {
+      hasFirebaseConfig: !!fbConfigStr,
+      hasTeamId: !!teamId,
+    }, "warn");
     return { ok: false };
   }
 
+  let config;
   try {
-    const config = JSON.parse(fbConfigStr);
+    config = withDatabaseUrlFallback(JSON.parse(fbConfigStr));
+    if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Firebase config is not an object.");
+  } catch (err) {
+    console.warn("Invalid Firebase config JSON", err);
+    await disconnectFirebase();
+    await setTeamStatus({ connected: false, teamId, error: "Invalid Firebase config JSON." });
+    recordTeamDebug("firebase", "Firebase config JSON is invalid.", { teamId, error: err?.message || String(err) }, "error");
+    return { ok: false, error: err?.message || String(err) };
+  }
+
+  try {
     const nextKey = configKey(config);
     if (!firebaseApp || activeFirebaseConfigKey !== nextKey) {
       await disconnectFirebase();
@@ -554,11 +923,17 @@ async function initFirebase() {
     }
     setupTeamListeners(teamId);
     await setTeamStatus({ connected: true, teamId, githubUrl: settings.githubUrl, error: null });
+    recordTeamDebug("firebase", "Firebase team sync connected.", {
+      teamId,
+      projectId: config.projectId || "",
+      databaseURL: config.databaseURL || "",
+    });
     return { ok: true };
   } catch (err) {
-    console.warn("Invalid Firebase config JSON", err);
+    console.warn("Firebase team sync failed:", err);
     await disconnectFirebase();
-    await setTeamStatus({ connected: false, teamId, error: "Invalid Firebase config JSON." });
+    await setTeamStatus({ connected: false, teamId, error: err?.message || String(err) });
+    recordTeamDebug("firebase", "Firebase team sync failed.", { teamId, error: err?.message || String(err) }, "error");
     return { ok: false, error: err?.message || String(err) };
   }
 }
@@ -572,6 +947,7 @@ function setupTeamListeners(teamId) {
   }
   activeTeamId = teamId;
   teamAnnotationsRef = firebaseDb.ref(`teams/${teamId}/annotations`);
+  recordTeamDebug("firebase-listener", "Listening for team annotations.", { teamId });
 
   teamAnnotationsRef.on(
     "value",
@@ -581,6 +957,13 @@ function setupTeamListeners(teamId) {
       const local = await storageLocalGet({ annotations: [] });
       const before = local.annotations || [];
       const merged = mergeRemoteAnnotations(before, remoteList, teamId);
+      recordTeamDebug("firebase-listener", "Remote annotation snapshot received.", {
+        teamId,
+        remoteCount: remoteList.length,
+        localCount: before.length,
+        mergedCount: merged.length,
+        changed: stableJson(before) !== stableJson(merged),
+      });
       if (stableJson(before) !== stableJson(merged)) {
         applyingRemoteAnnotations = true;
         await storageLocalSet({
@@ -602,6 +985,7 @@ function setupTeamListeners(teamId) {
     async (err) => {
       console.warn("Firebase team listener failed:", err);
       await setTeamStatus({ connected: false, teamId, error: err?.message || String(err) });
+      recordTeamDebug("firebase-listener", "Firebase listener failed.", { teamId, error: err?.message || String(err) }, "error");
     },
   );
 }
@@ -611,7 +995,10 @@ function pushAnnotationToFirebase(ann, teamId, isDelete = false, settings = {}) 
   const annRef = firebaseDb.ref(`teams/${teamId}/annotations/${firebaseKey(ann.id)}`);
 
   if (isDelete) {
-    annRef.remove().catch(e => console.warn("Firebase remove failed:", e));
+    annRef.remove().catch(e => {
+      console.warn("Firebase remove failed:", e);
+      recordTeamDebug("firebase-write", "Firebase remove failed.", { teamId, annId: ann.id, error: e?.message || String(e) }, "error");
+    });
     if (ann.url) {
       firebaseDb
         .ref(`teams/${teamId}/annotations/${legacyUrlKey(ann.url)}/${firebaseKey(ann.id)}`)
@@ -619,7 +1006,17 @@ function pushAnnotationToFirebase(ann, teamId, isDelete = false, settings = {}) 
         .catch(() => {});
     }
   } else {
-    annRef.set(withAuthorMetadata(ann, settings, teamId)).catch(e => console.warn("Firebase set failed:", e));
+    const payload = withAuthorMetadata(ann, settings, teamId);
+    recordTeamDebug("firebase-write", "Writing annotation to Firebase.", {
+      teamId,
+      annId: ann.id,
+      authorName: payload.authorName,
+      url: ann.url || "",
+    });
+    annRef.set(payload).catch(e => {
+      console.warn("Firebase set failed:", e);
+      recordTeamDebug("firebase-write", "Firebase set failed.", { teamId, annId: ann.id, error: e?.message || String(e) }, "error");
+    });
   }
 }
 function pushMissingLocalAnnotations(localList, remoteList, teamId) {
@@ -629,6 +1026,11 @@ function pushMissingLocalAnnotations(localList, remoteList, teamId) {
     (localList || []).forEach((ann) => {
       if (!ann || !ann.id || remoteIds.has(ann.id)) return;
       if (ann._teamId) return;
+      recordTeamDebug("firebase-write", "Backfilling local-only annotation to Firebase.", {
+        teamId,
+        annId: ann.id,
+        authorName: ann.authorName || annotatorSettings?.username || "",
+      });
       pushAnnotationToFirebase(ann, teamId, false, annotatorSettings || {});
     });
   });
@@ -655,6 +1057,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
       const newMap = {};
       newList.forEach(a => newMap[a.id] = a);
 
+      recordTeamDebug("storage", "Local annotations changed; syncing diff to Firebase.", {
+        teamId,
+        oldCount: oldList.length,
+        newCount: newList.length,
+      });
+
       newList.forEach(ann => {
         if (!oldMap[ann.id] || JSON.stringify(oldMap[ann.id]) !== JSON.stringify(ann)) {
           pushAnnotationToFirebase(ann, teamId, false, s);
@@ -669,6 +1077,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
     });
   }
 });
+
+try {
+  chrome.windows.onRemoved.addListener((windowId) => {
+    readTestingWindowIdentities()
+      .then((state) => {
+        if (!state.identities[String(windowId)]) return null;
+        return clearSharedTestingWindowIdentity(windowId);
+      })
+      .catch(() => {});
+  });
+} catch (_err) {}
 
 async function checkWebsiteVersion() {
   try {
@@ -705,22 +1124,180 @@ function refreshWebsiteTabs(port) {
   });
 }
 
+function firebaseConfigSummary(value) {
+  try {
+    const config = value ? withDatabaseUrlFallback(JSON.parse(value)) : null;
+    if (!config) return { configured: false };
+    return {
+      configured: true,
+      projectId: config.projectId || "",
+      databaseURL: config.databaseURL || "",
+      authDomain: config.authDomain || "",
+      appIdSuffix: config.appId ? String(config.appId).slice(-8) : "",
+      hasApiKey: !!config.apiKey,
+    };
+  } catch (err) {
+    return {
+      configured: !!String(value || "").trim(),
+      error: err?.message || String(err),
+    };
+  }
+}
+
+function getPermissionDiagnostics() {
+  return new Promise((resolve) => {
+    const out = {
+      tabs: null,
+      windows: typeof chrome.windows?.getAll === "function",
+      localhost: null,
+    };
+    if (!chrome.permissions?.contains) return resolve(out);
+    let pending = 2;
+    const done = () => {
+      pending -= 1;
+      if (pending === 0) resolve(out);
+    };
+    chrome.permissions.contains({ permissions: ["tabs"] }, (allowed) => {
+      out.tabs = !!allowed;
+      done();
+    });
+    chrome.permissions.contains({ origins: [`${LOCAL_SETUP_ORIGIN}/*`] }, (allowed) => {
+      out.localhost = !!allowed;
+      done();
+    });
+  });
+}
+
+async function getTeamDebugSnapshot() {
+  const local = await storageLocalGet({
+    annotatorSettings: {},
+    _teamSyncStatus: {},
+    _teamSetupLastChecked: null,
+    _teamSetupError: null,
+    _websiteVersionInfo: null,
+    _websiteVersionError: null,
+    [TEAM_DEBUG_EVENTS_KEY]: [],
+  });
+  const settings = local.annotatorSettings || {};
+  const manifest = chrome.runtime.getManifest();
+  let windows = [];
+  let windowsError = null;
+  try {
+    windows = await listTestingWindows();
+  } catch (err) {
+    windowsError = err?.message || String(err);
+    recordTeamDebug("diagnostics", "Diagnostics could not list Chrome windows.", { error: windowsError }, "error");
+  }
+
+  let identityState = null;
+  try {
+    identityState = await readTestingWindowIdentities();
+  } catch (err) {
+    identityState = { source: "unknown", identities: {}, error: err?.message || String(err) };
+  }
+
+  let desktop = null;
+  try {
+    desktop = await desktopFetchJson("/api/diagnostics");
+  } catch (err) {
+    desktop = { ok: false, error: err?.message || String(err) };
+  }
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    runtime: {
+      id: chrome.runtime.id,
+      version: manifest.version,
+      manifestPermissions: manifest.permissions || [],
+      hostPermissions: manifest.host_permissions || [],
+    },
+    permissions: await getPermissionDiagnostics(),
+    setup: {
+      lastChecked: local._teamSetupLastChecked,
+      error: local._teamSetupError,
+    },
+    settings: {
+      githubUrl: settings.githubUrl || "",
+      username: settings.username || "",
+      userColor: settings.userColor || "",
+      testingMode: settings.testingMode !== false,
+      localServerPort: settings.localServerPort || null,
+      firebase: firebaseConfigSummary(settings.firebaseConfig),
+    },
+    teamSync: local._teamSyncStatus || {},
+    website: {
+      info: local._websiteVersionInfo || null,
+      error: local._websiteVersionError || null,
+    },
+    testing: {
+      identitySource: identityState?.source || "unknown",
+      desktopAvailable: !!identityState?.desktopAvailable,
+      identities: identityState?.identities || {},
+      windows,
+      windowsError,
+    },
+    desktop,
+    events: Array.isArray(local[TEAM_DEBUG_EVENTS_KEY])
+      ? local[TEAM_DEBUG_EVENTS_KEY].slice(-80)
+      : [],
+  };
+}
+
+function respondAsync(sendResponse, scope, promise) {
+  Promise.resolve(promise)
+    .then((result) => sendResponse(result))
+    .catch((err) => {
+      const message = err?.message || String(err);
+      recordTeamDebug("message", `${scope} failed.`, { error: message }, "error");
+      sendResponse({ ok: false, error: message });
+    });
+  return true;
+}
+
 // Re-init when requested (e.g. from popup config change)
 chrome.runtime.onMessage.addListener((t, e, n) => {
   if (t.type === "initFirebase") {
-    initFirebase().then(n).catch((err) => n({ ok: false, error: err?.message || String(err) }));
-    return true;
+    return respondAsync(n, "initFirebase", initFirebase());
   }
   if (t.type === "refreshLocalConfig") {
-    refreshLocalConfig({ initFirebaseAfter: true }).then(n).catch((err) => n({ ok: false, error: err?.message || String(err) }));
-    return true;
+    return respondAsync(n, "refreshLocalConfig", refreshLocalConfig({ initFirebaseAfter: true }));
   }
   if (t.type === "checkWebsiteVersion") {
-    checkWebsiteVersion().then(() => n({ ok: true })).catch((err) => n({ ok: false, error: err?.message || String(err) }));
-    return true;
+    return respondAsync(n, "checkWebsiteVersion", checkWebsiteVersion().then(() => ({ ok: true })));
+  }
+  if (t.type === "getEffectiveIdentity") {
+    return respondAsync(n, "getEffectiveIdentity", getEffectiveIdentityForSender(e).then((identity) => ({ ok: true, identity })));
+  }
+  if (t.type === "listTestingWindows") {
+    return respondAsync(n, "listTestingWindows", listTestingWindows().then((windows) => ({ ok: true, windows })));
+  }
+  if (t.type === "setTestingWindowIdentity") {
+    return respondAsync(n, "setTestingWindowIdentity", setTestingWindowIdentity(t.windowId, t.identity).then((identity) => ({ ok: true, identity })));
+  }
+  if (t.type === "clearTestingWindowIdentity") {
+    return respondAsync(n, "clearTestingWindowIdentity", clearTestingWindowIdentity(t.windowId).then(() => ({ ok: true })));
+  }
+  if (t.type === "getTeamDebugSnapshot") {
+    return respondAsync(n, "getTeamDebugSnapshot", getTeamDebugSnapshot());
+  }
+  if (t.type === "clearTeamDebugLog") {
+    return respondAsync(n, "clearTeamDebugLog", Promise.all([
+      storageLocalRemove(TEAM_DEBUG_EVENTS_KEY),
+      storageSessionRemove(TEAM_DEBUG_EVENTS_KEY),
+    ]).then(() => {
+      recordTeamDebug("diagnostics", "Team debug log cleared.");
+      return { ok: true };
+    }));
   }
 });
 
-// Call on startup
-initFirebase();
+// Call on startup. Prefer the desktop app's latest config when it is
+// available, but keep cached sync working if the app is closed.
+refreshLocalConfig({ initFirebaseAfter: true })
+  .then((result) => {
+    if (!result || result.ok === false) return initFirebase();
+    return null;
+  })
+  .catch(() => initFirebase());
 checkWebsiteVersion();
