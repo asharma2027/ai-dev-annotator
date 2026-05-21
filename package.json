@@ -12,6 +12,7 @@
     "start": "node scripts/start-desktop.js",
     "start:desktop": "node scripts/start-desktop.js",
     "build:mac": "npm --prefix desktop-app run build:mac",
+    "build:win": "npm --prefix desktop-app run build:win",
     "install:desktop": "npm --prefix desktop-app ci --no-audit --no-fund"
   }
 }

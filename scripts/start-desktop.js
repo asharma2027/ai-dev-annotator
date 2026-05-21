@@ -6,12 +6,13 @@ const path = require('path');
 
 const repoRoot = path.resolve(__dirname, '..');
 const desktopDir = path.join(repoRoot, 'desktop-app');
-const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const isWindows = process.platform === 'win32';
+const npmCmd = isWindows ? 'npm.cmd' : 'npm';
 const electronBin = path.join(
   desktopDir,
   'node_modules',
   '.bin',
-  process.platform === 'win32' ? 'electron.cmd' : 'electron',
+  isWindows ? 'electron.cmd' : 'electron',
 );
 
 const healthCheckScript = `
@@ -30,7 +31,7 @@ function run(command, args, options = {}) {
   return spawnSync(command, args, {
     cwd: desktopDir,
     stdio: 'inherit',
-    shell: false,
+    shell: isWindows,
     ...options,
   });
 }
@@ -112,7 +113,7 @@ function launchElectron() {
   const child = spawn(electronBin, ['.'], {
     cwd: desktopDir,
     stdio: 'inherit',
-    shell: false,
+    shell: isWindows,
   });
 
   const forwardSignal = (signal) => {

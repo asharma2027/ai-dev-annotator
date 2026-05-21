@@ -7,6 +7,9 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const treeKill = require('tree-kill');
 
+const isWindows = process.platform === 'win32';
+const PYTHON_BIN = isWindows ? 'python' : 'python3';
+
 const CONFIG_FILE = path.join(app.getPath('userData'), 'annotator-setup.json');
 const REPO_DIR = path.join(app.getPath('userData'), 'repo_workspace');
 const REPO_CONFIG_FILE = path.join(REPO_DIR, 'ai-annotator-config.json');
@@ -751,9 +754,9 @@ async function installAndStartRepo({ openBrowser = true } = {}) {
 
   if (fs.existsSync(path.join(REPO_DIR, 'requirements.txt'))) {
     sendLog('Installing Python requirements...');
-    await runCommand('pip3', ['install', '-r', 'requirements.txt'], REPO_DIR, 'pip install');
+    await runCommand(PYTHON_BIN, ['-m', 'pip', 'install', '-r', 'requirements.txt'], REPO_DIR, 'pip install');
     sendLog('Starting Python static server on port 8000...');
-    repoProcess = spawn('python3', ['-m', 'http.server', '8000'], { cwd: REPO_DIR, shell: true });
+    repoProcess = spawn(PYTHON_BIN, ['-m', 'http.server', '8000'], { cwd: REPO_DIR, shell: true });
     currentConfig.localServerPort = 8000;
     broadcastConfig();
     if (openBrowser) setTimeout(() => openWebsiteInChromeWindow('http://localhost:8000'), 1200);
@@ -762,7 +765,7 @@ async function installAndStartRepo({ openBrowser = true } = {}) {
 
   if (fs.existsSync(path.join(REPO_DIR, 'index.html'))) {
     sendLog('Starting static server on port 8000...');
-    repoProcess = spawn('python3', ['-m', 'http.server', '8000'], { cwd: REPO_DIR, shell: true });
+    repoProcess = spawn(PYTHON_BIN, ['-m', 'http.server', '8000'], { cwd: REPO_DIR, shell: true });
     currentConfig.localServerPort = 8000;
     broadcastConfig();
     if (openBrowser) setTimeout(() => openWebsiteInChromeWindow('http://localhost:8000'), 1200);
