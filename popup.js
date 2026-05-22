@@ -3852,8 +3852,8 @@ document.addEventListener('DOMContentLoaded', () => {
       `Extension: ${snapshot.runtime?.id || 'unknown'} v${snapshot.runtime?.version || 'unknown'}`,
       `Permissions: tabs=${fmtDebugBool(permissions.tabs)}, localhost=${fmtDebugBool(permissions.localhost)}`,
       `Desktop app: ${desktop.ok ? 'reachable' : 'unreachable'}${desktop.error ? ` (${desktop.error})` : ''}`,
-      `Desktop config: repo=${desktop.currentConfig?.githubUrl || 'n/a'}, user=${desktop.currentConfig?.username || 'n/a'}`,
-      `Extension config: repo=${settings.githubUrl || 'n/a'}, user=${settings.username || 'n/a'}, firebase=${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
+      `Desktop setup: repo=${desktop.currentConfig?.githubUrl || 'n/a'}, user=${desktop.currentConfig?.username || 'n/a'}`,
+      `Extension setup: repo=${settings.githubUrl || 'n/a'}, user=${settings.username || 'n/a'}, firebase=${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
       `Setup refresh: last=${fmtDebugTime(snapshot.setup?.lastChecked)}, error=${snapshot.setup?.error || 'none'}`,
       `Team sync: ${sync.connected ? 'connected' : 'not connected'}, team=${sync.teamId || 'n/a'}, remote=${sync.remoteCount ?? 'n/a'}, error=${sync.error || 'none'}`,
       'Recent events:',
@@ -3998,7 +3998,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ${escHtml(s.username || 'Assigned in desktop app')}
           </span>
         </div>
-        <p class="settings-hint">Set Firebase, GitHub, name, and color once in the desktop app. The popup refreshes these automatically when settings opens.</p>
+        <p class="settings-hint">Firebase and repository values come from the managed repo config. Name and color are local desktop app preferences.</p>
         <div class="settings-row settings-row--btns">
           <button id="refresh-team-config-btn" class="btn-history-action">Refresh from desktop app</button>
         </div>

@@ -212,6 +212,13 @@
       background: #fff;
     }
 
+    input[readonly],
+    textarea[readonly] {
+      background: #f8fafc;
+      color: #475569;
+      cursor: default;
+    }
+
     textarea {
       min-height: 118px;
       resize: vertical;
@@ -421,7 +428,7 @@
     <header>
       <div>
         <h1>Setup Menu</h1>
-        <p class="subtitle">Choose how your annotations appear, start the local website, and keep the team sync details available when you need them.</p>
+        <p class="subtitle">Choose how your annotations appear, start the local website, and view the team sync details from the repository.</p>
       </div>
       <div id="run-state" class="status-pill">Not started</div>
     </header>
@@ -446,7 +453,7 @@
           </div>
           <div class="actions main-actions">
             <button id="startBtn" class="primary">Start Website</button>
-            <button id="saveOnlyBtn" class="secondary">Save Changes</button>
+            <button id="saveOnlyBtn" class="secondary">Save Preferences</button>
           </div>
           <div id="status"></div>
         </section>
@@ -455,16 +462,16 @@
           <h2>Website</h2>
           <div class="field">
             <label for="githubUrl">GitHub repository</label>
-            <input type="text" id="githubUrl" placeholder="https://github.com/username/repo" autocomplete="off" spellcheck="false">
-            <p class="hint">The app keeps this checkout updated and starts it locally when you press Start Website.</p>
+            <input type="text" id="githubUrl" placeholder="https://github.com/username/repo" autocomplete="off" spellcheck="false" readonly>
+            <p class="hint">The app keeps this checkout updated and starts it locally when you press Start Website. Repository config values are read from <code>ai-annotator-config.json</code>.</p>
           </div>
 
           <details class="advanced-details" id="syncDetails">
             <summary>Team sync details <span id="firebaseState" class="summary-state">Checking</span></summary>
             <div class="field">
               <label for="firebaseConfig">Firebase config JSON</label>
-              <textarea id="firebaseConfig" placeholder='{ "apiKey": "...", "authDomain": "...", "databaseURL": "..." }'></textarea>
-              <p class="hint">If the managed repository has <code>ai-annotator-config.json</code>, this field is filled automatically. The desktop app stores that file in its internal checkout and prints the full path in the activity log when it saves. You can still paste or edit the Firebase config here.</p>
+              <textarea id="firebaseConfig" placeholder='{ "apiKey": "...", "authDomain": "...", "databaseURL": "..." }' readonly></textarea>
+              <p class="hint">Read directly from <code>ai-annotator-config.json</code> in the managed checkout. The desktop app never saves changes to that file.</p>
             </div>
           </details>
         </section>
@@ -657,7 +664,7 @@
           'success',
           config.firebaseConfig
             ? 'Repository checked. Firebase sync was loaded from ai-annotator-config.json.'
-            : 'Repository checked. Add Firebase details only if your team uses sync.'
+            : 'Repository checked. No Firebase sync config was found in ai-annotator-config.json.'
         );
       } catch (err) {
         setGateStatus('error', 'Error: ' + err.message);
@@ -669,8 +676,6 @@
 
     function readSetup({ saveOnly = false } = {}) {
       return {
-        githubUrl: els.githubUrl.value.trim(),
-        firebaseConfig: els.firebaseConfig.value.trim(),
         username: els.username.value.trim(),
         userColor: els.userColor.value,
         saveOnly,
@@ -681,12 +686,12 @@
       const originalStart = els.startBtn.textContent;
       els.startBtn.disabled = true;
       els.saveOnlyBtn.disabled = true;
-      setStatus('loading', saveOnly ? 'Saving setup...' : 'Preparing website...');
+      setStatus('loading', saveOnly ? 'Saving preferences...' : 'Preparing website...');
 
       try {
         const setup = readSetup({ saveOnly });
         await ipcRenderer.invoke('start-repo', setup);
-        setStatus('success', saveOnly ? 'Setup saved.' : 'Website is starting. A browser tab should open shortly.');
+        setStatus('success', saveOnly ? 'Preferences saved.' : 'Website is starting. A browser tab should open shortly.');
       } catch (err) {
         setStatus('error', 'Error: ' + err.message);
       } finally {

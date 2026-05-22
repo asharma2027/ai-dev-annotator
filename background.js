@@ -1042,8 +1042,9 @@ chrome.runtime.onMessage.addListener((t, e, n) => {
   }
 });
 
-// Call on startup. Prefer the desktop app's latest config when it is
-// available, but keep cached sync working if the app is closed.
+// Call on startup. Prefer the desktop app's latest repo config and local
+// identity preferences when available, but keep cached sync working if the app
+// is closed.
 refreshLocalConfig({ initFirebaseAfter: true })
   .then((result) => {
     if (!result || result.ok === false) return initFirebase();

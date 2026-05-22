@@ -10,7 +10,7 @@ const treeKill = require('tree-kill');
 const isWindows = process.platform === 'win32';
 const PYTHON_BIN = isWindows ? 'python' : 'python3';
 
-const CONFIG_FILE = path.join(app.getPath('userData'), 'annotator-setup.json');
+const LOCAL_PREFERENCES_FILE = path.join(app.getPath('userData'), 'annotator-setup.json');
 const REPO_DIR = path.join(app.getPath('userData'), 'repo_workspace');
 const REPO_CONFIG_FILE = path.join(REPO_DIR, 'ai-annotator-config.json');
 const SETUP_PORT = 11454;
@@ -78,7 +78,7 @@ function normalizeFirebaseConfigText(value, { allowBlank = true } = {}) {
   if (!parsed) {
     throw new Error('Firebase config must be a valid JSON object. You can paste either the JSON object or the Firebase config snippet from Firebase.');
   }
-  return JSON.stringify(completeFirebaseConfig(parsed), null, 2);
+  return JSON.stringify(parsed, null, 2);
 }
 
 function safeNormalizeFirebaseConfigText(value) {
@@ -89,22 +89,22 @@ function safeNormalizeFirebaseConfigText(value) {
   }
 }
 
-function firebaseConfigForRepoFile(value) {
-  const normalized = normalizeFirebaseConfigText(value);
-  return normalized ? JSON.parse(normalized) : '';
-}
-
 function repoConfigToSetupConfig(fileConfig = {}) {
   const setup = {};
   if (typeof fileConfig.githubUrl === 'string') setup.githubUrl = fileConfig.githubUrl.trim();
-  const firebaseConfig = fileConfig.firebaseConfig || fileConfig.firebase;
-  if (firebaseConfig) {
-    setup.firebaseConfig = typeof firebaseConfig === 'object'
-      ? JSON.stringify(completeFirebaseConfig(firebaseConfig), null, 2)
+  if (
+    Object.prototype.hasOwnProperty.call(fileConfig, 'firebaseConfig') ||
+    Object.prototype.hasOwnProperty.call(fileConfig, 'firebase')
+  ) {
+    const firebaseConfig = Object.prototype.hasOwnProperty.call(fileConfig, 'firebaseConfig')
+      ? fileConfig.firebaseConfig
+      : fileConfig.firebase;
+    setup.firebaseConfig = firebaseConfig && typeof firebaseConfig === 'object' && !Array.isArray(firebaseConfig)
+      ? JSON.stringify(firebaseConfig, null, 2)
       : normalizeFirebaseConfigText(firebaseConfig);
+  } else {
+    setup.firebaseConfig = '';
   }
-  if (typeof fileConfig.username === 'string') setup.username = fileConfig.username.trim();
-  if (typeof fileConfig.userColor === 'string') setup.userColor = fileConfig.userColor.trim();
   return setup;
 }
 
@@ -118,11 +118,18 @@ function readRepoConfigFile() {
   }
 }
 
-function mergeMissingConfig(base = {}, fallback = {}) {
+function applyRepoConfigValues(base = {}, repoConfig = null) {
   const merged = { ...base };
-  ['githubUrl', 'firebaseConfig', 'username', 'userColor'].forEach((key) => {
-    if (!merged[key] && fallback[key]) merged[key] = fallback[key];
-  });
+  if (!repoConfig) {
+    merged.firebaseConfig = '';
+    return merged;
+  }
+  if (Object.prototype.hasOwnProperty.call(repoConfig, 'githubUrl')) {
+    merged.githubUrl = repoConfig.githubUrl;
+  }
+  if (Object.prototype.hasOwnProperty.call(repoConfig, 'firebaseConfig')) {
+    merged.firebaseConfig = repoConfig.firebaseConfig || '';
+  }
   return merged;
 }
 
@@ -151,29 +158,52 @@ function normalizeConfig(config = {}) {
   };
 }
 
+function localPreferencesFromRaw(raw = {}) {
+  return {
+    githubUrl: typeof raw.githubUrl === 'string' ? raw.githubUrl : '',
+    username: typeof raw.username === 'string' ? raw.username : '',
+    userColor: typeof raw.userColor === 'string' ? raw.userColor : '',
+    localServerPort: Number.isInteger(raw.localServerPort) ? raw.localServerPort : null,
+    repoStatus: raw.repoStatus && typeof raw.repoStatus === 'object' ? raw.repoStatus : {},
+  };
+}
+
 function loadConfig() {
-  let rawConfig = {};
+  let rawPreferences = {};
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      rawConfig = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    if (fs.existsSync(LOCAL_PREFERENCES_FILE)) {
+      rawPreferences = JSON.parse(fs.readFileSync(LOCAL_PREFERENCES_FILE, 'utf8'));
     }
   } catch (err) {
-    console.warn('Could not load setup config:', err);
+    console.warn('Could not load local preferences:', err);
   }
   const repoConfig = readRepoConfigFile();
-  const config = normalizeConfig(repoConfig ? mergeMissingConfig(rawConfig, repoConfig) : rawConfig);
+  const config = normalizeConfig(applyRepoConfigValues(localPreferencesFromRaw(rawPreferences), repoConfig));
   saveConfig(config);
   return config;
 }
 
 function saveConfig(config = currentConfig) {
-  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(normalizeConfig(config), null, 2));
+  const normalized = normalizeConfig(config);
+  const preferences = {
+    githubUrl: normalized.githubUrl,
+    username: normalized.username,
+    userColor: normalized.userColor,
+    localServerPort: normalized.localServerPort,
+    repoStatus: normalized.repoStatus,
+  };
+  fs.mkdirSync(path.dirname(LOCAL_PREFERENCES_FILE), { recursive: true });
+  fs.writeFileSync(LOCAL_PREFERENCES_FILE, JSON.stringify(preferences, null, 2));
 }
 
 let currentConfig = loadConfig();
 
+function refreshRepoConfigFromDisk() {
+  currentConfig = normalizeConfig(applyRepoConfigValues(currentConfig, readRepoConfigFile()));
+}
+
 function publicConfig() {
+  refreshRepoConfigFromDisk();
   return {
     githubUrl: currentConfig.githubUrl,
     firebaseConfig: currentConfig.firebaseConfig,
@@ -237,12 +267,13 @@ function appendExtensionDebugEvent(raw = {}) {
 }
 
 function desktopDiagnostics() {
+  refreshRepoConfigFromDisk();
   const repoConfigExists = fs.existsSync(REPO_CONFIG_FILE);
   return {
     ok: true,
     checkedAt: new Date().toISOString(),
     setupPort: SETUP_PORT,
-    configPath: CONFIG_FILE,
+    preferencesPath: LOCAL_PREFERENCES_FILE,
     repoDir: REPO_DIR,
     repoConfigPath: REPO_CONFIG_FILE,
     repoConfigExists,
@@ -382,7 +413,7 @@ ipcMain.handle('setup-github-repo', async (event, githubUrl) => {
     if (currentConfig.firebaseConfig) {
       sendLog('Using Firebase config from ai-annotator-config.json.');
     } else {
-      sendLog('No Firebase config found in ai-annotator-config.json. You can add one from the setup menu.');
+      sendLog('No Firebase config found in ai-annotator-config.json.');
     }
     return publicConfig();
   } catch (error) {
@@ -401,10 +432,6 @@ ipcMain.handle('setup-github-repo', async (event, githubUrl) => {
 });
 
 ipcMain.handle('start-repo', async (event, setup) => {
-  currentConfig.githubUrl = typeof setup.githubUrl === 'string' ? setup.githubUrl.trim() : currentConfig.githubUrl;
-  if (typeof setup.firebaseConfig === 'string') {
-    currentConfig.firebaseConfig = normalizeFirebaseConfigText(setup.firebaseConfig);
-  }
   currentConfig.username = typeof setup.username === 'string' && setup.username.trim()
     ? setup.username.trim()
     : currentConfig.username || randomReviewerName();
@@ -414,13 +441,8 @@ ipcMain.handle('start-repo', async (event, setup) => {
   broadcastConfig();
 
   if (setup.saveOnly) {
-    if (await repoWorkspaceMatchesGithubUrl()) {
-      await applyRepoConfigFile();
-      await writeRepoConfigFile();
-    } else if (currentConfig.githubUrl) {
-      sendLog(`Setup saved. The repository config file will be written to ${REPO_CONFIG_FILE} after you start this repository.`);
-    }
-    sendLog('Setup saved.');
+    await applyRepoConfigFile();
+    sendLog('Local preferences saved.');
     return { success: true };
   }
 
@@ -433,7 +455,6 @@ ipcMain.handle('start-repo', async (event, setup) => {
     sendLog('Preparing repository...');
     const git = await ensureRepo(currentConfig.githubUrl);
     await applyRepoConfigFile();
-    await writeRepoConfigFile();
     await updateRepoStatus(git);
     await installAndStartRepo();
     startRepoUpdateChecks();
@@ -477,13 +498,6 @@ function hasGitRepo() {
   return fs.existsSync(path.join(REPO_DIR, '.git'));
 }
 
-async function repoWorkspaceMatchesGithubUrl() {
-  if (!hasGitRepo() || !currentConfig.githubUrl) return false;
-  const git = simpleGit(REPO_DIR);
-  const origin = await git.remote(['get-url', 'origin']).catch(() => '');
-  return sameGithubRepo(origin, currentConfig.githubUrl);
-}
-
 async function ensureRepo(githubUrl) {
   fs.mkdirSync(path.dirname(REPO_DIR), { recursive: true });
   if (hasGitRepo()) {
@@ -520,49 +534,12 @@ async function applyRepoConfigFile() {
   const fileConfig = readRepoConfigFile();
   if (!fileConfig) {
     if (fs.existsSync(REPO_CONFIG_FILE)) sendLog('Could not parse ai-annotator-config.json.');
+    currentConfig = normalizeConfig(applyRepoConfigValues(currentConfig, null));
+    broadcastConfig();
     return;
   }
-  currentConfig = normalizeConfig(mergeMissingConfig(currentConfig, fileConfig));
+  currentConfig = normalizeConfig(applyRepoConfigValues(currentConfig, fileConfig));
   broadcastConfig();
-}
-
-async function writeRepoConfigFile() {
-  if (!fs.existsSync(REPO_DIR)) return false;
-  let existing = {};
-  const existed = fs.existsSync(REPO_CONFIG_FILE);
-  if (existed) {
-    try {
-      existing = JSON.parse(fs.readFileSync(REPO_CONFIG_FILE, 'utf8'));
-    } catch (err) {
-      existing = {};
-      sendLog('Replacing unreadable ai-annotator-config.json with the current setup.');
-      console.warn('Could not parse ai-annotator-config.json', err);
-    }
-  }
-
-  const repoConfig = {
-    ...existing,
-    githubUrl: currentConfig.githubUrl,
-    firebaseConfig: firebaseConfigForRepoFile(currentConfig.firebaseConfig),
-    username: currentConfig.username,
-    userColor: currentConfig.userColor,
-  };
-
-  if (!repoConfig.firebaseConfig) delete repoConfig.firebaseConfig;
-  if (!repoConfig.githubUrl) delete repoConfig.githubUrl;
-  if (!repoConfig.username) delete repoConfig.username;
-  if (!repoConfig.userColor) delete repoConfig.userColor;
-
-  try {
-    fs.mkdirSync(REPO_DIR, { recursive: true });
-    fs.writeFileSync(REPO_CONFIG_FILE, `${JSON.stringify(repoConfig, null, 2)}\n`);
-    sendLog(`${existed ? 'Updated' : 'Created'} ai-annotator-config.json at ${REPO_CONFIG_FILE}.`);
-    return true;
-  } catch (err) {
-    sendLog(`Could not write ai-annotator-config.json at ${REPO_CONFIG_FILE}.`);
-    console.warn('Could not write ai-annotator-config.json', err);
-    throw err;
-  }
 }
 
 async function updateRepoStatus(git = simpleGit(REPO_DIR), extra = {}) {
