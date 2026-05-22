@@ -964,11 +964,6 @@ textarea.search-note-match {
   border: 1px solid var(--border);
   flex: 0 0 auto;
 }
-.testing-mode-on {
-  color: #047857;
-  font-weight: 700;
-}
-
 .team-debug-output {
   width: 100%;
   max-height: 230px;

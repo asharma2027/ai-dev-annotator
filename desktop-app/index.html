@@ -444,9 +444,6 @@
               </div>
             </div>
           </div>
-          <div class="field">
-            <p class="hint">Use this when you want different Chrome windows to act as different reviewers.</p>
-          </div>
           <div class="actions main-actions">
             <button id="startBtn" class="primary">Start Website</button>
             <button id="saveOnlyBtn" class="secondary">Save Changes</button>
@@ -594,11 +591,7 @@
       if (!data || data.ok === false) return 'Diagnostics unavailable.';
       const config = data.currentConfig || {};
       const firebase = config.firebase || {};
-      const identities = data.testingWindowIdentities || {};
       const events = data.extensionDebugEvents || [];
-      const identityRows = Object.entries(identities)
-        .map(([windowId, identity]) => `  ${windowId}: ${identity.username || '(unnamed)'} ${identity.userColor || ''}`)
-        .join('\n') || '  none';
       const eventRows = events.slice(-14)
         .map(event => `  ${event.at} [${event.level}] ${event.scope}: ${event.message}`)
         .join('\n') || '  none';
@@ -610,8 +603,6 @@
         `Firebase: ${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
         `Local site port: ${config.localServerPort || 'n/a'}`,
         `Repo workspace: ${data.repoWorkspaceExists ? 'ready' : 'not cloned'}`,
-        'Shared testing identities:',
-        identityRows,
         'Recent extension events:',
         eventRows,
       ].join('\n');

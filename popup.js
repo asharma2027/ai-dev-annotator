@@ -3840,18 +3840,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const settings = snapshot.settings || {};
     const firebase = settings.firebase || {};
     const sync = snapshot.teamSync || {};
-    const testing = snapshot.testing || {};
     const desktop = snapshot.desktop || {};
     const permissions = snapshot.permissions || {};
-    const identityRows = Object.entries(testing.identities || {})
-      .map(([windowId, identity]) => `  ${windowId}: ${identity.username || '(unnamed)'} ${identity.userColor || ''}`)
-      .join('\n') || '  none';
-    const windowRows = (testing.windows || [])
-      .map(win => {
-        const assigned = win.assignedIdentity?.username ? ` -> ${win.assignedIdentity.username}` : '';
-        return `  ${win.id}: ${win.tabCount || 0} tab(s), ${win.activeTabTitle || 'Untitled'}${assigned}`;
-      })
-      .join('\n') || `  ${testing.windowsError ? `error: ${testing.windowsError}` : 'none visible'}`;
     const events = (snapshot.events || [])
       .slice(-18)
       .map(event => `  ${fmtDebugTime(event.at)} [${event.level || 'info'}] ${event.scope || 'debug'}: ${event.message || ''}`)
@@ -3860,17 +3850,12 @@ document.addEventListener('DOMContentLoaded', () => {
     return [
       `Generated: ${fmtDebugTime(snapshot.generatedAt)}`,
       `Extension: ${snapshot.runtime?.id || 'unknown'} v${snapshot.runtime?.version || 'unknown'}`,
-      `Permissions: tabs=${fmtDebugBool(permissions.tabs)}, windows=${fmtDebugBool(permissions.windows)}, localhost=${fmtDebugBool(permissions.localhost)}`,
+      `Permissions: tabs=${fmtDebugBool(permissions.tabs)}, localhost=${fmtDebugBool(permissions.localhost)}`,
       `Desktop app: ${desktop.ok ? 'reachable' : 'unreachable'}${desktop.error ? ` (${desktop.error})` : ''}`,
       `Desktop config: repo=${desktop.currentConfig?.githubUrl || 'n/a'}, user=${desktop.currentConfig?.username || 'n/a'}`,
       `Extension config: repo=${settings.githubUrl || 'n/a'}, user=${settings.username || 'n/a'}, firebase=${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
       `Setup refresh: last=${fmtDebugTime(snapshot.setup?.lastChecked)}, error=${snapshot.setup?.error || 'none'}`,
       `Team sync: ${sync.connected ? 'connected' : 'not connected'}, team=${sync.teamId || 'n/a'}, remote=${sync.remoteCount ?? 'n/a'}, error=${sync.error || 'none'}`,
-      `Testing identity source: ${testing.identitySource || 'unknown'}, desktopAvailable=${fmtDebugBool(testing.desktopAvailable)}`,
-      'Assigned identities:',
-      identityRows,
-      'Visible windows:',
-      windowRows,
       'Recent events:',
       events,
     ].join('\n');
@@ -3940,27 +3925,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const copyBtnRight  = btnActions.copyBtn?.right  || 'cutAll';
     const clearBtnLeft  = btnActions.clearBtn?.left  || 'clearAll';
     const clearBtnRight = btnActions.clearBtn?.right || 'saveForLater';
-    const testingMode   = s.testingMode !== false;
 
     // Build <option> list for a given action key
     const actionOptions = (selected) => Object.entries(BUTTON_ACTIONS)
       .map(([key, cfg]) =>
         `<option value="${escHtml(key)}" ${selected === key ? 'selected' : ''}>${cfg.emoji} ${escHtml(cfg.label)}</option>`)
       .join('');
-    const testingWindowSection = testingMode ? `
-      <!-- ── Testing Windows ── -->
-      <div class="settings-section settings-section--dev" id="testing-windows-section">
-        <div class="settings-section-title">Testing Windows</div>
-        <div class="settings-row">
-          <span class="settings-label">Mode</span>
-          <span class="settings-value testing-mode-on">On</span>
-        </div>
-        <p class="settings-hint">Assign open Chrome windows to temporary test identities. New annotations from those windows use the same author fields and sync path as real team annotations.</p>
-        <div id="testing-windows-list" class="testing-windows-list">Loading windows…</div>
-        <div class="settings-row settings-row--btns">
-          <button id="refresh-testing-windows-btn" class="btn-history-action">Refresh windows</button>
-        </div>
-      </div>` : '';
 
     // Undo/redo shortcut state for this render.
     const undoSc  = s.undoShortcut || DEFAULT_SETTINGS.undoShortcut;
@@ -4028,19 +3998,14 @@ document.addEventListener('DOMContentLoaded', () => {
             ${escHtml(s.username || 'Assigned in desktop app')}
           </span>
         </div>
-        <div class="settings-row">
-          <span class="settings-label">Testing mode</span>
-          <span class="settings-value">${testingMode ? 'On' : 'Off'}</span>
-        </div>
-        <p class="settings-hint">Set Firebase, GitHub, name, color, and testing mode once in the desktop app. The popup refreshes these automatically when settings opens.</p>
+        <p class="settings-hint">Set Firebase, GitHub, name, and color once in the desktop app. The popup refreshes these automatically when settings opens.</p>
         <div class="settings-row settings-row--btns">
           <button id="refresh-team-config-btn" class="btn-history-action">Refresh from desktop app</button>
         </div>
       </div>
-      ${testingWindowSection}
       <div class="settings-section settings-section--dev" id="team-debug-section">
         <div class="settings-section-title">Team Debug</div>
-        <p class="settings-hint">One snapshot for setup, Firebase, testing identities, Chrome windows, permissions, and recent worker events.</p>
+        <p class="settings-hint">One snapshot for setup, Firebase, sync state, permissions, and recent worker events.</p>
         <pre id="team-debug-output" class="team-debug-output">Loading diagnostics...</pre>
         <div class="settings-row settings-row--btns">
           <button id="refresh-team-debug-btn" class="btn-history-action" type="button">Refresh debug</button>
@@ -4259,113 +4224,6 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
 
     attachExternalLinks(settingsEl);
-
-    // ── Testing window identities ───────────────────────────────────────
-    const testingWindowsList = settingsEl.querySelector('#testing-windows-list');
-    function renderTestingWindows() {
-      if (!testingWindowsList) return;
-      testingWindowsList.textContent = 'Loading windows…';
-      chrome.runtime.sendMessage({ type: 'listTestingWindows' }, result => {
-        if (chrome.runtime.lastError || !result || result.ok === false) {
-          const msg = chrome.runtime.lastError?.message || result?.error || 'Could not read Chrome windows.';
-          testingWindowsList.innerHTML = `<div class="testing-window-empty">${escHtml(msg)}</div>`;
-          return;
-        }
-        const windows = result.windows || [];
-        if (!windows.length) {
-          testingWindowsList.innerHTML = '<div class="testing-window-empty">No Chrome windows found.</div>';
-          return;
-        }
-        testingWindowsList.innerHTML = windows.map(win => {
-          const identity = win.assignedIdentity || {};
-          const username = identity.username || '';
-          const color = identity.userColor || win.suggestedColor || '#2563eb';
-          const activeTitle = win.activeTabTitle || 'Untitled active tab';
-          const activeUrl = win.activeTabUrl || '';
-          return `
-            <div class="testing-window-card" data-window-id="${escHtml(win.id)}">
-              <div class="testing-window-summary">
-                <div class="testing-window-title">
-                  Window ${escHtml(win.id)}
-                  ${win.focused ? '<span class="testing-window-pill">Focused</span>' : ''}
-                  ${win.incognito ? '<span class="testing-window-pill">Incognito</span>' : ''}
-                  ${win.identitySource ? `<span class="testing-window-pill">${escHtml(win.identitySource)}</span>` : ''}
-                </div>
-                <div class="testing-window-sub">${escHtml(win.tabCount || 0)} tab${win.tabCount === 1 ? '' : 's'} · ${escHtml(activeTitle)}</div>
-                ${activeUrl ? `<div class="testing-window-url" title="${escHtml(activeUrl)}">${escHtml(activeUrl)}</div>` : ''}
-              </div>
-              <div class="testing-window-controls">
-                <input class="testing-window-name" type="text" placeholder="Display name" value="${escHtml(username)}" autocomplete="off" spellcheck="false">
-                <input class="testing-window-color" type="color" value="${escHtml(color)}" title="Identity color">
-                <button class="btn-history-action testing-window-save" type="button">Assign</button>
-                <button class="btn-history-action testing-window-clear" type="button" ${username ? '' : 'disabled'}>Clear</button>
-              </div>
-            </div>`;
-        }).join('');
-      });
-    }
-    if (testingWindowsList) {
-      renderTestingWindows();
-      testingWindowsList.addEventListener('keydown', e => {
-        if (e.key !== 'Enter') return;
-        const card = e.target.closest('.testing-window-card');
-        if (!card || !e.target.classList.contains('testing-window-name')) return;
-        e.preventDefault();
-        card.querySelector('.testing-window-save')?.click();
-      });
-      testingWindowsList.addEventListener('click', e => {
-        const card = e.target.closest('.testing-window-card');
-        if (!card) return;
-        const windowId = Number(card.dataset.windowId);
-        const nameInput = card.querySelector('.testing-window-name');
-        const colorInput = card.querySelector('.testing-window-color');
-        if (e.target.closest('.testing-window-save')) {
-          const username = (nameInput?.value || '').trim();
-          if (!username) {
-            showToast('Enter a display name for that window.', { kind: 'error' });
-            nameInput?.focus();
-            return;
-          }
-          const btn = e.target.closest('.testing-window-save');
-          btn.disabled = true;
-          chrome.runtime.sendMessage({
-            type: 'setTestingWindowIdentity',
-            windowId,
-            identity: {
-              username,
-              userColor: colorInput?.value || '#2563eb',
-            },
-          }, result => {
-            btn.disabled = false;
-            if (chrome.runtime.lastError || !result || result.ok === false) {
-              const msg = chrome.runtime.lastError?.message || result?.error || 'Could not assign that window.';
-              showToast(msg, { kind: 'error' });
-              renderTestingWindows();
-              return;
-            }
-            const source = result.identity?._source ? ` (${result.identity._source})` : '';
-            showToast(`Testing identity assigned${source}.`, { kind: 'ok' });
-            renderTestingWindows();
-          });
-        }
-        if (e.target.closest('.testing-window-clear')) {
-          const btn = e.target.closest('.testing-window-clear');
-          btn.disabled = true;
-          chrome.runtime.sendMessage({ type: 'clearTestingWindowIdentity', windowId }, result => {
-            btn.disabled = false;
-            if (chrome.runtime.lastError || !result || result.ok === false) {
-              const msg = chrome.runtime.lastError?.message || result?.error || 'Could not clear that window.';
-              showToast(msg, { kind: 'error' });
-              renderTestingWindows();
-              return;
-            }
-            showToast('Testing identity cleared.', { kind: 'ok' });
-            renderTestingWindows();
-          });
-        }
-      });
-    }
-    settingsEl.querySelector('#refresh-testing-windows-btn')?.addEventListener('click', renderTestingWindows);
 
     // ── Team diagnostics ─────────────────────────────────────────────────
     const teamDebugOutput = settingsEl.querySelector('#team-debug-output');

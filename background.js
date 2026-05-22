@@ -932,7 +932,6 @@ function getPermissionDiagnostics() {
   return new Promise((resolve) => {
     const out = {
       tabs: null,
-      windows: typeof chrome.windows?.getAll === "function",
       localhost: null,
     };
     if (!chrome.permissions?.contains) return resolve(out);

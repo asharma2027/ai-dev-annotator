@@ -252,11 +252,10 @@ function desktopDiagnostics() {
       githubUrl: currentConfig.githubUrl,
       username: currentConfig.username,
       userColor: currentConfig.userColor,
-        localServerPort: currentConfig.localServerPort,
+      localServerPort: currentConfig.localServerPort,
       firebase: safeParseFirebaseConfig(currentConfig.firebaseConfig),
       repoStatus: currentConfig.repoStatus,
     },
-    testingWindowIdentities: readTestingWindowIdentities(),
     extensionDebugEvents: extensionDebugEvents.slice(-80),
   };
 }
