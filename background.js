@@ -28,7 +28,6 @@ const COPY_HISTORY_KEY = "copyHistory";
 const SETTINGS_KEY = "annotatorSettings";
 const SAVED_LATER_KEY = "savedForLater";
 const ANN_STORE_KEY = "_annStore";
-const TEST_WINDOW_IDENTITIES_KEY = "testingWindowIdentities";
 const TEAM_DEBUG_EVENTS_KEY = "_teamDebugEvents";
 const TEAM_DEBUG_EVENT_LIMIT = 160;
 const DESKTOP_FETCH_TIMEOUT_MS = 2500;
@@ -87,6 +86,11 @@ chrome.runtime.onInstalled.addListener(async () => {
   await refreshLocalConfig({ initFirebaseAfter: true });
   await checkWebsiteVersion();
 });
+try {
+  chrome.tabs.onRemoved.addListener(() => {
+    maybeStopRepoServerWhenNoLocalTabs();
+  });
+} catch (_err) {}
 chrome.runtime.onStartup.addListener(() => {
   setupAlarm();
   refreshLocalConfig({ initFirebaseAfter: true });
@@ -493,240 +497,24 @@ function withAuthorMetadata(ann, settings, teamId) {
     _updatedAt: Date.now(),
   };
 }
-function normalizeTestIdentity(identity = {}) {
-  const username = typeof identity.username === "string" ? identity.username.trim() : "";
-  if (!username) return null;
-  return {
-    username,
-    userColor: typeof identity.userColor === "string" && /^#[0-9a-f]{6}$/i.test(identity.userColor)
-      ? identity.userColor
-      : "#2563eb",
-    assignedAt: identity.assignedAt || new Date().toISOString(),
-  };
-}
-function normalizeTestingWindowIdentities(value = {}) {
-  const out = {};
-  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
-  Object.entries(value).forEach(([windowId, identity]) => {
-    const normalized = normalizeTestIdentity(identity);
-    if (normalized) out[String(windowId)] = normalized;
-  });
-  return out;
-}
-async function readLocalTestingWindowIdentities() {
-  const [localData, sessionData] = await Promise.all([
-    storageLocalGet({ [TEST_WINDOW_IDENTITIES_KEY]: {} }),
-    storageSessionGet({ [TEST_WINDOW_IDENTITIES_KEY]: {} }),
-  ]);
-  return normalizeTestingWindowIdentities({
-    ...(sessionData[TEST_WINDOW_IDENTITIES_KEY] || {}),
-    ...(localData[TEST_WINDOW_IDENTITIES_KEY] || {}),
-  });
-}
-async function writeLocalTestingWindowIdentities(identities) {
-  const normalized = normalizeTestingWindowIdentities(identities);
-  await Promise.all([
-    storageLocalSet({ [TEST_WINDOW_IDENTITIES_KEY]: normalized }),
-    storageSessionSet({ [TEST_WINDOW_IDENTITIES_KEY]: normalized }),
-  ]);
-}
-async function readTestingWindowIdentities() {
-  try {
-    const data = await desktopFetchJson("/api/testing-identities");
-    return {
-      source: data.source || "desktop-app",
-      identities: normalizeTestingWindowIdentities(data.identities || {}),
-      desktopAvailable: true,
+function getEffectiveIdentityForSender(sender = {}) {
+  return storageLocalGet({ annotatorSettings: {} }).then((data) => {
+    const settings = data.annotatorSettings || {};
+    const windowId = sender.tab && Number.isInteger(sender.tab.windowId) ? sender.tab.windowId : null;
+    const base = {
+      username: settings.username || "Reviewer",
+      userColor: settings.userColor || "#2563eb",
+      source: "team",
+      windowId,
     };
-  } catch (err) {
-    const identities = await readLocalTestingWindowIdentities();
-    recordTeamDebug(
-      "testing-identities",
-      "Using extension-profile testing identities because desktop identities were unavailable.",
-      { error: err?.message || String(err), localCount: Object.keys(identities).length },
-      "warn",
-    );
-    return {
-      source: "extension-profile",
-      identities,
-      desktopAvailable: false,
-      error: err?.message || String(err),
-    };
-  }
-}
-async function writeTestingWindowIdentity(windowId, identity) {
-  const id = Number(windowId);
-  if (!Number.isInteger(id)) throw new Error("Window id is required.");
-  const normalized = normalizeTestIdentity(identity);
-  if (!normalized) throw new Error("Display name is required.");
-
-  try {
-    const data = await desktopFetchJson(`/api/testing-identities/${encodeURIComponent(String(id))}`, {
-      method: "PUT",
-      body: normalized,
+    recordTeamDebug("identity", "Resolved base team identity for annotation sender.", {
+      windowId,
+      username: base.username,
+      tabId: sender.tab?.id,
+      url: sender.tab?.url || "",
     });
-    const saved = normalizeTestIdentity(data.identity || normalized);
-    const localIdentities = await readLocalTestingWindowIdentities();
-    localIdentities[String(id)] = saved;
-    await writeLocalTestingWindowIdentities(localIdentities);
-    recordTeamDebug("testing-identities", "Testing identity assigned through desktop app.", {
-      windowId: id,
-      username: saved.username,
-      source: data.source || "desktop-app",
-    });
-    return { identity: saved, source: data.source || "desktop-app" };
-  } catch (err) {
-    const identities = await readLocalTestingWindowIdentities();
-    identities[String(id)] = normalized;
-    await writeLocalTestingWindowIdentities(identities);
-    recordTeamDebug("testing-identities", "Testing identity assigned in this extension profile only.", {
-      windowId: id,
-      username: normalized.username,
-      error: err?.message || String(err),
-    }, "warn");
-    return { identity: normalized, source: "extension-profile", warning: err?.message || String(err) };
-  }
-}
-async function clearSharedTestingWindowIdentity(windowId) {
-  const id = Number(windowId);
-  if (!Number.isInteger(id)) throw new Error("Window id is required.");
-  let desktopCleared = false;
-  try {
-    await desktopFetchJson(`/api/testing-identities/${encodeURIComponent(String(id))}`, {
-      method: "DELETE",
-    });
-    desktopCleared = true;
-  } catch (err) {
-    recordTeamDebug("testing-identities", "Could not clear desktop testing identity; clearing local fallback.", {
-      windowId: id,
-      error: err?.message || String(err),
-    }, "warn");
-  }
-  const identities = await readLocalTestingWindowIdentities();
-  delete identities[String(id)];
-  await writeLocalTestingWindowIdentities(identities);
-  recordTeamDebug("testing-identities", "Testing identity cleared.", {
-    windowId: id,
-    source: desktopCleared ? "desktop-app" : "extension-profile",
+    return base;
   });
-}
-function getChromeWindows() {
-  return new Promise((resolve, reject) => {
-    try {
-      recordTeamDebug("windows", "Requesting Chrome windows.");
-      chrome.windows.getAll({ populate: true }, (windows) => {
-        if (chrome.runtime.lastError) {
-          const err = new Error(chrome.runtime.lastError.message);
-          recordTeamDebug("windows", "Chrome windows request failed.", { error: err.message }, "error");
-          reject(err);
-          return;
-        }
-        const normalWindows = (windows || []).filter((win) => !win.type || win.type === "normal");
-        recordTeamDebug("windows", "Chrome windows request completed.", {
-          windowCount: normalWindows.length,
-          ids: normalWindows.map((win) => win.id),
-        });
-        resolve(normalWindows);
-      });
-    } catch (err) {
-      recordTeamDebug("windows", "Chrome windows request threw.", { error: err?.message || String(err) }, "error");
-      reject(err);
-    }
-  });
-}
-async function pruneLocalTestingWindowIdentities(openWindowIds) {
-  const identities = await readLocalTestingWindowIdentities();
-  const open = new Set(openWindowIds.map((id) => String(id)));
-  let changed = false;
-  Object.keys(identities).forEach((windowId) => {
-    if (!open.has(windowId)) {
-      delete identities[windowId];
-      changed = true;
-    }
-  });
-  if (changed) await writeLocalTestingWindowIdentities(identities);
-  return identities;
-}
-function activeTabForWindow(win) {
-  const tabs = Array.isArray(win.tabs) ? win.tabs : [];
-  return tabs.find((tab) => tab.active) || tabs[0] || null;
-}
-async function listTestingWindows() {
-  const windows = await getChromeWindows();
-  const identityState = await readTestingWindowIdentities();
-  const identities = identityState.source === "desktop-app"
-    ? identityState.identities
-    : await pruneLocalTestingWindowIdentities(windows.map((win) => win.id));
-  return windows.map((win, index) => {
-    const tab = activeTabForWindow(win);
-    const assignedIdentity = identities[String(win.id)] || null;
-    return {
-      id: win.id,
-      focused: !!win.focused,
-      incognito: !!win.incognito,
-      tabCount: Array.isArray(win.tabs) ? win.tabs.length : 0,
-      activeTabTitle: tab?.title || "",
-      activeTabUrl: tab?.url || "",
-      suggestedColor: assignedIdentity?.userColor || DEFAULT_TEST_COLORS[index % DEFAULT_TEST_COLORS.length],
-      assignedIdentity,
-      identitySource: identityState.source,
-    };
-  });
-}
-async function setTestingWindowIdentity(windowId, identity) {
-  const id = Number(windowId);
-  if (!Number.isInteger(id)) throw new Error("Window id is required.");
-  const normalized = normalizeTestIdentity(identity);
-  if (!normalized) throw new Error("Display name is required.");
-  const windows = await getChromeWindows();
-  if (!windows.some((win) => win.id === id)) throw new Error("That Chrome window is no longer open.");
-  const saved = await writeTestingWindowIdentity(id, normalized);
-  return { ...saved.identity, _source: saved.source, _warning: saved.warning || "" };
-}
-async function clearTestingWindowIdentity(windowId) {
-  const id = Number(windowId);
-  if (!Number.isInteger(id)) throw new Error("Window id is required.");
-  await clearSharedTestingWindowIdentity(id);
-}
-async function getEffectiveIdentityForSender(sender = {}) {
-  const data = await storageLocalGet({ annotatorSettings: {} });
-  const settings = data.annotatorSettings || {};
-  const base = {
-    username: settings.username || "Reviewer",
-    userColor: settings.userColor || "#2563eb",
-    testingMode: settings.testingMode !== false,
-    source: "team",
-  };
-  const windowId = sender.tab && Number.isInteger(sender.tab.windowId) ? sender.tab.windowId : null;
-  if (base.testingMode && windowId !== null) {
-    const identityState = await readTestingWindowIdentities();
-    const assigned = identityState.identities[String(windowId)];
-    if (assigned) {
-      recordTeamDebug("identity", "Resolved testing-window identity for annotation sender.", {
-        windowId,
-        username: assigned.username,
-        source: identityState.source,
-        tabId: sender.tab?.id,
-        url: sender.tab?.url || "",
-      });
-      return {
-        username: assigned.username,
-        userColor: assigned.userColor,
-        testingMode: true,
-        source: "testing-window",
-        identitySource: identityState.source,
-        windowId,
-      };
-    }
-  }
-  recordTeamDebug("identity", "Resolved base team identity for annotation sender.", {
-    windowId,
-    username: base.username,
-    testingMode: base.testingMode,
-    tabId: sender.tab?.id,
-    url: sender.tab?.url || "",
-  });
-  return base;
 }
 function mergeRemoteAnnotations(localList, remoteList, teamId) {
   const remoteIds = new Set(remoteList.map((ann) => ann.id));
@@ -804,18 +592,6 @@ async function refreshLocalConfig({ initFirebaseAfter = false } = {}) {
         changedKeys.push(key);
       }
     });
-    if (Object.prototype.hasOwnProperty.call(config, "testingMode")) {
-      const testingMode = config.testingMode !== false;
-      if (settings.testingMode !== testingMode) {
-        settings.testingMode = testingMode;
-        changed = true;
-        changedKeys.push("testingMode");
-      }
-    } else if (!Object.prototype.hasOwnProperty.call(settings, "testingMode")) {
-      settings.testingMode = true;
-      changed = true;
-      changedKeys.push("testingMode");
-    }
     if (Object.prototype.hasOwnProperty.call(config, "localServerPort")) {
       const port = Number.isInteger(config.localServerPort) ? config.localServerPort : null;
       if (settings.localServerPort !== port) {
@@ -836,7 +612,6 @@ async function refreshLocalConfig({ initFirebaseAfter = false } = {}) {
       changedKeys,
       githubUrl: settings.githubUrl || "",
       username: settings.username || "",
-      testingMode: settings.testingMode !== false,
       localServerPort: settings.localServerPort || null,
       firebaseConfigured: !!settings.firebaseConfig,
     });
@@ -1078,17 +853,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-try {
-  chrome.windows.onRemoved.addListener((windowId) => {
-    readTestingWindowIdentities()
-      .then((state) => {
-        if (!state.identities[String(windowId)]) return null;
-        return clearSharedTestingWindowIdentity(windowId);
-      })
-      .catch(() => {});
-  });
-} catch (_err) {}
-
 async function checkWebsiteVersion() {
   try {
     const res = await fetch(`${LOCAL_SETUP_ORIGIN}/api/site-version`, { cache: "no-store" });
@@ -1110,6 +874,26 @@ async function checkWebsiteVersion() {
     await storageLocalSet({ _websiteVersionError: err?.message || String(err) });
   }
 }
+async function stopDesktopRepoServer() {
+  try {
+    await desktopFetchJson("/api/repo/stop", { method: "POST", body: {} });
+    recordTeamDebug("server", "Requested desktop app to stop the local repo server.");
+  } catch (err) {
+    recordTeamDebug("server", "Could not stop local repo server via desktop app.", { error: err?.message || String(err) }, "warn");
+  }
+}
+
+function maybeStopRepoServerWhenNoLocalTabs() {
+  chrome.storage.local.get({ annotatorSettings: {} }, (data) => {
+    const port = data?.annotatorSettings?.localServerPort;
+    if (!Number.isInteger(port)) return;
+    const patterns = [`http://localhost:${port}/*`, `http://127.0.0.1:${port}/*`];
+    chrome.tabs.query({ url: patterns }, (tabs) => {
+      if ((tabs || []).length === 0) stopDesktopRepoServer();
+    });
+  });
+}
+
 function refreshWebsiteTabs(port) {
   const patterns = [
     `http://localhost:${port}/*`,
@@ -1180,22 +964,6 @@ async function getTeamDebugSnapshot() {
   });
   const settings = local.annotatorSettings || {};
   const manifest = chrome.runtime.getManifest();
-  let windows = [];
-  let windowsError = null;
-  try {
-    windows = await listTestingWindows();
-  } catch (err) {
-    windowsError = err?.message || String(err);
-    recordTeamDebug("diagnostics", "Diagnostics could not list Chrome windows.", { error: windowsError }, "error");
-  }
-
-  let identityState = null;
-  try {
-    identityState = await readTestingWindowIdentities();
-  } catch (err) {
-    identityState = { source: "unknown", identities: {}, error: err?.message || String(err) };
-  }
-
   let desktop = null;
   try {
     desktop = await desktopFetchJson("/api/diagnostics");
@@ -1221,7 +989,6 @@ async function getTeamDebugSnapshot() {
       githubUrl: settings.githubUrl || "",
       username: settings.username || "",
       userColor: settings.userColor || "",
-      testingMode: settings.testingMode !== false,
       localServerPort: settings.localServerPort || null,
       firebase: firebaseConfigSummary(settings.firebaseConfig),
     },
@@ -1229,13 +996,6 @@ async function getTeamDebugSnapshot() {
     website: {
       info: local._websiteVersionInfo || null,
       error: local._websiteVersionError || null,
-    },
-    testing: {
-      identitySource: identityState?.source || "unknown",
-      desktopAvailable: !!identityState?.desktopAvailable,
-      identities: identityState?.identities || {},
-      windows,
-      windowsError,
     },
     desktop,
     events: Array.isArray(local[TEAM_DEBUG_EVENTS_KEY])
@@ -1268,15 +1028,6 @@ chrome.runtime.onMessage.addListener((t, e, n) => {
   }
   if (t.type === "getEffectiveIdentity") {
     return respondAsync(n, "getEffectiveIdentity", getEffectiveIdentityForSender(e).then((identity) => ({ ok: true, identity })));
-  }
-  if (t.type === "listTestingWindows") {
-    return respondAsync(n, "listTestingWindows", listTestingWindows().then((windows) => ({ ok: true, windows })));
-  }
-  if (t.type === "setTestingWindowIdentity") {
-    return respondAsync(n, "setTestingWindowIdentity", setTestingWindowIdentity(t.windowId, t.identity).then((identity) => ({ ok: true, identity })));
-  }
-  if (t.type === "clearTestingWindowIdentity") {
-    return respondAsync(n, "clearTestingWindowIdentity", clearTestingWindowIdentity(t.windowId).then(() => ({ ok: true })));
   }
   if (t.type === "getTeamDebugSnapshot") {
     return respondAsync(n, "getTeamDebugSnapshot", getTeamDebugSnapshot());

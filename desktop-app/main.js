@@ -13,7 +13,6 @@ const PYTHON_BIN = isWindows ? 'python' : 'python3';
 const CONFIG_FILE = path.join(app.getPath('userData'), 'annotator-setup.json');
 const REPO_DIR = path.join(app.getPath('userData'), 'repo_workspace');
 const REPO_CONFIG_FILE = path.join(REPO_DIR, 'ai-annotator-config.json');
-const TEST_IDENTITIES_FILE = path.join(app.getPath('userData'), 'testing-window-identities.json');
 const SETUP_PORT = 11454;
 const REPO_CHECK_INTERVAL_MS = 60 * 1000;
 const DEFAULT_COLORS = ['#2563eb', '#059669', '#dc2626', '#7c3aed', '#ea580c', '#0891b2', '#be123c'];
@@ -137,7 +136,6 @@ function normalizeConfig(config = {}) {
     userColor: typeof config.userColor === 'string' && /^#[0-9a-f]{6}$/i.test(config.userColor)
       ? config.userColor
       : DEFAULT_COLORS[Math.floor(Math.random() * DEFAULT_COLORS.length)],
-    testingMode: config.testingMode !== false,
     localServerPort: Number.isInteger(config.localServerPort) ? config.localServerPort : null,
     repoStatus: {
       currentCommit: '',
@@ -181,7 +179,6 @@ function publicConfig() {
     firebaseConfig: currentConfig.firebaseConfig,
     username: currentConfig.username,
     userColor: currentConfig.userColor,
-    testingMode: currentConfig.testingMode,
     localServerPort: currentConfig.localServerPort,
     repoStatus: currentConfig.repoStatus,
   };
@@ -201,71 +198,6 @@ function broadcastConfig() {
 const expressApp = express();
 expressApp.use(cors({ origin: '*' }));
 expressApp.use(express.json({ limit: '1mb' }));
-
-function normalizeTestIdentity(identity = {}) {
-  const username = typeof identity.username === 'string' ? identity.username.trim() : '';
-  if (!username) return null;
-  return {
-    username,
-    userColor: typeof identity.userColor === 'string' && /^#[0-9a-f]{6}$/i.test(identity.userColor)
-      ? identity.userColor
-      : '#2563eb',
-    assignedAt: typeof identity.assignedAt === 'string' && identity.assignedAt
-      ? identity.assignedAt
-      : new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function normalizeTestingWindowIdentities(value = {}) {
-  const out = {};
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
-  Object.entries(value).forEach(([windowId, identity]) => {
-    const normalized = normalizeTestIdentity(identity);
-    if (normalized) out[String(windowId)] = normalized;
-  });
-  return out;
-}
-
-function readTestingWindowIdentities() {
-  if (!fs.existsSync(TEST_IDENTITIES_FILE)) return {};
-  try {
-    return normalizeTestingWindowIdentities(JSON.parse(fs.readFileSync(TEST_IDENTITIES_FILE, 'utf8')));
-  } catch (err) {
-    console.warn('Could not parse testing-window-identities.json', err);
-    return {};
-  }
-}
-
-function writeTestingWindowIdentities(identities) {
-  const normalized = normalizeTestingWindowIdentities(identities);
-  fs.mkdirSync(path.dirname(TEST_IDENTITIES_FILE), { recursive: true });
-  fs.writeFileSync(TEST_IDENTITIES_FILE, `${JSON.stringify(normalized, null, 2)}\n`);
-  return normalized;
-}
-
-function setTestingWindowIdentity(windowId, identity) {
-  const id = Number(windowId);
-  if (!Number.isInteger(id)) throw new Error('Window id is required.');
-  const normalized = normalizeTestIdentity(identity);
-  if (!normalized) throw new Error('Display name is required.');
-  const identities = readTestingWindowIdentities();
-  identities[String(id)] = normalized;
-  writeTestingWindowIdentities(identities);
-  sendLog(`Assigned testing window ${id} to ${normalized.username}.`);
-  return normalized;
-}
-
-function clearTestingWindowIdentity(windowId) {
-  const id = Number(windowId);
-  if (!Number.isInteger(id)) throw new Error('Window id is required.');
-  const identities = readTestingWindowIdentities();
-  if (identities[String(id)]) {
-    delete identities[String(id)];
-    writeTestingWindowIdentities(identities);
-    sendLog(`Cleared testing identity for window ${id}.`);
-  }
-}
 
 function safeParseFirebaseConfig(value) {
   try {
@@ -320,8 +252,7 @@ function desktopDiagnostics() {
       githubUrl: currentConfig.githubUrl,
       username: currentConfig.username,
       userColor: currentConfig.userColor,
-      testingMode: currentConfig.testingMode,
-      localServerPort: currentConfig.localServerPort,
+        localServerPort: currentConfig.localServerPort,
       firebase: safeParseFirebaseConfig(currentConfig.firebaseConfig),
       repoStatus: currentConfig.repoStatus,
     },
@@ -332,33 +263,6 @@ function desktopDiagnostics() {
 
 expressApp.get('/api/config', (req, res) => {
   res.json(publicConfig());
-});
-
-expressApp.get('/api/testing-identities', (req, res) => {
-  res.json({
-    ok: true,
-    source: 'desktop-app',
-    identities: readTestingWindowIdentities(),
-    checkedAt: new Date().toISOString(),
-  });
-});
-
-expressApp.put('/api/testing-identities/:windowId', (req, res) => {
-  try {
-    const identity = setTestingWindowIdentity(req.params.windowId, req.body || {});
-    res.json({ ok: true, source: 'desktop-app', identity });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-expressApp.delete('/api/testing-identities/:windowId', (req, res) => {
-  try {
-    clearTestingWindowIdentity(req.params.windowId);
-    res.json({ ok: true, source: 'desktop-app' });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
-  }
 });
 
 expressApp.post('/api/debug-events', (req, res) => {
@@ -381,6 +285,17 @@ expressApp.get('/api/site-version', (req, res) => {
     localServerPort: currentConfig.localServerPort,
     ...currentConfig.repoStatus,
   });
+});
+
+expressApp.post('/api/repo/stop', async (req, res) => {
+  try {
+    await stopRepoProcess();
+    currentConfig.localServerPort = null;
+    broadcastConfig();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 function startSetupServer() {
@@ -433,6 +348,14 @@ app.on('will-quit', () => {
   clearInterval(repoUpdateTimer);
   if (setupServer) setupServer.close();
   if (repoProcess) treeKill(repoProcess.pid, 'SIGKILL');
+});
+
+app.on('browser-window-closed', async () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    await stopRepoProcess();
+    currentConfig.localServerPort = null;
+    broadcastConfig();
+  }
 });
 
 ipcMain.handle('get-config', async () => publicConfig());
@@ -489,9 +412,6 @@ ipcMain.handle('start-repo', async (event, setup) => {
   currentConfig.userColor = typeof setup.userColor === 'string' && /^#[0-9a-f]{6}$/i.test(setup.userColor)
     ? setup.userColor
     : currentConfig.userColor;
-  if (typeof setup.testingMode === 'boolean') {
-    currentConfig.testingMode = setup.testingMode;
-  }
   broadcastConfig();
 
   if (setup.saveOnly) {
@@ -499,7 +419,7 @@ ipcMain.handle('start-repo', async (event, setup) => {
       await applyRepoConfigFile();
       await writeRepoConfigFile();
     } else if (currentConfig.githubUrl) {
-      sendLog('Setup saved. The repository config file will be written after you start this repository.');
+      sendLog(`Setup saved. The repository config file will be written to ${REPO_CONFIG_FILE} after you start this repository.`);
     }
     sendLog('Setup saved.');
     return { success: true };
@@ -637,10 +557,10 @@ async function writeRepoConfigFile() {
   try {
     fs.mkdirSync(REPO_DIR, { recursive: true });
     fs.writeFileSync(REPO_CONFIG_FILE, `${JSON.stringify(repoConfig, null, 2)}\n`);
-    sendLog(`${existed ? 'Updated' : 'Created'} ai-annotator-config.json.`);
+    sendLog(`${existed ? 'Updated' : 'Created'} ai-annotator-config.json at ${REPO_CONFIG_FILE}.`);
     return true;
   } catch (err) {
-    sendLog('Could not write ai-annotator-config.json.');
+    sendLog(`Could not write ai-annotator-config.json at ${REPO_CONFIG_FILE}.`);
     console.warn('Could not write ai-annotator-config.json', err);
     throw err;
   }

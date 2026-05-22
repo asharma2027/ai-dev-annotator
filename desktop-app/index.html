@@ -445,10 +445,6 @@
             </div>
           </div>
           <div class="field">
-            <label class="checkbox-row" for="testingMode">
-              <input type="checkbox" id="testingMode">
-              <span>Testing mode</span>
-            </label>
             <p class="hint">Use this when you want different Chrome windows to act as different reviewers.</p>
           </div>
           <div class="actions main-actions">
@@ -471,7 +467,7 @@
             <div class="field">
               <label for="firebaseConfig">Firebase config JSON</label>
               <textarea id="firebaseConfig" placeholder='{ "apiKey": "...", "authDomain": "...", "databaseURL": "..." }'></textarea>
-              <p class="hint">If the repository has <code>ai-annotator-config.json</code>, this field is filled automatically. You can still paste or edit the Firebase config here.</p>
+              <p class="hint">If the managed repository has <code>ai-annotator-config.json</code>, this field is filled automatically. The desktop app stores that file in its internal checkout and prints the full path in the activity log when it saves. You can still paste or edit the Firebase config here.</p>
             </div>
           </details>
         </section>
@@ -526,7 +522,6 @@
       firebaseState: document.getElementById('firebaseState'),
       username: document.getElementById('username'),
       userColor: document.getElementById('userColor'),
-      testingMode: document.getElementById('testingMode'),
       colorValue: document.getElementById('colorValue'),
       startBtn: document.getElementById('startBtn'),
       saveOnlyBtn: document.getElementById('saveOnlyBtn'),
@@ -612,7 +607,6 @@
         `Setup API: http://localhost:${data.setupPort}`,
         `Repo: ${config.githubUrl || 'n/a'}`,
         `User: ${config.username || 'n/a'} ${config.userColor || ''}`,
-        `Testing mode: ${config.testingMode !== false ? 'on' : 'off'}`,
         `Firebase: ${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
         `Local site port: ${config.localServerPort || 'n/a'}`,
         `Repo workspace: ${data.repoWorkspaceExists ? 'ready' : 'not cloned'}`,
@@ -629,7 +623,6 @@
       els.firebaseConfig.value = config.firebaseConfig || '';
       els.username.value = config.username || '';
       els.userColor.value = config.userColor || '#2563eb';
-      els.testingMode.checked = config.testingMode !== false;
       els.colorValue.textContent = els.userColor.value.toUpperCase();
       const hasFirebase = !!String(config.firebaseConfig || '').trim();
       els.firebaseState.textContent = hasFirebase ? 'Configured' : 'Missing';
@@ -689,7 +682,6 @@
         firebaseConfig: els.firebaseConfig.value.trim(),
         username: els.username.value.trim(),
         userColor: els.userColor.value,
-        testingMode: els.testingMode.checked,
         saveOnly,
       };
     }

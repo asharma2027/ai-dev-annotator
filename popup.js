@@ -746,7 +746,6 @@ document.addEventListener('DOMContentLoaded', () => {
     maxHistoryLength: 200,                 // legacy key, kept for back-compat / fallback
     historyLimits:    { ...DEFAULT_HISTORY_LIMITS }, // per-tab limits, 0 = indefinite
     backupEnabled:    true,               // enable/disable auto-backup to sync
-    testingMode:      true,               // local dev/test identities are enabled by default for now
     buttonActions: {
       copyBtn:  { left: 'copyAll',  right: 'cutAll'       },
       clearBtn: { left: 'clearAll', right: 'saveForLater' },
@@ -3863,8 +3862,8 @@ document.addEventListener('DOMContentLoaded', () => {
       `Extension: ${snapshot.runtime?.id || 'unknown'} v${snapshot.runtime?.version || 'unknown'}`,
       `Permissions: tabs=${fmtDebugBool(permissions.tabs)}, windows=${fmtDebugBool(permissions.windows)}, localhost=${fmtDebugBool(permissions.localhost)}`,
       `Desktop app: ${desktop.ok ? 'reachable' : 'unreachable'}${desktop.error ? ` (${desktop.error})` : ''}`,
-      `Desktop config: repo=${desktop.currentConfig?.githubUrl || 'n/a'}, user=${desktop.currentConfig?.username || 'n/a'}, testing=${desktop.currentConfig?.testingMode !== false ? 'on' : 'off'}`,
-      `Extension config: repo=${settings.githubUrl || 'n/a'}, user=${settings.username || 'n/a'}, testing=${settings.testingMode ? 'on' : 'off'}, firebase=${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
+      `Desktop config: repo=${desktop.currentConfig?.githubUrl || 'n/a'}, user=${desktop.currentConfig?.username || 'n/a'}`,
+      `Extension config: repo=${settings.githubUrl || 'n/a'}, user=${settings.username || 'n/a'}, firebase=${firebase.configured ? 'configured' : 'missing'}${firebase.projectId ? ` (${firebase.projectId})` : ''}`,
       `Setup refresh: last=${fmtDebugTime(snapshot.setup?.lastChecked)}, error=${snapshot.setup?.error || 'none'}`,
       `Team sync: ${sync.connected ? 'connected' : 'not connected'}, team=${sync.teamId || 'n/a'}, remote=${sync.remoteCount ?? 'n/a'}, error=${sync.error || 'none'}`,
       `Testing identity source: ${testing.identitySource || 'unknown'}, desktopAvailable=${fmtDebugBool(testing.desktopAvailable)}`,
