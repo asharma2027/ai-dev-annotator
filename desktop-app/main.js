@@ -431,20 +431,24 @@ ipcMain.handle('setup-github-repo', async (event, githubUrl) => {
   }
 });
 
-ipcMain.handle('start-repo', async (event, setup) => {
+function updateIdentityPreferences(setup = {}) {
   currentConfig.username = typeof setup.username === 'string' && setup.username.trim()
     ? setup.username.trim()
     : currentConfig.username || randomReviewerName();
   currentConfig.userColor = typeof setup.userColor === 'string' && /^#[0-9a-f]{6}$/i.test(setup.userColor)
     ? setup.userColor
     : currentConfig.userColor;
-  broadcastConfig();
+  saveConfig();
+}
 
-  if (setup.saveOnly) {
-    await applyRepoConfigFile();
-    sendLog('Local preferences saved.');
-    return { success: true };
-  }
+ipcMain.handle('save-identity-preferences', async (event, setup) => {
+  updateIdentityPreferences(setup);
+  return publicConfig();
+});
+
+ipcMain.handle('start-repo', async (event, setup) => {
+  updateIdentityPreferences(setup);
+  broadcastConfig();
 
   if (!currentConfig.githubUrl) {
     sendLog('Setup saved. Add a GitHub repo when you want the desktop app to run the site.');

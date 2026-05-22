@@ -453,7 +453,6 @@
           </div>
           <div class="actions main-actions">
             <button id="startBtn" class="primary">Start Website</button>
-            <button id="saveOnlyBtn" class="secondary">Save Preferences</button>
           </div>
           <div id="status"></div>
         </section>
@@ -528,7 +527,6 @@
       userColor: document.getElementById('userColor'),
       colorValue: document.getElementById('colorValue'),
       startBtn: document.getElementById('startBtn'),
-      saveOnlyBtn: document.getElementById('saveOnlyBtn'),
       status: document.getElementById('status'),
       log: document.getElementById('log'),
       runState: document.getElementById('run-state'),
@@ -674,31 +672,47 @@
       }
     }
 
-    function readSetup({ saveOnly = false } = {}) {
+    function readSetup() {
       return {
         username: els.username.value.trim(),
         userColor: els.userColor.value,
-        saveOnly,
       };
     }
 
-    async function submitSetup(saveOnly) {
+    async function submitSetup() {
       const originalStart = els.startBtn.textContent;
       els.startBtn.disabled = true;
-      els.saveOnlyBtn.disabled = true;
-      setStatus('loading', saveOnly ? 'Saving preferences...' : 'Preparing website...');
+      setStatus('loading', 'Preparing website...');
 
       try {
-        const setup = readSetup({ saveOnly });
+        const setup = readSetup();
         await ipcRenderer.invoke('start-repo', setup);
-        setStatus('success', saveOnly ? 'Preferences saved.' : 'Website is starting. A browser tab should open shortly.');
+        setStatus('success', 'Website is starting. A browser tab should open shortly.');
       } catch (err) {
         setStatus('error', 'Error: ' + err.message);
       } finally {
         els.startBtn.disabled = false;
-        els.saveOnlyBtn.disabled = false;
         els.startBtn.textContent = originalStart;
       }
+    }
+
+    let autosaveTimer = null;
+    async function autosavePreferences() {
+      try {
+        await ipcRenderer.invoke('save-identity-preferences', readSetup());
+        setStatus('success', 'Preferences saved automatically.');
+      } catch (err) {
+        setStatus('error', 'Could not save preferences: ' + err.message);
+      }
+    }
+
+    function scheduleAutosavePreferences({ immediate = false } = {}) {
+      clearTimeout(autosaveTimer);
+      if (immediate) {
+        autosavePreferences();
+        return;
+      }
+      autosaveTimer = setTimeout(autosavePreferences, 400);
     }
 
     async function refreshDiagnostics() {
@@ -713,13 +727,16 @@
       }
     }
 
+    els.username.addEventListener('input', () => scheduleAutosavePreferences());
+    els.username.addEventListener('change', () => scheduleAutosavePreferences({ immediate: true }));
     els.userColor.addEventListener('input', () => {
       els.colorValue.textContent = els.userColor.value.toUpperCase();
+      scheduleAutosavePreferences();
     });
+    els.userColor.addEventListener('change', () => scheduleAutosavePreferences({ immediate: true }));
 
     els.githubGateForm.addEventListener('submit', submitGithubGate);
-    els.startBtn.addEventListener('click', () => submitSetup(false));
-    els.saveOnlyBtn.addEventListener('click', () => submitSetup(true));
+    els.startBtn.addEventListener('click', () => submitSetup());
     els.refreshDiagnosticsBtn.addEventListener('click', refreshDiagnostics);
     els.copyDiagnosticsBtn.addEventListener('click', async () => {
       if (!lastDiagnostics) lastDiagnostics = await ipcRenderer.invoke('get-diagnostics');
