@@ -9,7 +9,25 @@
  * Chips anchor to elements or the page; storage keys align with popup.js.
  */
 const ANN = "aiann";
+
+(function registerDesktopLaunchPage() {
+  try {
+    if (location.origin !== "http://127.0.0.1:11454" || !location.pathname.startsWith("/launch/")) return;
+    chrome.runtime.sendMessage({
+      type: "registerDesktopTestTab",
+      url: location.href,
+    }).catch(() => {});
+  } catch (_error) {}
+})();
+
+if (!(["127.0.0.1", "localhost"].includes(location.hostname) && location.port === "11454")) {
 let __aiann_contextDead = !1;
+let __aiann_desktopProjectId = "";
+try {
+  chrome.runtime.sendMessage({ type: "getDesktopProjectContext" }).then((response) => {
+    if (response?.ok && response.projectId) __aiann_desktopProjectId = response.projectId;
+  }).catch(() => {});
+} catch (_error) {}
 function showContextInvalidatedNotice() {
   if (!__aiann_contextDead) {
     __aiann_contextDead = !0;
@@ -1259,6 +1277,7 @@ function openAllChipsOnPage() {
             }
           })(),
         };
+      __aiann_desktopProjectId && (a.projectId = __aiann_desktopProjectId);
       getAll((e) => {
         (e.push(a),
           setAll(e, () => {
@@ -1375,3 +1394,4 @@ try {
   "loading" === document.readyState
     ? document.addEventListener("DOMContentLoaded", restoreAnnotations)
     : restoreAnnotations());
+}

@@ -1,0 +1,57 @@
+{
+  "name": "ai-annotator-home",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Local project dashboard and process supervisor for AI Website Dev Annotator",
+  "author": "AI Website Dev Annotator contributors",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --dir",
+    "build:mac": "electron-builder --mac dmg zip --universal",
+    "build:win": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "43.1.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.aiwebdevannotator.home",
+    "productName": "AI Annotator Home",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "build/icon.png",
+      "lib/**/*",
+      "ui/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        },
+        {
+          "target": "zip",
+          "arch": ["universal"]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "allowToChangeInstallationDirectory": true,
+      "oneClick": false
+    }
+  }
+}

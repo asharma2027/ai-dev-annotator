@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+desktop-app/dist/
+dist/
+coverage/
 
 # Local secrets — NEVER commit
 LICENSE_KEYPAIR_DO_NOT_COMMIT.txt
@@ -13,3 +16,4 @@ infra/worker/.wrangler/
 # OS / editor
 .DS_Store
 *.swp
+*.log

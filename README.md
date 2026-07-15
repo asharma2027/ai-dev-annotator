@@ -20,6 +20,26 @@ Typical flow:
 3. Hit **Copy All** (or **Cut All** via right-click on that button) and paste into your AI assistant.
 4. The agent ships a PR.
 
+## Local project dashboard
+
+The optional **AI Annotator Home** desktop app is a separate project-control surface for macOS and Windows. It does not recreate the extension popup. Use it to:
+
+- register local website folders and keep a short project brief;
+- see a read-only rollup of annotation notes by project and page;
+- run static sites, npm-powered sites, or multi-service projects with one toggle;
+- open the test site in Chrome and stop every owned process when that exact test tab closes;
+- inspect concise startup output when a service needs attention.
+
+With Node.js 22 or newer installed, run:
+
+```bash
+npm start
+```
+
+The first launch installs the desktop runtime automatically. Choose a website folder, review the detected run plan, and press **Run locally**. Advanced project settings support up to six frontend or backend services under the same lifecycle toggle.
+
+Use `npm run build:mac` on macOS to create a universal Apple Silicon/Intel build, or `npm run build:win` on Windows for an x64 installer. Local builds are unsigned; public macOS distribution still requires your Developer ID certificate and Apple notarization credentials, and public Windows distribution should use your code-signing certificate.
+
 ---
 
 ## Models change. Interfaces change. Pricing changes.
@@ -106,14 +126,17 @@ Paste directly into Cursor's chat, Claude, or any AI tool : it already knows whi
 
 ## Privacy
 
-AI Website Dev Annotator does not send annotation data to an app server.
-There is no analytics and no telemetry. Premium checkout and license
-delivery use Stripe plus the project's Cloudflare Worker, but the
-Extension verifies license keys locally.
+AI Website Dev Annotator does not send annotation data to a remote app
+server. There is no analytics and no telemetry. When AI Annotator Home is
+running, the extension mirrors a reduced annotation snapshot to its
+loopback-only service (`127.0.0.1`) so the local dashboard can group notes
+by project. That mirror remains on the same computer. Premium checkout and
+license delivery use Stripe plus the project's Cloudflare Worker, but the
+extension verifies license keys locally.
 
 | Data                              | Where it lives                              | Leaves your device?                                  |
 |-----------------------------------|---------------------------------------------|------------------------------------------------------|
-| Annotations, notes, element text  | `chrome.storage.local`                      | No.                                                  |
+| Annotations, notes, element text  | `chrome.storage.local`; optional local desktop mirror | No remote transfer.                         |
 | Copy / annotation history         | `chrome.storage.local`                      | No.                                                  |
 | Settings (theme, shortcuts, backup, footer buttons, history limits, …) | `chrome.storage.local`                      | No.                                                  |
 | Auto-Backup mirror (on by default; off in Settings) | `chrome.storage.sync`                       | Only when enabled; synced via your Google Account. |
@@ -145,6 +168,9 @@ ai-dev-annotator/
 ├── popup.html           : Extension popup UI
 ├── popup.js             : Popup logic (annotations, copy, history, settings, premium)
 ├── styles.css           : Popup styles (light + dark theme)
+├── desktop-app/         : Electron host, local API, process supervisor, and dashboard UI
+├── scripts/             : Cross-platform launcher and validation commands
+├── test/                : Project store and lifecycle tests
 ├── docs/                : GitHub Pages landing, success, terms, and refund pages
 ├── infra/worker/        : Cloudflare Worker for Stripe webhooks and license lookup
 └── icons/               : Extension icon assets

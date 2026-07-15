@@ -1,0 +1,22 @@
+{
+  "name": "ai-dev-annotator",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Chrome extension and local desktop dashboard for AI Website Dev Annotator",
+  "scripts": {
+    "setup:codex": "node scripts/setup-codex.js",
+    "check": "node scripts/validate.js && node --test",
+    "check:extension": "node scripts/validate.js --extension",
+    "check:desktop": "node scripts/validate.js --desktop && node --test",
+    "check:worker": "node scripts/validate.js --worker",
+    "start": "node scripts/start-desktop.js",
+    "start:desktop": "node scripts/start-desktop.js",
+    "install:desktop": "npm --prefix desktop-app install --no-audit --no-fund",
+    "build:desktop": "npm --prefix desktop-app run build",
+    "build:mac": "npm --prefix desktop-app run build:mac",
+    "build:win": "npm --prefix desktop-app run build:win"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

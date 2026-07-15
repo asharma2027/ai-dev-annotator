@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#101d2c">
+    <title>AI Annotator Home</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to workspace</a>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand" aria-label="AI Website Dev Annotator">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <span class="brand-copy">
+            <strong>AI Annotator</strong>
+            <span>Home</span>
+          </span>
+        </div>
+
+        <div class="topbar-status" aria-label="Workspace status">
+          <span class="connection-pill" id="extension-status">
+            <span class="status-light" aria-hidden="true"></span>
+            <span class="connection-label">Checking extension</span>
+          </span>
+          <span class="safety-pill" id="auto-stop-status" title="Services stop automatically when their test tab closes">
+            <span class="shield-mark" aria-hidden="true"></span>
+            Auto-stop enabled
+          </span>
+        </div>
+
+        <button class="button button-primary topbar-add" id="add-project-button" type="button">
+          <span class="plus-mark" aria-hidden="true"></span>
+          Add project
+        </button>
+      </header>
+
+      <section class="running-strip" id="running-strip" aria-labelledby="running-title" hidden>
+        <div class="running-heading">
+          <span class="live-pulse" aria-hidden="true"></span>
+          <strong id="running-title">Live sessions</strong>
+          <span id="running-count"></span>
+        </div>
+        <div class="running-items" id="running-items"></div>
+      </section>
+
+      <div class="global-error" id="global-error" role="alert" hidden>
+        <span id="global-error-message">The local workspace could not be loaded.</span>
+        <button class="text-button" id="retry-button" type="button">Try again</button>
+      </div>
+
+      <main class="workspace" id="workspace">
+        <aside class="projects-panel" aria-labelledby="projects-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Local work</p>
+              <h1 id="projects-heading">Projects</h1>
+            </div>
+            <span class="count-badge" id="project-count" aria-label="0 projects">0</span>
+          </div>
+
+          <label class="search-field project-search" for="project-search">
+            <span class="search-mark" aria-hidden="true"></span>
+            <input id="project-search" type="search" placeholder="Find a project" autocomplete="off">
+            <span class="key-hint" aria-hidden="true">/</span>
+          </label>
+
+          <div class="project-list" id="project-list" aria-live="polite"></div>
+
+          <div class="list-empty" id="filtered-empty" hidden>
+            <p>No projects match that search.</p>
+            <button class="text-button" id="clear-project-search" type="button">Clear search</button>
+          </div>
+
+          <div class="project-empty" id="project-empty" hidden>
+            <div class="empty-orbit" aria-hidden="true"><span></span></div>
+            <h2>Bring a site into focus</h2>
+            <p>Add a local project to launch its test environment and keep its annotation notes close at hand.</p>
+            <button class="button button-primary" id="empty-add-button" type="button">
+              <span class="plus-mark" aria-hidden="true"></span>
+              Add your first project
+            </button>
+            <ul class="empty-benefits" aria-label="Workspace features">
+              <li>One-click test sessions</li>
+              <li>Automatic process cleanup</li>
+              <li>Notes organized by page</li>
+            </ul>
+          </div>
+        </aside>
+
+        <section class="detail-panel" aria-label="Project details">
+          <div class="detail-placeholder" id="detail-placeholder">
+            <div class="placeholder-glyph" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h2>Select a project</h2>
+            <p>Its run controls, project brief, annotation notes, and service plan will appear here.</p>
+          </div>
+
+          <div class="detail-loading" id="detail-loading" aria-label="Loading project" hidden>
+            <div class="skeleton skeleton-title"></div>
+            <div class="skeleton skeleton-line"></div>
+            <div class="skeleton-grid">
+              <div class="skeleton skeleton-card"></div>
+              <div class="skeleton skeleton-card"></div>
+              <div class="skeleton skeleton-card"></div>
+            </div>
+            <div class="skeleton skeleton-block"></div>
+          </div>
+
+          <div class="detail-content" id="detail-content" hidden>
+            <header class="detail-header">
+              <div class="detail-title-block">
+                <div class="detail-kicker">
+                  <span class="status-badge" id="detail-status"><span class="status-dot" aria-hidden="true"></span><span>Stopped</span></span>
+                  <span class="detail-path" id="detail-path"></span>
+                </div>
+                <h2 id="detail-title"></h2>
+                <p class="detail-error" id="detail-error" role="status" hidden></p>
+              </div>
+              <div class="detail-actions">
+                <button class="button button-secondary" id="detail-open-button" type="button">
+                  <span class="open-mark" aria-hidden="true"></span>
+                  Open
+                </button>
+                <button class="button button-run" id="detail-run-button" type="button">
+                  <span class="run-mark" aria-hidden="true"></span>
+                  <span class="action-label">Run project</span>
+                </button>
+                <button class="icon-button danger-menu" id="delete-project-button" type="button" title="Delete project" aria-label="Delete project">
+                  <span class="trash-mark" aria-hidden="true"></span>
+                </button>
+              </div>
+            </header>
+
+            <div class="detail-scroll">
+              <section class="overview-section" aria-labelledby="overview-title">
+                <div class="section-heading-inline">
+                  <div>
+                    <p class="eyebrow">At a glance</p>
+                    <h3 id="overview-title">Project overview</h3>
+                  </div>
+                  <p class="last-refreshed" id="last-refreshed"></p>
+                </div>
+                <div class="stat-grid" id="stat-grid"></div>
+                <div class="session-callout" id="session-callout" hidden>
+                  <div>
+                    <span class="live-pulse" aria-hidden="true"></span>
+                    <strong>Test session is live</strong>
+                    <span id="session-url"></span>
+                  </div>
+                  <span id="session-safety-message">Closing its browser tab stops every related service.</span>
+                </div>
+              </section>
+
+              <section class="content-card brief-card" aria-labelledby="brief-title">
+                <div class="card-heading">
+                  <div>
+                    <p class="eyebrow">Shared context</p>
+                    <h3 id="brief-title">Project brief</h3>
+                    <p>Keep goals, constraints, and handoff details here. This is separate from page-level annotation notes.</p>
+                  </div>
+                  <span class="save-state" id="brief-save-state" role="status">Saved</span>
+                </div>
+                <label class="sr-only" for="project-brief">Project brief</label>
+                <textarea id="project-brief" rows="5" maxlength="20000" placeholder="What matters about this project? Add goals, constraints, test credentials, or handoff context…"></textarea>
+                <div class="card-footer">
+                  <span id="brief-character-count">0 / 20,000</span>
+                  <button class="button button-quiet" id="save-brief-button" type="button" disabled>Save now</button>
+                </div>
+              </section>
+
+              <section class="content-card annotation-card" aria-labelledby="annotations-title">
+                <div class="card-heading annotations-heading">
+                  <div>
+                    <p class="eyebrow">From the extension</p>
+                    <h3 id="annotations-title">Annotation notes <span class="inline-count" id="annotation-count">0</span></h3>
+                    <p>Read-only here so review stays calm; edit annotations in the browser extension.</p>
+                  </div>
+                  <label class="search-field annotation-search" for="annotation-search">
+                    <span class="search-mark" aria-hidden="true"></span>
+                    <input id="annotation-search" type="search" placeholder="Search notes, pages, selectors" autocomplete="off">
+                  </label>
+                </div>
+                <div class="annotation-groups" id="annotation-groups"></div>
+                <div class="section-empty" id="annotation-empty" hidden>
+                  <span class="note-mark" aria-hidden="true"></span>
+                  <h4>No annotation notes yet</h4>
+                  <p>Launch this project, then use the extension on the page to capture implementation feedback.</p>
+                </div>
+                <div class="section-empty compact-empty" id="annotation-filtered-empty" hidden>
+                  <h4>No matching notes</h4>
+                  <p>Try a different page, selector, or phrase.</p>
+                </div>
+              </section>
+
+              <details class="content-card disclosure-card" id="run-plan-details">
+                <summary>
+                  <span>
+                    <span class="eyebrow">Launch configuration</span>
+                    <strong>Service run plan</strong>
+                    <small id="service-summary">No services configured</small>
+                  </span>
+                  <span class="summary-actions">
+                    <span class="plan-state" id="plan-save-state" role="status"></span>
+                    <span class="chevron" aria-hidden="true"></span>
+                  </span>
+                </summary>
+                <form id="run-plan-form">
+                  <div class="disclosure-intro">
+                    <p>Services start together and stop together. Working directories are relative to the project folder; the primary service is the page opened for testing.</p>
+                    <button class="button button-secondary button-small" id="add-service-button" type="button">
+                      <span class="plus-mark" aria-hidden="true"></span>
+                      Add service
+                    </button>
+                  </div>
+                  <div class="services-list" id="services-list"></div>
+                  <div class="section-empty compact-empty" id="services-empty">
+                    <h4>No services in this run plan</h4>
+                    <p>Add a static folder or a command such as <code>npm run dev</code>.</p>
+                  </div>
+                  <div class="form-actions">
+                    <span>Up to 6 services · exactly one primary</span>
+                    <button class="button button-primary" id="save-plan-button" type="submit" disabled>Save run plan</button>
+                  </div>
+                </form>
+              </details>
+
+              <details class="content-card disclosure-card logs-card" id="logs-details">
+                <summary>
+                  <span>
+                    <span class="eyebrow">Troubleshooting</span>
+                    <strong>Session logs</strong>
+                    <small id="log-summary">No output yet</small>
+                  </span>
+                  <span class="chevron" aria-hidden="true"></span>
+                </summary>
+                <div class="log-toolbar">
+                  <span>Newest output appears at the bottom.</span>
+                  <button class="text-button" id="copy-logs-button" type="button">Copy logs</button>
+                </div>
+                <div class="logs-view" id="logs-view" tabindex="0" aria-label="Session logs"></div>
+              </details>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="initial-loading" id="initial-loading" role="status">
+      <span class="loading-mark" aria-hidden="true"></span>
+      <span>Opening your workspace…</span>
+    </div>
+
+    <dialog class="modal" id="add-project-dialog" aria-labelledby="add-project-title">
+      <form method="dialog" class="modal-surface" id="add-project-form">
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">New local workspace</p>
+            <h2 id="add-project-title">Add a website project</h2>
+          </div>
+          <button class="icon-button modal-close" id="close-add-dialog" type="button" aria-label="Close dialog">
+            <span class="close-mark" aria-hidden="true"></span>
+          </button>
+        </header>
+        <div class="modal-body">
+          <p class="modal-lead">Choose the project folder. Annotator will inspect it and build a starter run plan that you can review before launching.</p>
+
+          <label class="field-label" for="new-project-name">
+            <span>Project name</span>
+            <input id="new-project-name" name="name" type="text" maxlength="120" placeholder="Marketing site" autocomplete="off" required>
+          </label>
+
+          <div class="field-label">
+            <span>Source folder</span>
+            <div class="folder-picker-row">
+              <div class="path-field" id="new-project-path-display" data-empty="true">
+                <span class="folder-mark" aria-hidden="true"></span>
+                <span class="path-value">No folder selected</span>
+              </div>
+              <button class="button button-secondary" id="choose-folder-button" type="button">Choose…</button>
+              <button class="icon-button clear-path" id="clear-folder-button" type="button" aria-label="Clear selected folder" title="Clear selected folder" disabled>
+                <span class="close-mark" aria-hidden="true"></span>
+              </button>
+            </div>
+            <input id="new-project-path" name="sourcePath" type="hidden" required>
+          </div>
+
+          <label class="field-label" for="new-project-notes">
+            <span>Starting brief <small>Optional</small></span>
+            <textarea id="new-project-notes" name="projectNotes" rows="3" maxlength="20000" placeholder="Goals, constraints, or useful setup context…"></textarea>
+          </label>
+
+          <div class="detect-note">
+            <span class="spark-mark" aria-hidden="true"></span>
+            <div>
+              <strong>Run plan auto-detection</strong>
+              <p>Package scripts and static entry points are detected after you add the project. Nothing starts until you press Run.</p>
+            </div>
+          </div>
+          <p class="form-error" id="add-project-error" role="alert" hidden></p>
+        </div>
+        <footer class="modal-footer">
+          <button class="button button-quiet" id="cancel-add-project" type="button">Cancel</button>
+          <button class="button button-primary" id="create-project-button" type="submit" disabled>
+            <span class="action-label">Add project</span>
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <script src="./pending-changes.js" defer></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
